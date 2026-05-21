@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
+import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const DOC_LABELS = {
   national_id_front:     'National ID Front',
@@ -103,12 +104,12 @@ const RejectModal = ({ clientName, onClose, onReject }) => {
 };
 
 const KYCReviewTab = ({ adminId }) => {
+  const { modals, closeModal } = useAdminDashboardContext();
   var [clients, setClients] = React.useState([]);
   var [selectedClient, setSelectedClient] = React.useState(null);
   var [documents, setDocuments] = React.useState([]);
   var [loading, setLoading] = React.useState(true);
   var [docLoading, setDocLoading] = React.useState(false);
-  var [showRejectModal, setShowRejectModal] = React.useState(false);
   var [filter, setFilter] = React.useState('all');
   var [toast, setToast] = React.useState(null);
   var [search, setSearch] = React.useState('');
@@ -417,7 +418,7 @@ const KYCReviewTab = ({ adminId }) => {
                     )}
                     {selectedClient.kyc_status !== 'rejected' && selectedClient.kyc_status !== 'unverified' && (
                       <button
-                        onClick={function() { setShowRejectModal(true); }}
+                        onClick={function() { modals.rejectKYC = selectedClient; }}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
                         style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)' }}
                       >
@@ -555,10 +556,10 @@ const KYCReviewTab = ({ adminId }) => {
         </div>
       </div>
 
-      {showRejectModal && selectedClient && (
+      {modals.rejectKYC && (
         <RejectModal
-          clientName={selectedClient.full_name}
-          onClose={function() { setShowRejectModal(false); }}
+          clientName={modals.rejectKYC.full_name}
+          onClose={function() { closeModal('rejectKYC'); }}
           onReject={handleRejectKYC}
         />
       )}

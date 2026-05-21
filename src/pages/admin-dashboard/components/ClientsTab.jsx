@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const InviteClientModal = ({ onClose, onInvite, agents }) => {
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', agentId: '' });
@@ -131,7 +132,7 @@ const InviteClientModal = ({ onClose, onInvite, agents }) => {
 };
 
 const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
-  const [showInvite, setShowInvite] = useState(false);
+  const { modals, openModal, closeModal } = useAdminDashboardContext();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
 
@@ -150,7 +151,7 @@ const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card border border-border rounded-xl px-5 py-4">
+      <div className="flex flex-col sm:flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card border border-border rounded-xl px-5 py-4">
         <div>
           <h2 className="text-base font-semibold text-foreground">Clients</h2>
           <p className="text-xs text-muted-foreground">{clients.length} total · {clients.filter(c => c.client_status === 'active').length} active</p>
@@ -168,7 +169,7 @@ const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
             Export
           </button>
           <button
-            onClick={() => setShowInvite(true)}
+            onClick={() => openModal('inviteClient')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
             style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
           >
@@ -214,7 +215,7 @@ const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
             <Icon name="Users" size={32} color="currentColor" />
             <p className="text-sm mt-2">No clients found</p>
             <button
-              onClick={() => setShowInvite(true)}
+              onClick={() => openModal('inviteClient')}
               className="mt-3 px-4 py-2 rounded-lg text-sm font-medium text-white"
               style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
             >
@@ -282,9 +283,9 @@ const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
         )}
       </div>
 
-      {showInvite && (
+      {modals.inviteClient && (
         <InviteClientModal
-          onClose={() => setShowInvite(false)}
+          onClose={() => closeModal('inviteClient')}
           onInvite={onInvite}
           agents={agents}
         />

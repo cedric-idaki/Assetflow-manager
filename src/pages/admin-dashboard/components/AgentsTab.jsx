@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const CreateAgentModal = ({ onClose, onCreate }) => {
   const [form, setForm] = useState({
@@ -131,7 +132,7 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
 };
 
 const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport }) => {
-  const [showCreate, setShowCreate] = useState(false);
+  const { modals, openModal, closeModal } = useAdminDashboardContext();
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
   return (
@@ -161,7 +162,7 @@ const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport }) => {
             Export
           </button>
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => openModal('createAgent')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
             style={{ background: 'linear-gradient(135deg, #0d9488, #0f766e)' }}
           >
@@ -232,7 +233,7 @@ const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport }) => {
             <Icon name="Users" size={32} color="currentColor" />
             <p className="text-sm mt-2">No sales agents yet</p>
             <button
-              onClick={() => setShowCreate(true)}
+              onClick={() => openModal('createAgent')}
               className="mt-3 px-4 py-2 rounded-lg text-sm font-medium text-white"
               style={{ background: 'linear-gradient(135deg, #0d9488, #0f766e)' }}
             >
@@ -312,9 +313,9 @@ const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport }) => {
         )}
       </div>
 
-      {showCreate && (
+      {modals.createAgent && (
         <CreateAgentModal
-          onClose={() => setShowCreate(false)}
+          onClose={() => closeModal('createAgent')}
           onCreate={onCreateAgent}
         />
       )}

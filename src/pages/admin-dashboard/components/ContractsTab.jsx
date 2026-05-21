@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
 import { generateContractPDF } from '../../../utils/generateContractPDF';
+import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 // ── Upload modal (kept for manual uploads) ────────────────────────────────────
 const UploadContractModal = ({ onClose, onUpload, clients }) => {
@@ -469,9 +470,9 @@ const TemplateEditorModal = ({ template, adminId, onClose, onSave }) => {
 
 // ── Templates Section ─────────────────────────────────────────────────────────
 const TemplatesSection = ({ adminId }) => {
+  const { modals, openModal, closeModal } = useAdminDashboardContext();
   const [templates, setTemplates]     = useState([]);
   const [loading, setLoading]         = useState(true);
-  const [showEditor, setShowEditor]   = useState(false);
   const [editingTemplate, setEditing] = useState(null);
   const [deleting, setDeleting]       = useState(null);
 
@@ -514,7 +515,7 @@ const TemplatesSection = ({ adminId }) => {
           <p className="text-xs text-muted-foreground">Reusable contract templates with your custom clauses</p>
         </div>
         <button
-          onClick={() => { setEditing(null); setShowEditor(true); }}
+          onClick={() => { setEditing(null); openModal('templateEditor'); }}
           className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all"
           style={{ background: 'linear-gradient(135deg,#1A56DB,#1E429F)' }}>
           <Icon name="Plus" size={14} color="white" /> New Template
@@ -551,7 +552,7 @@ const TemplatesSection = ({ adminId }) => {
           <p className="text-sm font-medium text-foreground mt-3">No templates yet</p>
           <p className="text-xs mt-1 mb-4">Create your first template to customise contract clauses</p>
           <button
-            onClick={() => { setEditing(null); setShowEditor(true); }}
+            onClick={() => { setEditing(null); openModal('templateEditor'); }}
             className="px-4 py-2 rounded-xl text-sm font-semibold text-white"
             style={{ background: 'linear-gradient(135deg,#1A56DB,#1E429F)' }}>
             Create First Template
@@ -584,7 +585,7 @@ const TemplatesSection = ({ adminId }) => {
 
               <div className="flex gap-2 mt-3 pt-3 border-t border-border">
                 <button
-                  onClick={() => { setEditing(t); setShowEditor(true); }}
+                  onClick={() => { setEditing(t); openModal('templateEditor'); }}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium border border-border text-foreground hover:bg-muted transition-colors">
                   <Icon name="Edit" size={13} color="currentColor" /> Edit
                 </button>
@@ -600,11 +601,11 @@ const TemplatesSection = ({ adminId }) => {
         </div>
       )}
 
-      {showEditor && (
+      {modals.templateEditor && (
         <TemplateEditorModal
           template={editingTemplate}
           adminId={adminId}
-          onClose={() => { setShowEditor(false); setEditing(null); }}
+          onClose={() => { closeModal('templateEditor'); setEditing(null); }}
           onSave={fetchTemplates}
         />
       )}
@@ -614,7 +615,7 @@ const TemplatesSection = ({ adminId }) => {
 
 // ── Main ContractsTab ─────────────────────────────────────────────────────────
 const ContractsTab = ({ contracts, clients, onUpload, onExport }) => {
-  const [showUpload, setShowUpload]       = useState(false);
+  const { modals, openModal, closeModal } = useAdminDashboardContext();
   const [filter, setFilter]               = useState('sales');
   const [sales, setSales]                 = useState([]);
   const [companyProfile, setCompanyProfile] = useState(null);
@@ -694,7 +695,7 @@ const ContractsTab = ({ contracts, clients, onUpload, onExport }) => {
             <Icon name="Download" size={13} color="currentColor" /> Export List
           </button>
           <button
-            onClick={() => setShowUpload(true)}
+            onClick={() => openModal('uploadContract')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
             style={{ background: 'linear-gradient(135deg, #ea580c, #c2410c)' }}>
             <Icon name="Plus" size={13} color="currentColor" /> Upload Contract
@@ -777,7 +778,7 @@ const ContractsTab = ({ contracts, clients, onUpload, onExport }) => {
           <div className="bg-card border border-border rounded-xl flex flex-col items-center justify-center py-12 text-muted-foreground">
             <Icon name="FileText" size={32} color="currentColor" />
             <p className="text-sm mt-2">No uploaded contracts yet</p>
-            <button onClick={() => setShowUpload(true)}
+            <button onClick={() => openModal('uploadContract')}
               className="mt-3 px-4 py-2 rounded-lg text-sm font-medium text-white"
               style={{ background: 'linear-gradient(135deg, #ea580c, #c2410c)' }}>
               Upload Contract
@@ -822,9 +823,9 @@ const ContractsTab = ({ contracts, clients, onUpload, onExport }) => {
         <TemplatesSection adminId={adminId} />
       )}
 
-      {showUpload && (
+      {modals.uploadContract && (
         <UploadContractModal
-          onClose={() => setShowUpload(false)}
+          onClose={() => closeModal('uploadContract')}
           onUpload={onUpload}
           clients={clients}
         />

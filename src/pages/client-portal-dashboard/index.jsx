@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import useClientPortal from '../../hooks/useClientPortal';
+import { useClientPortalContext } from '../../contexts/ClientPortalContext';
 import Icon from '../../components/AppIcon';
 import AccountSummaryCard from './components/AccountSummaryCard';
 import AssetList from './components/AssetList';
@@ -79,7 +79,7 @@ const ClientPortalDashboard = () => {
     nextPayment,
     overdueCharges,
     refetch,
-  } = useClientPortal();
+  } = useClientPortalContext();
 
   const handleViewSchedule = (asset) => {
     setSelectedAsset(asset);

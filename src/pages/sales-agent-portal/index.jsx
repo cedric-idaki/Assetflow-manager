@@ -9,7 +9,7 @@ import CreateClientModal from './components/CreateClientModal';
 import AgentActivityTrail from './components/AgentActivityTrail';
 import SalesCostTracker from './components/SalesCostTracker';
 import UpcomingAppointments from './components/UpcomingAppointments';
-import useSalesAgentPortal from '../../hooks/useSalesAgentPortal';
+import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
 
 const PIPELINE_STAGES = ['new_lead', 'contacted', 'qualified', 'proposal_sent', 'closed'];
 
@@ -234,7 +234,7 @@ const SalesAgentPortal = () => {
     agentProfile, leads, walletTransactions, expenses, followUps,
     activityFeed, kpis, loading, connected,
     registerLead, updateLeadStage, requestWithdrawal, logExpense, refetch,
-  } = useSalesAgentPortal();
+  } = useSalesAgentContext();
 
   const [isLeadModalOpen, setIsLeadModalOpen]     = useState(false);
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);

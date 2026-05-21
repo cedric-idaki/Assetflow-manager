@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import useClientPortal from '../../hooks/useClientPortal';
+import { useClientPortalContext } from '../../contexts/ClientPortalContext';
 import Icon from '../../components/AppIcon';
 
 import AccountSummary from './components/AccountSummary';
@@ -36,7 +36,7 @@ const ClientPortal = () => {
     sendEnquiry,
     initiateMpesaPayment,
     exportPayments,
-  } = useClientPortal();
+  } = useClientPortalContext();
 
   // Read active tab from URL ?tab=xxx
   const params   = new URLSearchParams(location.search);

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const STAFF_ROLES = [
   { value: 'director',            label: 'Director',            color: 'bg-indigo-100 text-indigo-700' },
@@ -250,9 +251,9 @@ const InviteModal = ({ onClose, onInvite, subscription, currentStaffCount }) => 
 };
 
 const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport }) => {
+  const { modals, openModal, closeModal } = useAdminDashboardContext();
   const [search, setSearch]             = useState('');
   const [roleFilter, setRoleFilter]     = useState('all');
-  const [showModal, setShowModal]       = useState(false);
   const [toast, setToast]               = useState(null);
   const [confirmToggle, setConfirmToggle] = useState(null);
 
@@ -353,7 +354,7 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
           {STAFF_ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
         </select>
         <button
-          onClick={() => setShowModal(true)}
+          onClick={() => openModal('inviteStaff')}
           disabled={slotsLeft !== null && slotsLeft <= 0}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -401,7 +402,7 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
               {search || roleFilter !== 'all' ? 'No staff match your filters' : 'No staff members yet'}
             </p>
             {!search && roleFilter === 'all' && (
-              <button onClick={() => setShowModal(true)} className="mt-3 text-sm text-blue-600 hover:underline font-medium">
+              <button onClick={() => openModal('inviteStaff')} className="mt-3 text-sm text-blue-600 hover:underline font-medium">
                 Add your first staff member
               </button>
             )}
@@ -511,9 +512,9 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
       </div>
 
       {/* Invite modal */}
-      {showModal && (
+      {modals.inviteStaff && (
         <InviteModal
-          onClose={() => setShowModal(false)}
+          onClose={() => closeModal('inviteStaff')}
           onInvite={handleInvite}
           subscription={subscription}
           currentStaffCount={activeCount}

@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import { useRealtimeDashboard } from '../../hooks/useRealtimeDashboard';
+import { useRealtimeDashboardContext } from '../../contexts/RealtimeDashboardContext';
 import Icon from '../../components/AppIcon';
 
 // ─── Skeleton ────────────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ const DefaultDashboard = () => {
     syncing,
     lastUpdated,
     refetch,
-  } = useRealtimeDashboard();
+  } = useRealtimeDashboardContext();
 
   const fmt = (n) => `KES ${(n || 0)?.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 

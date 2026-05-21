@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import { useFinanceHub, calcKenyaTax } from '../../hooks/useFinanceHub';
+import { calcKenyaTax } from '../../hooks/useFinanceHub';
+import { useFinanceHubContext } from '../../contexts/FinanceHubContext';
 import Icon from '../../components/AppIcon';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1402,9 +1404,12 @@ const FinanceHub = () => {
     createJournalEntry, runPayroll, approvePayroll,
     addAccountToCOA, toggleAccountStatus,
     refetch, TRIGGER_LABELS,
-  } = useFinanceHub();
+  } = useFinanceHubContext();
 
-  const [activeTab, setActiveTab] = useState('invoices');
+  // Tab state lives in the URL so it survives navigation and page refresh
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') || 'invoices';
+  const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
 
   const tabs = [
     { id: 'invoices',   label: 'Invoices',            icon: 'FileText',  badge: fs.pendingInvoices  },

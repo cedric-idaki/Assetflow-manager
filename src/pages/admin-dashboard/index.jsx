@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import useAdminDashboard from '../../hooks/useAdminDashboard';
+import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
 import Icon from '../../components/AppIcon';
 
 import OverviewTab    from './components/OverviewTab';
@@ -68,9 +68,12 @@ const AdminDashboard = () => {
     salesAnalytics, loading, connectionStatus,
     refetch, inviteClient, createAgent, inviteStaff, toggleStaffActive,
     uploadContract, exportCSV,
-  } = useAdminDashboard();
+  } = useAdminDashboardContext();
 
-  const [activeTab, setActiveTab] = useState('overview');
+  // Tab state lives in the URL so it survives navigation and page refresh
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') || 'overview';
+  const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
   const navigate = useNavigate();
 
   // Max users from either subscription.plan.max_users or subscription.max_users
