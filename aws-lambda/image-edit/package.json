@@ -1,0 +1,9 @@
+{
+  "name": "image-edit",
+  "version": "1.0.0",
+  "description": "AWS Lambda function for image-edit",
+  "main": "index.js",
+  "dependencies": {
+    "@rocketnew/llm-sdk": "^1.0.3"
+  }
+}
