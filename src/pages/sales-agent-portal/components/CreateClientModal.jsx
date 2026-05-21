@@ -152,6 +152,12 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
     email:            '',
     phone:            '',
     national_id:      '',
+    physical_address: '',
+    postal_address:   '',
+    kra_pin:          '',
+    nok_name:         '',
+    nok_phone:        '',
+    nok_relationship: '',
     password:         '',
     confirm_password: '',
     asset_interest:   '',
@@ -173,10 +179,13 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
   // ── Validation ────────────────────────────────────────────────────────────
   const validateStep1 = () => {
     const e = {};
-    if (!form.full_name.trim()) e.full_name = 'Full name is required';
-    if (!form.email.trim())     e.email     = 'Email is required';
+    if (!form.full_name.trim())       e.full_name       = 'Full name is required';
+    if (!form.email.trim())           e.email           = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Invalid email';
-    if (!form.phone.trim())     e.phone     = 'Phone number is required';
+    if (!form.phone.trim())           e.phone           = 'Phone number is required';
+    if (!form.physical_address.trim()) e.physical_address = 'Physical address is required';
+    if (!form.kra_pin.trim())         e.kra_pin         = 'KRA PIN is required';
+    if (!form.nok_name.trim())        e.nok_name        = 'Next of kin name is required';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -208,6 +217,8 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
     setStep(1);
     setForm({
       full_name: '', email: '', phone: '', national_id: '',
+      physical_address: '', postal_address: '', kra_pin: '',
+      nok_name: '', nok_phone: '', nok_relationship: '',
       password: '', confirm_password: '', asset_interest: '', budget_range: '', notes: '',
     });
     setErrors({});
@@ -250,11 +261,17 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
           full_name:      form.full_name.trim(),
           email:          form.email.trim().toLowerCase(),
           phone:          form.phone.trim(),
-          national_id:    form.national_id.trim() || null,
-          account_number: accountNumber,
-          client_status:  'pending',
-          kyc_status:     'unverified',
-          notes:          form.notes.trim() || null,
+          national_id:      form.national_id.trim()      || null,
+          physical_address: form.physical_address.trim()  || null,
+          postal_address:   form.postal_address.trim()    || null,
+          kra_pin:          form.kra_pin.trim()           || null,
+          nok_name:         form.nok_name.trim()          || null,
+          nok_phone:        form.nok_phone.trim()         || null,
+          nok_relationship: form.nok_relationship.trim()  || null,
+          account_number:   accountNumber,
+          client_status:    'pending',
+          kyc_status:       'unverified',
+          notes:            form.notes.trim()             || null,
         })
         .select()
         .single();
@@ -412,6 +429,40 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
                 <input type="text" value={form.national_id} onChange={e => set('national_id', e.target.value)}
                   placeholder="ID Number" className={ic(false)} />
               </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Physical Address / Location *</label>
+                <input type="text" value={form.physical_address} onChange={e => set('physical_address', e.target.value)}
+                  placeholder="e.g. 123 Ngong Road, Kilimani, Nairobi" className={ic(errors.physical_address)} />
+                {errors.physical_address && <p className="mt-1 text-xs text-red-500">{errors.physical_address}</p>}
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                  Postal Address <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <input type="text" value={form.postal_address} onChange={e => set('postal_address', e.target.value)}
+                  placeholder="e.g. P.O Box 12345-00100, Nairobi" className={ic(false)} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">KRA PIN *</label>
+                <input type="text" value={form.kra_pin} onChange={e => set('kra_pin', e.target.value.toUpperCase())}
+                  placeholder="e.g. A012345678P" maxLength={11}
+                  className={ic(errors.kra_pin) + ' font-mono tracking-wider'} />
+                {errors.kra_pin && <p className="mt-1 text-xs text-red-500">{errors.kra_pin}</p>}
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Next of Kin *</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <input type="text" value={form.nok_name} onChange={e => set('nok_name', e.target.value)}
+                      placeholder="Full Name" className={ic(errors.nok_name)} />
+                    {errors.nok_name && <p className="mt-1 text-xs text-red-500">{errors.nok_name}</p>}
+                  </div>
+                  <input type="tel" value={form.nok_phone} onChange={e => set('nok_phone', e.target.value)}
+                    placeholder="Phone Number" className={ic(false)} />
+                  <input type="text" value={form.nok_relationship} onChange={e => set('nok_relationship', e.target.value)}
+                    placeholder="Relationship" className={ic(false)} />
+                </div>
+              </div>
             </div>
           )}
 
@@ -500,10 +551,14 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
               <div className="bg-gray-50 rounded-xl p-5 space-y-2">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Personal Info</p>
                 {[
-                  { label: 'Name',        value: form.full_name },
-                  { label: 'Email',       value: form.email },
-                  { label: 'Phone',       value: form.phone },
-                  { label: 'National ID', value: form.national_id || '—' },
+                  { label: 'Name',             value: form.full_name },
+                  { label: 'Email',            value: form.email },
+                  { label: 'Phone',            value: form.phone },
+                  { label: 'National ID',      value: form.national_id || '—' },
+                  { label: 'Physical Address', value: form.physical_address || '—' },
+                  { label: 'Postal Address',   value: form.postal_address || '—' },
+                  { label: 'KRA PIN',          value: form.kra_pin || '—' },
+                  { label: 'Next of Kin',      value: form.nok_name ? `${form.nok_name} (${form.nok_relationship || 'N/A'}) · ${form.nok_phone || 'N/A'}` : '—' },
                 ].map(r => (
                   <div key={r.label} className="flex justify-between text-sm">
                     <span className="text-gray-500">{r.label}</span>
