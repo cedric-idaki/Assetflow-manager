@@ -11,6 +11,264 @@ import SalesCostTracker from './components/SalesCostTracker';
 import UpcomingAppointments from './components/UpcomingAppointments';
 import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
 
+// ── Export Modal ─────────────────────────────────────────────────────────────
+const EXPORT_PRESETS = [
+  { label: 'Today',        value: 'today' },
+  { label: 'This Week',    value: 'weekly' },
+  { label: 'This Month',   value: 'monthly' },
+  { label: 'This Year',    value: 'yearly' },
+  { label: 'Custom Range', value: 'custom' },
+];
+
+const getDateRange = (preset) => {
+  const now = new Date();
+  const start = new Date();
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  if (preset === 'today') {
+    start.setHours(0, 0, 0, 0);
+  } else if (preset === 'weekly') {
+    const day = now.getDay();
+    start.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+    start.setHours(0, 0, 0, 0);
+  } else if (preset === 'monthly') {
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+  } else if (preset === 'yearly') {
+    start.setMonth(0, 1);
+    start.setHours(0, 0, 0, 0);
+  }
+  return { start, end };
+};
+
+const ExportModal = ({ leads, expenses, walletTransactions, agentProfile, onClose }) => {
+  const [preset, setPreset]       = useState('monthly');
+  const [dataType, setDataType]   = useState('leads');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo]   = useState('');
+
+  const getFiltered = () => {
+    let from, to;
+    if (preset === 'custom') {
+      if (!customFrom || !customTo) return [];
+      from = new Date(customFrom);
+      from.setHours(0, 0, 0, 0);
+      to = new Date(customTo);
+      to.setHours(23, 59, 59, 999);
+    } else {
+      const range = getDateRange(preset);
+      from = range.start;
+      to   = range.end;
+    }
+
+    const inRange = (dateStr) => {
+      const d = new Date(dateStr);
+      return d >= from && d <= to;
+    };
+
+    if (dataType === 'leads') {
+      return (leads || []).filter(l => inRange(l.created_at));
+    }
+    if (dataType === 'clients') {
+      return (leads || []).filter(l => l.stage === 'closed' && inRange(l.created_at));
+    }
+    if (dataType === 'expenses') {
+      return (expenses || []).filter(e => inRange(e.created_at));
+    }
+    if (dataType === 'commissions') {
+      return (walletTransactions || []).filter(t => t.type === 'commission' && inRange(t.created_at));
+    }
+    return [];
+  };
+
+  const buildCSV = (rows) => {
+    if (!rows.length) return null;
+    const colMaps = {
+      leads: [
+        ['Full Name',      r => r.full_name || ''],
+        ['Email',          r => r.email || ''],
+        ['Phone',          r => r.phone || ''],
+        ['Stage',          r => (r.stage || '').replace(/_/g, ' ')],
+        ['Priority',       r => r.priority || ''],
+        ['Asset Interest', r => r.asset_interest || ''],
+        ['Budget Range',   r => (r.budget_range || '').replace(/_/g, ' ')],
+        ['Source',         r => r.source || ''],
+        ['Notes',          r => (r.notes || '').replace(/,/g, ';')],
+        ['Created',        r => r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB') : ''],
+      ],
+      clients: [
+        ['Full Name',      r => r.full_name || ''],
+        ['Email',          r => r.email || ''],
+        ['Phone',          r => r.phone || ''],
+        ['Asset Interest', r => r.asset_interest || ''],
+        ['Budget Range',   r => (r.budget_range || '').replace(/_/g, ' ')],
+        ['Converted',      r => r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB') : ''],
+      ],
+      expenses: [
+        ['Description',    r => (r.description || '').replace(/,/g, ';')],
+        ['Amount (KES)',   r => r.amount || 0],
+        ['Category',       r => r.category || ''],
+        ['Date',           r => r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB') : ''],
+      ],
+      commissions: [
+        ['Description',    r => (r.description || '').replace(/,/g, ';')],
+        ['Amount (KES)',   r => r.amount || 0],
+        ['Status',         r => r.status || ''],
+        ['Date',           r => r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB') : ''],
+      ],
+    };
+    const cols = colMaps[dataType] || colMaps.leads;
+    const header = cols.map(([h]) => h).join(',');
+    const body   = rows.map(r => cols.map(([, fn]) => `"${fn(r)}"`).join(',')).join('\n');
+    return header + '\n' + body;
+  };
+
+  const handleExport = () => {
+    const rows = getFiltered();
+    if (!rows.length) { alert('No records found for the selected period.'); return; }
+    const csv  = buildCSV(rows);
+    if (!csv) return;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    const agentCode = agentProfile?.agent_code || 'agent';
+    const label = EXPORT_PRESETS.find(p => p.value === preset)?.label.toLowerCase().replace(' ', '_') || preset;
+    a.href     = url;
+    a.download = `${agentCode}_${dataType}_${label}_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    onClose();
+  };
+
+  const previewCount = getFiltered().length;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center">
+              <Icon name="Download" size={18} color="#1A56DB" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Export Data</h3>
+              <p className="text-xs text-muted-foreground">Download filtered records as CSV</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
+            <Icon name="X" size={18} color="var(--color-muted-foreground)" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Data type */}
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">What to Export</label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { value: 'leads',       label: 'All Leads',     icon: 'Target' },
+                { value: 'clients',     label: 'Converted Clients', icon: 'Users' },
+                { value: 'expenses',    label: 'Expenses',      icon: 'Receipt' },
+                { value: 'commissions', label: 'Commissions',   icon: 'Award' },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setDataType(opt.value)}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                    dataType === opt.value
+                      ? 'border-primary bg-primary/5 text-primary'
+                      : 'border-border text-muted-foreground hover:border-primary/40 hover:bg-muted/30'
+                  }`}
+                >
+                  <Icon name={opt.icon} size={14} color="currentColor" />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Date filter */}
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Date Range</label>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {EXPORT_PRESETS.map(p => (
+                <button
+                  key={p.value}
+                  onClick={() => setPreset(p.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    preset === p.value
+                      ? 'bg-primary text-white'
+                      : 'bg-muted text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {preset === 'custom' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">From</label>
+                  <input
+                    type="date"
+                    value={customFrom}
+                    onChange={e => setCustomFrom(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">To</label>
+                  <input
+                    type="date"
+                    value={customTo}
+                    onChange={e => setCustomTo(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Preview count */}
+          <div className={`flex items-center gap-2 px-4 py-3 rounded-xl border text-sm ${
+            previewCount > 0
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+              : 'bg-muted border-border text-muted-foreground'
+          }`}>
+            <Icon name={previewCount > 0 ? 'FileText' : 'AlertCircle'} size={15} color="currentColor" />
+            {previewCount > 0
+              ? <><span className="font-bold">{previewCount}</span> record{previewCount !== 1 ? 's' : ''} ready to export</>
+              : 'No records match the selected period'
+            }
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-3 px-6 py-4 border-t border-border">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted rounded-xl transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={previewCount === 0}
+            className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-50 transition-all"
+            style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
+          >
+            <Icon name="Download" size={15} color="currentColor" />
+            Export {previewCount > 0 ? `${previewCount} Records` : ''}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const PIPELINE_STAGES = ['new_lead', 'contacted', 'qualified', 'proposal_sent', 'closed'];
 
 // ── KPI Card ──────────────────────────────────────────────────────────────────
@@ -237,6 +495,7 @@ const SalesAgentPortal = () => {
   } = useSalesAgentContext();
 
   const [isLeadModalOpen, setIsLeadModalOpen]     = useState(false);
+  const [showExport, setShowExport]               = useState(false);
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [successPopup, setSuccessPopup]           = useState(null); // { full_name, email, phone, account_number }
   const [selectedLead, setSelectedLead]           = useState(null);
@@ -335,6 +594,15 @@ const SalesAgentPortal = () => {
             >
               <Icon name="UserPlus" size={15} color="white" />
               Create Client
+            </button>
+
+            {/* Export */}
+            <button
+              onClick={() => setShowExport(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+            >
+              <Icon name="Download" size={15} color="currentColor" />
+              Export
             </button>
 
             {/* Register lead */}
@@ -464,6 +732,17 @@ const SalesAgentPortal = () => {
             <Icon name="X" size={14} color="white" />
           </button>
         </div>
+      )}
+
+      {/* ── Export Modal ── */}
+      {showExport && (
+        <ExportModal
+          leads={leads}
+          expenses={expenses}
+          walletTransactions={walletTransactions}
+          agentProfile={agentProfile}
+          onClose={() => setShowExport(false)}
+        />
       )}
 
       {/* ── Lead Registration Modal ── */}
