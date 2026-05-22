@@ -27,6 +27,7 @@ import POSModule from './pages/pos-module';
 import ESignaturePage from './pages/e-signature';
 import ResetPassword from './pages/reset-password';
 import ClientPortal from './pages/client-portal';
+import SubscriptionBilling from './pages/subscription-billing';
 
 const ADMIN_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
 const FINANCE_ROLES = ['admin', 'accountant', 'finance', 'director', 'manager'];
@@ -52,6 +53,14 @@ const Routes = () => {
             <ProtectedRoute>
               <RoleGuard allowedRoles={['super_admin']}>
                 <SuperAdminDashboard />
+              </RoleGuard>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/subscription-billing" element={
+            <ProtectedRoute>
+              <RoleGuard allowedRoles={['super_admin']}>
+                <SubscriptionBilling />
               </RoleGuard>
             </ProtectedRoute>
           } />

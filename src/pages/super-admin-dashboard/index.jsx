@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import useSuperAdminDashboard from '../../hooks/useSuperAdminDashboard';
@@ -59,6 +60,7 @@ const ConnDot = ({ status }) => (
 
 const SuperAdminDashboard = () => {
   const { userProfile } = useAuth();
+  const navigate = useNavigate();
   const {
     stats, assetBreakdown, companyAnalytics,
     auditTrail, salesAgents, salesTarget,
@@ -153,6 +155,7 @@ const SuperAdminDashboard = () => {
     { id: 'audit',     label: 'Audit Trail',   icon: 'Shield', badge: auditTrail.filter(a => a.action === 'delete').length },
     { id: 'agents',    label: 'Sales Agents',  icon: 'Users' },
     { id: 'staff',     label: 'Staff Users',   icon: 'UserCog' },
+    { id: 'billing',   label: 'Subscription & Billing', icon: 'CreditCard' },
   ];
 
   return (
@@ -196,7 +199,7 @@ const SuperAdminDashboard = () => {
               label={t.label}
               icon={t.icon}
               badge={t.badge}
-              onClick={() => setActiveTab(t.id)}
+              onClick={() => t.id === 'billing' ? navigate('/subscription-billing') : setActiveTab(t.id)}
             />
           ))}
         </div>
