@@ -594,7 +594,7 @@ const AgingAnalysisReport = ({ clients, payments }) => {
 };
 
 // ─── REPORT: PAYROLL SUMMARY ──────────────────────────────────────────────────
-const PayrollSummaryReport = ({ agents }) => {
+const PayrollSummaryReport = ({ agents, employees = [], payrollRecords = [] }) => {
   const [profiles, setProfiles]   = React.useState([]);
   const [loading, setLoading]     = React.useState(true);
   const [period, setPeriod]       = React.useState(new Date().toISOString().slice(0, 7));
@@ -645,6 +645,8 @@ const PayrollSummaryReport = ({ agents }) => {
   const totalPAYE    = deptList.reduce((s, d) => s + d.paye, 0);
   const totalStaff   = profiles.length;
 
+  // If actual payroll records exist, show those instead of profile estimates
+  const hasActualPayroll = payrollRecords.length > 0;
   const rows = profiles.slice(0, 30).map(p => {
     const basic     = parseFloat(p.basic_salary || 0);
     const housing   = parseFloat(p.housing_allowance || 0);
@@ -709,7 +711,7 @@ const PayrollSummaryReport = ({ agents }) => {
         <div className="flex items-center justify-center py-12"><p className="text-sm text-muted-foreground">Loading payroll data...</p></div>
       ) : profiles.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-12 text-center">
-          <p className="text-sm text-muted-foreground">No payroll data found. Add salary details in HR Management.</p>
+          <p className="text-sm text-muted-foreground">No payroll data found. Run payroll in HR Management first.</p>
         </div>
       ) : (
         <Table
@@ -724,36 +726,369 @@ const PayrollSummaryReport = ({ agents }) => {
 
 
 // ─── MAIN REPORTS PAGE ────────────────────────────────────────────────────────
-const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [] }) => {
-  const [activeReport, setActiveReport] = useState('vat');
 
-  const reports = [
-    { id: 'vat',         label: 'VAT Report',            icon: 'Receipt' },
-    { id: 'cashflow',    label: 'Cash Flow',             icon: 'TrendingUp' },
-    { id: 'inventory',   label: 'Inventory Movement',    icon: 'Package' },
-    { id: 'portfolio',   label: 'Client Portfolio',      icon: 'Users' },
-    { id: 'commission',  label: 'Commission Report',     icon: 'Award' },
-    { id: 'collections', label: 'Daily Collections',     icon: 'CreditCard' },
-    { id: 'adherence',   label: 'Installment Adherence', icon: 'Calendar' },
-    { id: 'aging',        label: 'Aging Analysis',         icon: 'AlertCircle' },
-    { id: 'payroll',      label: 'Payroll Summary',         icon: 'Users' },
-  ];
+// ─── HR REPORT ────────────────────────────────────────────────────────────────
+const HRReport = ({ employees = [], payrollRecords = [], dateRange }) => {
+  const [period, setPeriod] = React.useState(new Date().toISOString().slice(0, 7));
 
-  const handlePrint = () => window.print();
+  const active   = employees.filter(e => e.is_active !== false);
+  const inactive = employees.filter(e => e.is_active === false);
+  const depts    = [...new Set(employees.map(e => e.department).filter(Boolean))];
+
+  const totalGross = employees.reduce((s, e) => {
+    return s + parseFloat(e.basic_salary || 0) + parseFloat(e.housing_allowance || 0) + parseFloat(e.transport_allowance || 0);
+  }, 0);
+
+  // Payroll for selected period
+  const periodPayroll = payrollRecords.filter(p => p.pay_month === period);
+  const periodNet     = periodPayroll.reduce((s, p) => s + parseFloat(p.net_salary || 0), 0);
+  const periodGross   = periodPayroll.reduce((s, p) => s + parseFloat(p.gross_salary || 0), 0);
+  const periodPAYE    = periodPayroll.reduce((s, p) => s + parseFloat(p.paye || 0), 0);
+
+  const empRows = employees.map(e => {
+    const gross = parseFloat(e.basic_salary || 0) + parseFloat(e.housing_allowance || 0) + parseFloat(e.transport_allowance || 0);
+    return [
+      <span className="font-semibold text-foreground">{e.full_name || '—'}</span>,
+      <span className="text-xs capitalize text-muted-foreground">{(e.role || '—').replace(/_/g, ' ')}</span>,
+      <span className="text-xs text-muted-foreground">{e.department || '—'}</span>,
+      <span className="text-xs capitalize text-muted-foreground">{(e.employment_type || '—').replace(/_/g, ' ')}</span>,
+      <span className="font-mono">{fmt(e.basic_salary)}</span>,
+      <span className="font-mono font-semibold text-foreground">{fmt(gross)}</span>,
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${e.is_active !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+        {e.is_active !== false ? 'Active' : 'Inactive'}
+      </span>,
+    ];
+  });
+
+  const payrollRows = periodPayroll.map(p => {
+    const emp = employees.find(e => e.id === p.employee_id);
+    return [
+      <span className="font-semibold text-foreground">{emp?.full_name || '—'}</span>,
+      <span className="text-xs text-muted-foreground">{emp?.department || '—'}</span>,
+      <span className="font-mono">{fmt(p.gross_salary)}</span>,
+      <span className="font-mono text-red-500">({fmt(p.paye)})</span>,
+      <span className="font-mono text-red-500">({fmt(p.nssf)})</span>,
+      <span className="font-mono text-red-500">({fmt(p.shif)})</span>,
+      <span className="font-mono font-bold text-emerald-600">{fmt(p.net_salary)}</span>,
+    ];
+  });
 
   return (
     <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">HR Report</h3>
+          <p className="text-xs text-muted-foreground">Employee records and payroll breakdown</p>
+        </div>
+        <input type="month" value={period} onChange={e => setPeriod(e.target.value)}
+          className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KpiCard label="Total Employees"  value={employees.length} icon="Users"      color="text-foreground"  bg="bg-muted" />
+        <KpiCard label="Active Staff"     value={active.length}    icon="UserCheck"  color="text-emerald-600" bg="bg-emerald-100 dark:bg-emerald-900/30" />
+        <KpiCard label="Departments"      value={depts.length}     icon="Building2"  color="text-blue-600"    bg="bg-blue-100 dark:bg-blue-900/30" />
+        <KpiCard label="Monthly Payroll"  value={fmt(totalGross)}  icon="DollarSign" color="text-primary"     bg="bg-primary/10" />
+      </div>
+
+      {periodPayroll.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <KpiCard label={`${period} Gross`}   value={fmt(periodGross)} icon="TrendingUp" color="text-foreground"  bg="bg-muted" />
+          <KpiCard label={`${period} Net Pay`} value={fmt(periodNet)}   icon="Wallet"     color="text-emerald-600" bg="bg-emerald-100 dark:bg-emerald-900/30" />
+          <KpiCard label={`${period} PAYE`}    value={fmt(periodPAYE)}  icon="Receipt"    color="text-red-600"     bg="bg-red-100 dark:bg-red-900/30" />
+        </div>
+      )}
+
+      <div>
+        <p className="text-sm font-bold text-foreground mb-3">Employee Records</p>
+        <Table
+          headers={['Employee', 'Role', 'Department', 'Type', 'Basic Salary', 'Gross Package', 'Status']}
+          rows={empRows}
+          empty="No employees found"
+        />
+      </div>
+
+      {periodPayroll.length > 0 && (
+        <div>
+          <p className="text-sm font-bold text-foreground mb-3">Payroll for {period}</p>
+          <Table
+            headers={['Employee', 'Department', 'Gross', 'PAYE', 'NSSF', 'SHA', 'Net Pay']}
+            rows={payrollRows}
+            empty="No payroll records for this period"
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── EXPORT CSV HELPER ────────────────────────────────────────────────────────
+const exportCSV = (data, filename) => {
+  if (!data || data.length === 0) return;
+  const keys = Object.keys(data[0]);
+  const csv  = [
+    keys.join(','),
+    ...data.map(row => keys.map(k => `"${String(row[k] ?? '').replace(/"/g, '""')}"`).join(','))
+  ].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+// ─── DATE RANGE FILTER HELPER ─────────────────────────────────────────────────
+const getDateRange = (range, customFrom, customTo) => {
+  const now   = new Date();
+  const start = (y, m, d) => new Date(y, m, d);
+  if (range === 'today')   return { from: start(now.getFullYear(), now.getMonth(), now.getDate()), to: now };
+  if (range === 'weekly')  {
+    const s = new Date(now); s.setDate(now.getDate() - now.getDay());
+    s.setHours(0,0,0,0); return { from: s, to: now };
+  }
+  if (range === 'monthly') return { from: start(now.getFullYear(), now.getMonth(), 1), to: now };
+  if (range === 'yearly')  return { from: start(now.getFullYear(), 0, 1), to: now };
+  if (range === 'custom' && customFrom && customTo) {
+    const to = new Date(customTo); to.setHours(23,59,59,999);
+    return { from: new Date(customFrom), to };
+  }
+  return null; // all time
+};
+
+const filterByDate = (items, dateField, range, customFrom, customTo) => {
+  const dr = getDateRange(range, customFrom, customTo);
+  if (!dr) return items;
+  return items.filter(item => {
+    const d = new Date(item[dateField] || item.created_at);
+    return d >= dr.from && d <= dr.to;
+  });
+};
+
+// ─── MAIN REPORTS HUB ─────────────────────────────────────────────────────────
+const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], employees = [], payrollRecords = [] }) => {
+  const [activeReport, setActiveReport] = useState('vat');
+  const [dateRange,    setDateRange]    = useState('all');
+  const [customFrom,   setCustomFrom]   = useState('');
+  const [customTo,     setCustomTo]     = useState('');
+
+  // Apply global date filter to shared datasets
+  const filteredPayments = filterByDate(payments, 'payment_date', dateRange, customFrom, customTo);
+  const filteredClients  = filterByDate(clients,  'created_at',   dateRange, customFrom, customTo);
+  const filteredAssets   = filterByDate(assets,   'created_at',   dateRange, customFrom, customTo);
+
+  const reports = [
+    { id: 'vat',         label: 'VAT Report',            icon: 'Receipt'     },
+    { id: 'cashflow',    label: 'Cash Flow',             icon: 'TrendingUp'  },
+    { id: 'inventory',   label: 'Inventory Movement',    icon: 'Package'     },
+    { id: 'portfolio',   label: 'Client Portfolio',      icon: 'Users'       },
+    { id: 'commission',  label: 'Commission Report',     icon: 'Award'       },
+    { id: 'collections', label: 'Daily Collections',     icon: 'CreditCard'  },
+    { id: 'adherence',   label: 'Installment Adherence', icon: 'Calendar'    },
+    { id: 'aging',       label: 'Aging Analysis',        icon: 'AlertCircle' },
+    { id: 'payroll',     label: 'Payroll Summary',       icon: 'Receipt'     },
+    { id: 'hr',          label: 'HR Report',             icon: 'UserCheck'   },
+  ];
+
+  // Export current report data as CSV
+  const handleExport = () => {
+    if (activeReport === 'vat' || activeReport === 'cashflow' || activeReport === 'collections') {
+      exportCSV(filteredPayments.map(p => ({
+        date:      p.payment_date || p.created_at,
+        reference: p.reference_number || '',
+        method:    p.payment_method || '',
+        amount:    p.amount,
+        status:    p.payment_status,
+        client_id: p.client_id,
+      })), `${activeReport}_payments`);
+    } else if (activeReport === 'inventory') {
+      exportCSV(filteredAssets.map(a => ({
+        name:       a.asset_name || a.title || '',
+        type:       a.asset_type || '',
+        status:     a.asset_status || '',
+        price:      a.selling_price || 0,
+        created_at: a.created_at,
+      })), 'inventory');
+    } else if (activeReport === 'portfolio' || activeReport === 'aging' || activeReport === 'adherence') {
+      exportCSV(filteredClients.map(c => ({
+        name:       c.full_name,
+        email:      c.email,
+        phone:      c.phone,
+        account:    c.account_number,
+        status:     c.client_status,
+        kyc:        c.kyc_status,
+        balance:    c.outstanding_balance,
+        created_at: c.created_at,
+      })), `${activeReport}_clients`);
+    } else if (activeReport === 'commission') {
+      exportCSV(agents.map(a => ({
+        name:             a.full_name,
+        email:            a.email,
+        region:           a.region,
+        commission_rate:  a.commission_rate,
+        total_sales:      a.total_sales,
+        total_commission: a.total_commission,
+        status:           a.agent_status,
+      })), 'commission_agents');
+    } else if (activeReport === 'payroll') {
+      exportCSV(payrollRecords.map(p => {
+        // employee could be in either employees array or agents array
+        const emp = [...employees, ...agents].find(e => e.id === p.employee_id);
+        return {
+          employee:   emp?.full_name || p.employee_id || '',
+          department: emp?.department || emp?.region || '',
+          pay_month:  p.pay_month,
+          gross:      p.gross_salary,
+          paye:       p.paye,
+          nssf:       p.nssf,
+          shif:       p.shif,
+          net:        p.net_salary,
+          status:     p.status,
+        };
+      }), 'payroll_summary');
+    } else if (activeReport === 'hr') {
+      exportCSV(employees.map(e => ({
+        name:        e.full_name,
+        email:       e.email,
+        role:        e.role,
+        department:  e.department,
+        type:        e.employment_type,
+        basic:       e.basic_salary,
+        housing:     e.housing_allowance,
+        transport:   e.transport_allowance,
+        kra_pin:     e.kra_pin,
+        nssf:        e.nssf_number,
+        status:      e.is_active ? 'active' : 'inactive',
+        date_joined: e.date_joined,
+      })), 'hr_employees');
+    }
+  };
+
+  return (
+    <div className="space-y-5 print:space-y-3">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-lg font-bold text-foreground">Reports Hub</h2>
           <p className="text-xs text-muted-foreground mt-0.5">Financial and operational reports</p>
         </div>
-        <button onClick={handlePrint}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
-          <Icon name="Printer" size={14} color="currentColor" />
-          Print Report
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Icon name="Download" size={14} color="currentColor" />
+            Export CSV
+          </button>
+          <button
+           onClick={() => {
+              const reportEl = document.querySelector('.print-report-content');
+              if (!reportEl) { window.print(); return; }
+
+              const printWindow = window.open('', '_blank');
+              printWindow.document.write(`
+                <!DOCTYPE html>
+                <html>
+                  <head>
+                    <title>AssetFlow Report</title>
+                    <style>
+                      body { font-family: sans-serif; padding: 24px; color: #111; }
+                      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                      th { background: #f3f4f6; padding: 8px 12px; text-align: left; font-size: 11px; text-transform: uppercase; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+                      td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; font-size: 12px; color: #374151; }
+                      tr:hover td { background: #f9fafb; }
+                      h3 { font-size: 18px; margin: 0 0 4px; }
+                      p { font-size: 12px; color: #6b7280; margin: 0 0 16px; }
+                      .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+                      .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }
+                      .card-label { font-size: 10px; text-transform: uppercase; color: #6b7280; margin-bottom: 4px; }
+                      .card-value { font-size: 20px; font-weight: bold; color: #111; }
+                      @media print { body { padding: 12px; } }
+                    </style>
+                  </head>
+                  <body>
+                    <div style="margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e5e7eb;">
+                      <strong style="font-size:20px;">AssetFlow</strong>
+                      <span style="font-size:12px;color:#6b7280;margin-left:12px;">Report printed on ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                    </div>
+                    ${reportEl.innerHTML}
+                  </body>
+                </html>
+              `);
+              printWindow.document.close();
+              printWindow.focus();
+              setTimeout(() => {
+                printWindow.print();
+                printWindow.close();
+              }, 500);
+            }}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Icon name="Printer" size={14} color="currentColor" />
+            Print
+          </button>
+        </div>
+      </div>
+
+      {/* Global date range filter */}
+      <div className="bg-card border border-border rounded-xl px-5 py-4">
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground mb-1.5">Date Range</p>
+            <div className="flex gap-1 flex-wrap">
+              {[
+                { value: 'all',     label: 'All Time'   },
+                { value: 'today',   label: 'Today'      },
+                { value: 'weekly',  label: 'This Week'  },
+                { value: 'monthly', label: 'This Month' },
+                { value: 'yearly',  label: 'This Year'  },
+                { value: 'custom',  label: 'Custom'     },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setDateRange(opt.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    dateRange === opt.value
+                      ? 'bg-primary text-white'
+                      : 'bg-muted text-muted-foreground hover:text-foreground border border-border'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {dateRange === 'custom' && (
+            <div className="flex items-end gap-2">
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground mb-1.5">From</p>
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={e => setCustomFrom(e.target.value)}
+                  className="bg-background border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground mb-1.5">To</p>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={e => setCustomTo(e.target.value)}
+                  className="bg-background border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+          )}
+
+          {dateRange !== 'all' && (
+            <p className="text-xs text-muted-foreground pb-1.5">
+              Showing {filteredPayments.length} payments · {filteredClients.length} clients · {filteredAssets.length} assets
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Report selector */}
@@ -772,17 +1107,18 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [] }) =
         ))}
       </div>
 
-      {/* Report content */}
-      <div>
-        {activeReport === 'vat'         && <VATReport payments={payments} assets={assets} />}
-        {activeReport === 'cashflow'    && <CashFlowReport payments={payments} />}
-        {activeReport === 'inventory'   && <InventoryReport assets={assets} />}
-        {activeReport === 'portfolio'   && <ClientPortfolioReport clients={clients} payments={payments} />}
-        {activeReport === 'commission'  && <CommissionReport agents={agents} payments={payments} assets={assets} />}
-        {activeReport === 'collections' && <DailyCollectionsReport payments={payments} />}
-        {activeReport === 'adherence'   && <InstallmentAdherenceReport clients={clients} />}
-        {activeReport === 'aging'       && <AgingAnalysisReport clients={clients} payments={payments} />}
-        {activeReport === 'payroll'     && <PayrollSummaryReport agents={agents} />}
+      {/* Report content — filtered data passed to each report */}
+      <div className="print-report-content">
+        {activeReport === 'vat'         && <VATReport         payments={filteredPayments} assets={filteredAssets} />}
+        {activeReport === 'cashflow'    && <CashFlowReport    payments={filteredPayments} />}
+        {activeReport === 'inventory'   && <InventoryReport   assets={filteredAssets} />}
+        {activeReport === 'portfolio'   && <ClientPortfolioReport clients={filteredClients} payments={filteredPayments} />}
+        {activeReport === 'commission'  && <CommissionReport  agents={agents} payments={filteredPayments} assets={filteredAssets} />}
+        {activeReport === 'collections' && <DailyCollectionsReport payments={filteredPayments} />}
+        {activeReport === 'adherence'   && <InstallmentAdherenceReport clients={filteredClients} />}
+        {activeReport === 'aging'       && <AgingAnalysisReport clients={filteredClients} payments={filteredPayments} />}
+        {activeReport === 'payroll'     && <PayrollSummaryReport agents={agents} employees={employees} payrollRecords={payrollRecords} />}
+        {activeReport === 'hr'          && <HRReport employees={employees} payrollRecords={payrollRecords} />}
       </div>
     </div>
   );

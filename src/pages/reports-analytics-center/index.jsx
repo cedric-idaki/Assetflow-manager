@@ -4,12 +4,14 @@ import { supabase } from '../../lib/supabase';
 import ReportsHub from '../admin-dashboard/components/ReportsHub';
 
 const ReportsAnalyticsCenter = () => {
-  const [adminId,  setAdminId]  = useState(null);
-  const [assets,   setAssets]   = useState([]);
-  const [payments, setPayments] = useState([]);
-  const [agents,   setAgents]   = useState([]);
-  const [clients,  setClients]  = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  const [adminId,        setAdminId]        = useState(null);
+  const [assets,         setAssets]         = useState([]);
+  const [payments,       setPayments]       = useState([]);
+  const [agents,         setAgents]         = useState([]);
+  const [clients,        setClients]        = useState([]);
+  const [employees,      setEmployees]      = useState([]);
+  const [payrollRecords, setPayrollRecords] = useState([]);
+  const [loading,        setLoading]        = useState(true);
 
   const resolveAdminId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -27,17 +29,30 @@ const ReportsAnalyticsCenter = () => {
         setAdminId(aId);
         if (!aId) return;
 
-        const [assetsRes, paymentsRes, agentsRes, clientsRes] = await Promise.all([
+        const [assetsRes, paymentsRes, agentsRes, clientsRes, employeesRes, payrollRes] = await Promise.all([
           supabase.from('assets').select('*').eq('company_id', aId).order('created_at', { ascending: false }),
-          supabase.from('payments').select('*').eq('processed_by', aId).order('payment_date', { ascending: false }).limit(500),
+          supabase.from('payments').select('*').order('payment_date', { ascending: false }).limit(500),
           supabase.from('user_profiles').select('*').eq('admin_id', aId).eq('role', 'sales_agent'),
           supabase.from('clients').select('*').eq('admin_id', aId).order('created_at', { ascending: false }),
+          // HR employees — all staff under this admin excluding clients and super_admin
+          supabase.from('user_profiles')
+            .select('id, full_name, email, role, department, employment_type, is_active, basic_salary, housing_allowance, transport_allowance, date_joined, kra_pin, nssf_number, national_id')
+            .eq('admin_id', aId)
+            .not('role', 'in', '("client","super_admin","sales_agent")'),
+          // Payroll records for this admin
+          supabase.from('payroll_records')
+            .select('*')
+            .eq('admin_id', aId)
+            .order('pay_month', { ascending: false })
+            .limit(500),
         ]);
 
-        setAssets(assetsRes.data   || []);
-        setPayments(paymentsRes.data || []);
-        setAgents(agentsRes.data   || []);
-        setClients(clientsRes.data  || []);
+        setAssets(assetsRes.data         || []);
+        setPayments(paymentsRes.data     || []);
+        setAgents(agentsRes.data         || []);
+        setClients(clientsRes.data       || []);
+        setEmployees(employeesRes.data   || []);
+        setPayrollRecords(payrollRes.data || []);
       } catch (err) {
         console.error('Reports load error:', err);
       } finally {
@@ -52,7 +67,7 @@ const ReportsAnalyticsCenter = () => {
       <div className="p-5">
         {loading ? (
           <div className="space-y-4">
-            {[1,2,3].map(i => (
+            {[1, 2, 3].map(i => (
               <div key={i} className="h-24 bg-muted rounded-xl animate-pulse" />
             ))}
           </div>
@@ -62,6 +77,8 @@ const ReportsAnalyticsCenter = () => {
             payments={payments}
             agents={agents}
             clients={clients}
+            employees={employees}
+            payrollRecords={payrollRecords}
           />
         )}
       </div>
