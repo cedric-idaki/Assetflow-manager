@@ -112,7 +112,7 @@ export const AuthProvider = ({ children }) => {
         .from('user_profiles')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
         logger.warn('Profile load error', { userId, error: error.message });
@@ -212,7 +212,7 @@ export const AuthProvider = ({ children }) => {
             .from('user_profiles')
             .select('role')
             .eq('id', userId)
-            .single();
+            .maybeSingle();
 
           if (!profileError && profile?.role) {
             redirectPath = getRoleRedirectPath(profile.role);
@@ -295,7 +295,7 @@ export const AuthProvider = ({ children }) => {
         .update(safeUpdates)
         .eq('id', user.id)
         .select()
-        .single();
+        .maybeSingle();
 
       if (!error) setUserProfile(data);
       return { data, error };

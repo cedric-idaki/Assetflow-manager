@@ -639,7 +639,7 @@ const HRPage = () => {
   const resolveAdminId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
-    const { data: profile } = await supabase.from('user_profiles').select('id, role, admin_id').eq('id', user.id).single();
+    const { data: profile } = await supabase.from('user_profiles').select('id, role, admin_id').eq('id', user.id).maybeSingle();
     return profile?.role === 'admin' ? user.id : (profile?.admin_id || user.id);
   }, []);
 

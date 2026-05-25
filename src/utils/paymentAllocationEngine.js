@@ -26,7 +26,7 @@ export const getOrCreateWallet = async (clientId, adminId) => {
     .from('client_wallets')
     .select('*')
     .eq('client_id', clientId)
-    .single();
+    .maybeSingle();
 
   if (existing) return existing;
 
@@ -35,7 +35,7 @@ export const getOrCreateWallet = async (clientId, adminId) => {
     .from('client_wallets')
     .insert({ client_id: clientId, admin_id: adminId, balance: 0 })
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) throw new Error('Could not create client wallet: ' + error.message);
   return created;
@@ -114,7 +114,7 @@ export const getNextDueInstallment = async (saleId) => {
     .in('status', ['pending', 'partial', 'overdue'])
     .order('installment_no', { ascending: true })
     .limit(1)
-    .single();
+    .maybeSingle();
 
   return data;
 };
@@ -195,7 +195,7 @@ export const processPayment = async ({
       .from('installment_schedules')
       .select('*')
       .eq('id', installmentId)
-      .single();
+      .maybeSingle();
     installment = data;
   } else {
     // Auto-detect: get earliest outstanding installment (BRS 7.1)
@@ -302,7 +302,7 @@ export const processPayment = async ({
       processed_by:     receivedBy || null,
     })
     .select()
-    .single();
+    .maybeSingle();
 
   if (payErr) throw new Error('Payment record failed: ' + payErr.message);
 
@@ -392,7 +392,7 @@ export const getWalletBalance = async (clientId) => {
     .from('client_wallets')
     .select('balance, total_credited, total_debited, last_updated')
     .eq('client_id', clientId)
-    .single();
+    .maybeSingle();
   return data || { balance: 0, total_credited: 0, total_debited: 0 };
 };
 

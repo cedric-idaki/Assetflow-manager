@@ -37,7 +37,7 @@ export const useSalesAgentPortal = () => {
         .from('agents')
         .select('*')
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
 
       if (data) {
         setAgentProfile(data);
@@ -67,7 +67,7 @@ export const useSalesAgentPortal = () => {
           .from('agents')
           .insert(newAgent)
           .select()
-          .single();
+          .maybeSingle();
 
         if (createErr) {
           // agents table may have different columns — try minimal insert
@@ -75,7 +75,7 @@ export const useSalesAgentPortal = () => {
             .from('agents')
             .insert({ user_id: user.id, full_name: fullName, email: user.email, agent_code: agentCode })
             .select()
-            .single();
+            .maybeSingle();
 
           if (minErr) throw minErr;
           setAgentProfile(minimal);
@@ -327,7 +327,7 @@ export const useSalesAgentPortal = () => {
         next_of_kin_relationship: formData.nextOfKinRelationship || null,
       })
       .select()
-      .single();
+      .maybeSingle();
     if (err) throw err;
     await auditLogsService.log(
       'create',
@@ -370,7 +370,7 @@ export const useSalesAgentPortal = () => {
         description: description || 'Withdrawal request',
       })
       .select()
-      .single();
+      .maybeSingle();
     if (err) throw err;
     await auditLogsService.log(
       'create',
@@ -396,7 +396,7 @@ export const useSalesAgentPortal = () => {
         expense_date: expenseData.date || new Date().toISOString().split('T')[0],
       })
       .select()
-      .single();
+      .maybeSingle();
     if (err) throw err;
     await auditLogsService.log(
       'create',

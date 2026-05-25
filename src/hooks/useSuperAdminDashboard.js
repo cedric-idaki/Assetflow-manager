@@ -168,7 +168,7 @@ export const useSuperAdminDashboard = () => {
         target_amount:   agentData.targetAmount || 0,
       })
       .select()
-      .single();
+      .maybeSingle();
     if (agentError) throw agentError;
 
     // ── Step 7: Refresh the list — session is fully admin again by now ───────

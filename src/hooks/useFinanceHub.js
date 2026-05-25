@@ -100,14 +100,14 @@ export const useFinanceHub = () => {
       .from('user_profiles')
       .select('id, role, admin_id')
       .eq('id', user.id)
-      .single();
+      .maybeSingle();
     return profile?.role === 'admin' ? user.id : (profile?.admin_id || user.id);
   }, []);
 
   // ── Fetch helpers ────────────────────────────────────────────────────────────
   const fetchCompanyProfile = useCallback(async (aId) => {
     try {
-      const { data } = await supabase.from('company_profiles').select('*').eq('admin_id', aId).single();
+      const { data } = await supabase.from('company_profiles').select('*').eq('admin_id', aId).maybeSingle();
       setCompanyProfile(data);
     } catch { setCompanyProfile(null); }
   }, []);
@@ -296,7 +296,7 @@ export const useFinanceHub = () => {
 const { data, error: err } = await supabase
   .from('chart_of_accounts')
   .insert({ ...cleanData, admin_id: aId })
-  .select().single();
+  .select().maybeSingle();
     if (err) throw err;
     setChartOfAccounts(prev =>
       [...prev, data].sort((a, b) => a.account_code.localeCompare(b.account_code))
@@ -328,7 +328,7 @@ const { data, error: err } = await supabase
         status:         'posted',
         is_automated:   false,
       })
-      .select().single();
+      .select().maybeSingle();
     if (err) throw err;
     const journals = await fetchJournalEntries(aId);
     const invs     = await fetchInvoices(aId);
@@ -354,7 +354,7 @@ const { data, error: err } = await supabase
         net_salary:       tax.net,
         status:           'pending',
       })
-      .select().single();
+      .select().maybeSingle();
     if (err) throw err;
     await fetchPayrollRecords(aId);
     return { ...data, ...tax };

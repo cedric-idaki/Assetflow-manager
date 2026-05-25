@@ -31,7 +31,7 @@ export const useAdminDashboard = () => {
       const adminId = await getAdminId();
       const { data } = await supabase
         .from('company_profiles').select('*')
-        .eq('admin_id', adminId).single();
+        .eq('admin_id', adminId).maybeSingle();
       setCompanyProfile(data);
     } catch (err) {}
   }, []);
@@ -44,7 +44,7 @@ export const useAdminDashboard = () => {
         .select('*, plan:subscription_plans(*)')
         .eq('admin_id', adminId)
         .order('created_at', { ascending: false })
-        .limit(1).single();
+        .limit(1).maybeSingle();
       setSubscription(data);
     } catch (err) {}
   }, []);
@@ -195,7 +195,7 @@ const outstandingBalance = 0;
       admin_id: adminId, email: clientData.email,
       full_name: clientData.fullName, phone: clientData.phone,
       agent_id: clientData.agentId || null,
-    }).select().single();
+    }).select().maybeSingle();
     if (error) throw error;
 
     const { data: client, error: clientError } = await supabase.from('clients').insert({
@@ -203,7 +203,7 @@ const outstandingBalance = 0;
       full_name: clientData.fullName, email: clientData.email,
       phone: clientData.phone, admin_id: adminId,
       client_status: 'pending', kyc_status: 'unverified',
-    }).select().single();
+    }).select().maybeSingle();
     if (clientError) throw clientError;
 
     await fetchClients();
@@ -244,7 +244,7 @@ const outstandingBalance = 0;
       phone: agentData.phone, region: agentData.region,
       commission_rate: agentData.commissionRate || 5,
       target_amount: agentData.targetAmount || 0,
-    }).select().single();
+    }).select().maybeSingle();
     if (agentError) throw agentError;
 
     await fetchAgents();
@@ -336,7 +336,7 @@ const outstandingBalance = 0;
       contract_name: contractData.name, contract_type: contractData.type || 'general',
       file_url: fileUrl, file_name: fileName,
       is_template: contractData.isTemplate || false, status: 'active',
-    }).select().single();
+    }).select().maybeSingle();
     if (error) throw error;
     await fetchContracts();
     return data;

@@ -86,7 +86,7 @@ export var clientsService = {
 
   getById: async function(id) {
     return safeQuery(function() {
-      return supabase.from('clients').select('*').eq('id', id).single();
+      return supabase.from('clients').select('*').eq('id', id).maybeSingle();
     }, 'clientsService.getById');
   },
 
@@ -108,7 +108,7 @@ export var clientsService = {
         admin_id: clientData.adminId || user.id,
         created_by: user.id,
         kyc_status: 'unverified',
-      }).select().single();
+      }).select().maybeSingle();
     }, 'clientsService.create');
   },
 
@@ -124,7 +124,7 @@ export var clientsService = {
         client_status: updates.status,
         notes: updates.notes,
         updated_at: new Date().toISOString(),
-      }).eq('id', id).select().single();
+      }).eq('id', id).select().maybeSingle();
     }, 'clientsService.update');
   },
 
@@ -198,7 +198,7 @@ export var assetsService = {
         property_size: assetData.propertySize || '',
         notes: assetData.notes || '',
         registered_by: user.id,
-      }).select().single();
+      }).select().maybeSingle();
     }, 'assetsService.create');
   },
 
@@ -218,7 +218,7 @@ export var assetsService = {
         plate_number: updates.plateNumber,
         notes: updates.notes,
         updated_at: new Date().toISOString(),
-      }).eq('id', id).select().single();
+      }).eq('id', id).select().maybeSingle();
     }, 'assetsService.update');
   },
 
@@ -229,7 +229,7 @@ export var assetsService = {
         .update({ linked_client_id: clientId, asset_status: 'reserved' })
         .eq('id', assetId)
         .select()
-        .single();
+        .maybeSingle();
     }, 'assetsService.linkToClient');
   },
 
@@ -258,7 +258,7 @@ export var assetsService = {
         last_status_change_by:  userId,
         last_status_reason:     reason || 'Reserved — POS sale initiated',
         updated_at:             new Date().toISOString(),
-      }).eq('id', assetId).select().single();
+      }).eq('id', assetId).select().maybeSingle();
     }, 'assetsService.reserve');
   },
 
@@ -273,7 +273,7 @@ export var assetsService = {
         last_status_change_by:  userId,
         last_status_reason:     reason || 'Sold — cash sale confirmed',
         updated_at:             new Date().toISOString(),
-      }).eq('id', assetId).select().single();
+      }).eq('id', assetId).select().maybeSingle();
     }, 'assetsService.markSold');
   },
 
@@ -287,7 +287,7 @@ export var assetsService = {
         last_status_change_by:  userId,
         last_status_reason:     reason || 'On Installment — deposit confirmed',
         updated_at:             new Date().toISOString(),
-      }).eq('id', assetId).select().single();
+      }).eq('id', assetId).select().maybeSingle();
     }, 'assetsService.markOnInstallment');
   },
 
@@ -305,7 +305,7 @@ export var assetsService = {
         })
         .eq('id', assetId)
         .eq('asset_status', 'reserved')  // only release if currently reserved
-        .select().single();
+        .select().maybeSingle();
     }, 'assetsService.releaseReservation');
   },
 
@@ -315,7 +315,7 @@ export var assetsService = {
       return supabase.from('assets')
         .select('asset_code, description, asset_status, status_history, reserved_at, sold_at')
         .eq('id', assetId)
-        .single();
+        .maybeSingle();
     }, 'assetsService.getStatusHistory');
   },
 
@@ -341,7 +341,7 @@ export var assetsService = {
       var { data: asset } = await supabase.from('assets')
         .select('quantity_available, description')
         .eq('id', assetId)
-        .single();
+        .maybeSingle();
       var newQty = (asset?.quantity_available || 0) + delta;
       if (newQty < 0) throw new Error(
         'Cannot reduce quantity below zero for ' + asset?.description + '. Oversell prevented.'
@@ -351,7 +351,7 @@ export var assetsService = {
         last_status_change_by:  userId,
         last_status_reason:     reason || ('Quantity updated by ' + delta),
         updated_at:             new Date().toISOString(),
-      }).eq('id', assetId).select().single();
+      }).eq('id', assetId).select().maybeSingle();
     }, 'assetsService.updateQuantity');
   },
 };
@@ -400,7 +400,7 @@ export var paymentsService = {
         notes: paymentData.notes || '',
         processed_by: user.id,
         payment_date: new Date().toISOString(),
-      }).select().single();
+      }).select().maybeSingle();
     }, 'paymentsService.create');
   },
 
@@ -415,7 +415,7 @@ export var paymentsService = {
         })
         .eq('id', id)
         .select()
-        .single();
+        .maybeSingle();
     }, 'paymentsService.updateStatus');
   },
 
@@ -471,7 +471,7 @@ export var agentsService = {
         target_amount: parseFloat(agentData.targetAmount) || 0,
         region: agentData.region || '',
         admin_id: agentData.adminId || user.id,
-      }).select().single();
+      }).select().maybeSingle();
     }, 'agentsService.create');
   },
 
@@ -485,7 +485,7 @@ export var agentsService = {
         target_amount: updates.targetAmount ? parseFloat(updates.targetAmount) : undefined,
         region: updates.region,
         updated_at: new Date().toISOString(),
-      }).eq('id', id).select().single();
+      }).eq('id', id).select().maybeSingle();
     }, 'agentsService.update');
   },
 
@@ -531,7 +531,7 @@ export var auditLogsService = {
         .from('user_profiles')
         .select('admin_id')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
       // If user has admin_id they are staff — use that as the company identifier
       // If admin_id is null they ARE the admin — use their own id
@@ -569,7 +569,7 @@ export var auditLogsService = {
         .from('user_profiles')
         .select('admin_id')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
       // If user has admin_id they are staff — use that as the company identifier
       // If admin_id is null they ARE the admin — use their own id

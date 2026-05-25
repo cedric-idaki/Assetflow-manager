@@ -21,7 +21,7 @@ export const useClientPortal = () => {
         .from('clients')
         .select('*, admin:user_profiles!admin_id(full_name, email, phone)')
         .eq('email', user.email)
-        .single();
+        .maybeSingle();
 
       setClientProfile(data);
       return data;
@@ -111,7 +111,7 @@ export const useClientPortal = () => {
         .from('clients')
         .select('id, admin_id')
         .eq('email', user.email)
-        .single();
+        .maybeSingle();
 
       if (!client) throw new Error('Client profile not found');
 
@@ -125,7 +125,7 @@ export const useClientPortal = () => {
           status: 'pending',
         })
         .select()
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
       await fetchEnquiries(client.id);
@@ -143,7 +143,7 @@ export const useClientPortal = () => {
         .from('clients')
         .select('id')
         .eq('email', user.email)
-        .single();
+        .maybeSingle();
 
       const { data: payment, error } = await supabase
         .from('payments')
@@ -157,7 +157,7 @@ export const useClientPortal = () => {
           reference_number: `MPESA-${Date.now()}`,
         })
         .select()
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
 
