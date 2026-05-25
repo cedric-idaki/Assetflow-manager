@@ -49,7 +49,9 @@ export const useSuperAdminDashboard = () => {
         if (a.asset_status === 'sold') types[t].sold++;
       });
       setAssetBreakdown(Object.values(types));
-    } catch (err) {}
+    } catch (err) {
+      console.error('useSuperAdminDashboard error:', err.message);
+    }
   }, []);
 
   const fetchCompanyAnalytics = useCallback(async () => {
@@ -67,7 +69,9 @@ export const useSuperAdminDashboard = () => {
         return { id: admin.id, name: admin.full_name || 'Unknown Company', email: admin.email, isActive: admin.is_active, totalClients: adminClients.length, activeClients, totalRevenue, outstanding, joinedDate: admin.created_at, transactionCount: adminPayments.length };
       });
       setCompanyAnalytics(analytics);
-    } catch (err) {}
+    } catch (err) {
+      console.error('useSuperAdminDashboard error:', err.message);
+    }
   }, []);
 
   const fetchAuditTrail = useCallback(async () => {
@@ -79,7 +83,9 @@ export const useSuperAdminDashboard = () => {
         .order('created_at', { ascending: false })
         .limit(50);
       setAuditTrail(data || []);
-    } catch (err) {}
+    } catch (err) {
+      console.error('useSuperAdminDashboard error:', err.message);
+    }
   }, []);
 
   const fetchSalesAgents = useCallback(async () => {
@@ -102,7 +108,9 @@ export const useSuperAdminDashboard = () => {
       const achieved = (agents || []).reduce((s, a) => s + parseFloat(a.total_sales || 0), 0);
       const percentage = target > 0 ? Math.min(100, Math.round((achieved / target) * 100)) : 0;
       setSalesTarget({ target, achieved, percentage });
-    } catch (err) {}
+    } catch (err) {
+      console.error('useSuperAdminDashboard error:', err.message);
+    }
   }, []);
 
   const createSalesAgent = useCallback(async (agentData) => {
