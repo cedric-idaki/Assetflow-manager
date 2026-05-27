@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import MainLayout from '../../layouts/MainLayout';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -670,19 +671,24 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved }) => {
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 const HRPage = () => {
+  const { modals, openModal, closeModal } = useAdminDashboardContext();
+
   const [employees,      setEmployees]      = useState([]);
   const [payrollRecords, setPayrollRecords] = useState([]);
   const [loading,        setLoading]        = useState(true);
   const [adminId,        setAdminId]        = useState(null);
   const [search,         setSearch]         = useState('');
   const [deptFilter,     setDeptFilter]     = useState('all');
-  const [selected,       setSelected]       = useState(null);
-  const [showModal,      setShowModal]      = useState(false);
-  const [editEmployee,   setEditEmployee]   = useState(null);
   const [activeTab,      setActiveTab]      = useState('employees');
-  const [showPayroll,    setShowPayroll]    = useState(false);
   const [payrollFilter,  setPayrollFilter]  = useState('');
   const adminIdRef = useRef(null);
+  const hasLoaded  = useRef(false);
+
+  // Derive modal state from context
+  const showModal    = !!modals.hrEmployee;
+  const editEmployee = modals.hrEmployee === true ? null : modals.hrEmployee;
+  const selected     = modals.hrEmployeeDetail;
+  const showPayroll  = !!modals.hrPayroll;
 
   const resolveAdminId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -713,10 +719,15 @@ const HRPage = () => {
 
     setEmployees(empRes.data || []);
     setPayrollRecords(payRes.data || []);
+    hasLoaded.current = true;
     setLoading(false);
   }, [resolveAdminId]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  // Run once on mount — hasLoaded guard prevents re-fetch on tab-switch remount
+  useEffect(() => {
+    if (hasLoaded.current) return;
+    fetchAll();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = employees.filter(e => {
     const q = search.toLowerCase();
@@ -786,7 +797,7 @@ const HRPage = () => {
             <h1 className="text-2xl font-black text-foreground tracking-tight">HR Management</h1>
             <p className="text-sm text-muted-foreground mt-1">Employee records, compensation and statutory details</p>
           </div>
-          <button className={S.btnPri} onClick={() => { setEditEmployee(null); setShowModal(true); }}>
+          <button className={S.btnPri} onClick={() => openModal('hrEmployee', true)}>
             <Icon name="UserPlus" size={15} color="currentColor" /> Add Employee
           </button>
         </div>
@@ -871,7 +882,7 @@ const HRPage = () => {
                     ) : filtered.map(emp => {
                       const gross = parseFloat(emp.basic_salary || 0) + parseFloat(emp.housing_allowance || 0) + parseFloat(emp.transport_allowance || 0);
                       return (
-                        <tr key={emp.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => setSelected(emp)}>
+                        <tr key={emp.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => openModal('hrEmployeeDetail', emp)}>
                           <td className={S.tdF}>
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
@@ -890,7 +901,7 @@ const HRPage = () => {
                           <td className={S.td}>{emp.leave_balance ?? 21} days</td>
                           <td className={S.td}><Badge status={emp.is_active} /></td>
                           <td className={S.td}>
-                            <button className="text-xs text-primary hover:underline" onClick={e => { e.stopPropagation(); setEditEmployee(emp); setShowModal(true); }}>
+                            <button className="text-xs text-primary hover:underline" onClick={e => { e.stopPropagation(); openModal('hrEmployee', emp); }}>
                               Edit
                             </button>
                           </td>
@@ -933,7 +944,7 @@ const HRPage = () => {
                   Export CSV
                 </button>
                 <button
-                  onClick={() => setShowPayroll(true)}
+                  onClick={() => openModal('hrPayroll', true)}
                   className={S.btnPri}
                 >
                   <Icon name="Play" size={14} color="currentColor" />
@@ -1023,8 +1034,8 @@ const HRPage = () => {
         <EmployeeDetail
           employee={selected}
           payrollHistory={empPayroll(selected.id)}
-          onEdit={() => { setEditEmployee(selected); setSelected(null); setShowModal(true); }}
-          onClose={() => setSelected(null)}
+          onEdit={() => openModal('hrEmployee', selected)}
+          onClose={() => closeModal('hrEmployeeDetail')}
         />
       )}
 
@@ -1033,7 +1044,7 @@ const HRPage = () => {
         <EmployeeModal
           employee={editEmployee}
           adminId={adminIdRef.current || adminId}
-          onClose={() => { setShowModal(false); setEditEmployee(null); }}
+          onClose={() => closeModal('hrEmployee')}
           onSaved={fetchAll}
         />
       )}
@@ -1043,7 +1054,7 @@ const HRPage = () => {
         <RunPayrollModal
           employees={employees}
           adminId={adminIdRef.current || adminId}
-          onClose={() => setShowPayroll(false)}
+          onClose={() => closeModal('hrPayroll')}
           onSaved={fetchAll}
         />
       )}

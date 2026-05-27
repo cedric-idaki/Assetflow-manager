@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import { useStaffDashboardContext } from '../../contexts/StaffDashboardContext';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-xl ${className}`} />
@@ -105,56 +105,18 @@ const ActivityRow = ({ item }) => (
 
 // ── Main Component ────────────────────────────────────────────────────────────
 const StaffDashboard = () => {
-  const { user, userProfile } = useAuth();
+  const { userProfile } = useAuth();
   const role    = userProfile?.role || 'staff';
   const meta    = ROLE_META[role] || ROLE_META.staff;
 
-  const [loading, setLoading]     = useState(true);
-  const [kpis, setKpis]           = useState({ clients: 0, payments: 0, assets: 0, revenue: 0 });
-  const [activity, setActivity]   = useState([]);
-  const [adminName, setAdminName] = useState('');
-
-  const loadData = useCallback(async () => {
-    if (!user?.id) return;
-    setLoading(true);
-    try {
-      const adminId = userProfile?.admin_id;
-
-      // Run all queries in parallel
-      const [clientsRes, paymentsRes, assetsRes, activityRes, adminRes] = await Promise.allSettled([
-        adminId
-          ? supabase.from('clients').select('id', { count: 'exact', head: true }).eq('admin_id', adminId)
-          : Promise.resolve({ data: null, count: 0 }),
-        adminId
-          ? supabase.from('payments').select('amount').eq('admin_id', adminId).eq('status', 'completed')
-          : Promise.resolve({ data: [] }),
-        adminId
-          ? supabase.from('assets').select('id', { count: 'exact', head: true }).eq('admin_id', adminId)
-          : Promise.resolve({ data: null, count: 0 }),
-        supabase.from('audit_logs').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(8),
-        adminId
-          ? supabase.from('user_profiles').select('full_name').eq('id', adminId).single()
-          : Promise.resolve({ data: null }),
-      ]);
-
-      const clients  = clientsRes.status === 'fulfilled'  ? (clientsRes.value.count  || 0) : 0;
-      const assets   = assetsRes.status === 'fulfilled'   ? (assetsRes.value.count   || 0) : 0;
-      const payments = paymentsRes.status === 'fulfilled' ? (paymentsRes.value.data  || []) : [];
-      const revenue  = payments.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-      const logs     = activityRes.status === 'fulfilled' ? (activityRes.value.data  || []) : [];
-      const admin    = adminRes.status === 'fulfilled'    ? adminRes.value.data : null;
-
-      setKpis({ clients, assets, payments: payments.length, revenue });
-      setActivity(logs);
-      setAdminName(admin?.full_name || '');
-    } catch (err) {
-      console.error('StaffDashboard load error:', err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [user?.id, userProfile?.admin_id]);
-
-  useEffect(() => { loadData(); }, [loadData]);
+  const {
+    loading,
+    kpis,
+    activity,
+    adminName,
+    lastUpdated,
+    refetch,
+  } = useStaffDashboardContext();
 
   const greeting = () => {
     const h = new Date().getHours();

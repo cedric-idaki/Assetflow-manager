@@ -492,16 +492,10 @@ const SalesAgentPortal = () => {
     agentProfile, leads, walletTransactions, expenses, followUps,
     activityFeed, kpis, loading, connected,
     registerLead, updateLeadStage, requestWithdrawal, logExpense, refetch,
+    activeView, setActiveView, modals, openModal, closeModal,
   } = useSalesAgentContext();
 
-  const [isLeadModalOpen, setIsLeadModalOpen]     = useState(false);
-  const [showExport, setShowExport]               = useState(false);
-  const [isClientModalOpen, setIsClientModalOpen] = useState(false);
-  const [successPopup, setSuccessPopup]           = useState(null); // { full_name, email, phone, account_number }
-  const [selectedLead, setSelectedLead]           = useState(null);
-  const [prefillLead, setPrefillLead]             = useState(null);
-  const [activeView, setActiveView]               = useState('portal'); // 'portal' | 'activity'
-  const [toast, setToast]                         = useState(null);
+  const [toast, setToast] = useState(null);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -510,7 +504,7 @@ const SalesAgentPortal = () => {
 
   const handleRegisterLead = async (formData) => {
     await registerLead(formData);
-    setIsLeadModalOpen(false);
+    closeModal('leadRegistration');
     showToast('Lead registered successfully!');
   };
 
@@ -519,14 +513,14 @@ const SalesAgentPortal = () => {
   };
 
   const handleConvertToClient = (lead) => {
-    setPrefillLead(lead);
-    setSelectedLead(null);
-    setIsClientModalOpen(true);
+    closeModal('leadDetail');
+    openModal('prefillLead', lead);
+    openModal('createClient');
   };
 
   const handleClientCreated = (clientDetails) => {
     // Show detailed success popup with client info
-    setSuccessPopup(clientDetails || {});
+    openModal('successPopup', clientDetails || {});
     refetch();
   };
 
@@ -588,7 +582,7 @@ const SalesAgentPortal = () => {
 
             {/* Create client */}
             <button
-              onClick={() => { setPrefillLead(null); setIsClientModalOpen(true); }}
+              onClick={() => { closeModal('prefillLead'); openModal('createClient'); }}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
             >
@@ -598,7 +592,7 @@ const SalesAgentPortal = () => {
 
             {/* Export */}
             <button
-              onClick={() => setShowExport(true)}
+              onClick={() => openModal('showExport')}
               className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
             >
               <Icon name="Download" size={15} color="currentColor" />
@@ -607,7 +601,7 @@ const SalesAgentPortal = () => {
 
             {/* Register lead */}
             <button
-              onClick={() => setIsLeadModalOpen(true)}
+              onClick={() => openModal('leadRegistration')}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
             >
@@ -685,7 +679,7 @@ const SalesAgentPortal = () => {
                       stageKey={stageKey}
                       leads={leads?.filter(l => l?.stage === stageKey)}
                       onDrop={handleDrop}
-                      onLeadClick={lead => setSelectedLead(lead)}
+                      onLeadClick={lead => openModal('leadDetail', lead)}
                     />
                   ))}
                 </div>
@@ -735,48 +729,48 @@ const SalesAgentPortal = () => {
       )}
 
       {/* ── Export Modal ── */}
-      {showExport && (
+      {modals.showExport && (
         <ExportModal
           leads={leads}
           expenses={expenses}
           walletTransactions={walletTransactions}
           agentProfile={agentProfile}
-          onClose={() => setShowExport(false)}
+          onClose={() => closeModal('showExport')}
         />
       )}
 
       {/* ── Lead Registration Modal ── */}
-      {isLeadModalOpen && (
+      {modals.leadRegistration && (
         <LeadRegistrationModal
-          isOpen={isLeadModalOpen}
+          isOpen={modals.leadRegistration}
           onSubmit={handleRegisterLead}
-          onClose={() => setIsLeadModalOpen(false)}
+          onClose={() => closeModal('leadRegistration')}
         />
       )}
 
       {/* ── Lead Detail Modal ── */}
-      {selectedLead && (
+      {modals.leadDetail && (
         <LeadDetailModal
-          lead={selectedLead}
-          onClose={() => setSelectedLead(null)}
+          lead={modals.leadDetail}
+          onClose={() => closeModal('leadDetail')}
           onStageChange={updateLeadStage}
           onConvertToClient={handleConvertToClient}
         />
       )}
 
       {/* ── Create Client Modal ── */}
-      {isClientModalOpen && (
+      {modals.createClient && (
         <CreateClientModal
-          isOpen={isClientModalOpen}
-          onClose={() => { setIsClientModalOpen(false); setPrefillLead(null); }}
+          isOpen={modals.createClient}
+          onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
           agentProfile={agentProfile}
-          prefillLead={prefillLead}
+          prefillLead={modals.prefillLead}
           onSuccess={handleClientCreated}
         />
       )}
 
       {/* ── Client Created Success Popup ── */}
-      {successPopup && (
+      {modals.successPopup && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
           <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
             {/* Green header */}
@@ -793,10 +787,10 @@ const SalesAgentPortal = () => {
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2">
                 <div className="text-xs font-semibold text-emerald-800 uppercase tracking-wide mb-2">Account Details</div>
                 {[
-                  { icon: 'User',    label: 'Name',           value: successPopup.full_name },
-                  { icon: 'Mail',    label: 'Login Email',    value: successPopup.email },
-                  { icon: 'Phone',   label: 'Phone',          value: successPopup.phone },
-                  { icon: 'Hash',    label: 'Account Number', value: successPopup.account_number },
+                  { icon: 'User',    label: 'Name',           value: modals.successPopup.full_name },
+                  { icon: 'Mail',    label: 'Login Email',    value: modals.successPopup.email },
+                  { icon: 'Phone',   label: 'Phone',          value: modals.successPopup.phone },
+                  { icon: 'Hash',    label: 'Account Number', value: modals.successPopup.account_number },
                   { icon: 'Shield',  label: 'KYC Status',     value: 'Pending Verification' },
                 ].filter(r => r.value).map(row => (
                   <div key={row.label} className="flex items-center justify-between text-sm">
@@ -821,16 +815,16 @@ const SalesAgentPortal = () => {
             {/* Actions */}
             <div className="px-6 pb-5 flex gap-3">
               <button
-                onClick={() => setSuccessPopup(null)}
+                onClick={() => closeModal('successPopup')}
                 className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl transition-colors"
               >
                 Done ✓
               </button>
               <button
                 onClick={() => {
-                  const text = `Client Account Created\n\nName: ${successPopup.full_name}\nEmail: ${successPopup.email}\nAccount: ${successPopup.account_number}\n\nPlease log in at the client portal.`;
+                  const text = `Client Account Created\n\nName: ${modals.successPopup.full_name}\nEmail: ${modals.successPopup.email}\nAccount: ${modals.successPopup.account_number}\n\nPlease log in at the client portal.`;
                   navigator.clipboard?.writeText(text).then(() => showToast('Details copied to clipboard'));
-                  setSuccessPopup(null);
+                  closeModal('successPopup');
                 }}
                 className="px-4 py-2.5 border border-border text-muted-foreground text-sm font-medium rounded-xl hover:bg-muted"
               >

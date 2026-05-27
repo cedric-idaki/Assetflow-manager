@@ -1,14 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { useAccountantDashboardContext } from '../../contexts/AccountantDashboardContext';
 
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-gray-200 rounded-xl ${className}`} />;
 const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 const KPICard = ({ title, value, subtitle, icon, iconBg, iconColor, badge, loading }) => (
   <div className="bg-card border border-border rounded-xl p-5 hover:shadow-md transition-shadow">
@@ -40,121 +39,16 @@ const PIE_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
 const AccountantDashboard = () => {
   const navigate = useNavigate();
   const { userProfile } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [kpis, setKpis] = useState({});
-  const [monthlyBreakdown, setMonthlyBreakdown] = useState([]);
-  const [paymentMethods, setPaymentMethods] = useState([]);
-  const [recentPayments, setRecentPayments] = useState([]);
-  const [overdueAccounts, setOverdueAccounts] = useState([]);
-  const [lastUpdated, setLastUpdated] = useState(null);
-
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
-    try {
-      const year = new Date().getFullYear();
-
-      const [paymentsRes, plansRes, clientsRes, pendingRes] = await Promise.allSettled([
-        supabase.from('payments')
-          .select('id, amount, payment_date, payment_status, payment_method, client:clients(full_name, account_number)')
-          .order('payment_date', { ascending: false }),
-        supabase.from('installment_plans')
-          .select('id, total_amount, installments_paid, installment_amount, plan_status, client:clients(full_name, account_number, outstanding_balance)')
-          .eq('plan_status', 'active'),
-        supabase.from('clients')
-          .select('id, outstanding_balance, client_status'),
-        supabase.from('maker_checker_queue')
-          .select('id').eq('status', 'pending'),
-      ]);
-
-      const payments = paymentsRes.status === 'fulfilled' ? paymentsRes.value.data || [] : [];
-      const plans = plansRes.status === 'fulfilled' ? plansRes.value.data || [] : [];
-      const clients = clientsRes.status === 'fulfilled' ? clientsRes.value.data || [] : [];
-      const pending = pendingRes.status === 'fulfilled' ? pendingRes.value.data || [] : [];
-
-      const ytdPayments = payments.filter(p => new Date(p.payment_date).getFullYear() === year);
-      const completedYTD = ytdPayments.filter(p => p.payment_status === 'completed');
-      const totalCollectedYTD = completedYTD.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-
-      const totalOutstanding = clients.reduce((s, c) => s + parseFloat(c.outstanding_balance || 0), 0) ||
-        plans.reduce((s, p) => s + Math.max(0, parseFloat(p.total_amount || 0) - parseFloat(p.installments_paid || 0) * parseFloat(p.installment_amount || 0)), 0);
-
-      const thisMonth = new Date().getMonth();
-      const thisMonthPayments = completedYTD.filter(p => new Date(p.payment_date).getMonth() === thisMonth);
-      const totalCollectedThisMonth = thisMonthPayments.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-
-      const lastMonth = (thisMonth - 1 + 12) % 12;
-      const lastMonthPayments = completedYTD.filter(p => new Date(p.payment_date).getMonth() === lastMonth);
-      const totalCollectedLastMonth = lastMonthPayments.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-      const momChange = totalCollectedLastMonth > 0
-        ? ((totalCollectedThisMonth - totalCollectedLastMonth) / totalCollectedLastMonth) * 100
-        : 0;
-
-      const pendingPayments = payments.filter(p => p.payment_status === 'pending');
-      const failedPayments = payments.filter(p => p.payment_status === 'failed');
-
-      setKpis({
-        totalCollectedYTD,
-        totalCollectedThisMonth,
-        totalOutstanding,
-        pendingCount: pendingPayments.length,
-        pendingAmount: pendingPayments.reduce((s, p) => s + parseFloat(p.amount || 0), 0),
-        failedCount: failedPayments.length,
-        activePlans: plans.length,
-        pendingApprovals: pending.length,
-        momChange,
-      });
-
-      // Monthly breakdown (last 6 months)
-      const monthly = [];
-      for (let i = 5; i >= 0; i--) {
-        const mIdx = (thisMonth - i + 12) % 12;
-        const mCompleted = completedYTD.filter(p => new Date(p.payment_date).getMonth() === mIdx);
-        const mPending = ytdPayments.filter(p => p.payment_status === 'pending' && new Date(p.payment_date).getMonth() === mIdx);
-        monthly.push({
-          month: MONTHS[mIdx],
-          collected: Math.round(mCompleted.reduce((s, p) => s + parseFloat(p.amount || 0), 0)),
-          pending: Math.round(mPending.reduce((s, p) => s + parseFloat(p.amount || 0), 0)),
-        });
-      }
-      setMonthlyBreakdown(monthly);
-
-      // Payment method breakdown
-      const methodMap = {};
-      completedYTD.forEach(p => {
-        const m = (p.payment_method || 'other').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        methodMap[m] = (methodMap[m] || 0) + parseFloat(p.amount || 0);
-      });
-      setPaymentMethods(
-        Object.entries(methodMap)
-          .map(([name, value]) => ({ name, value: Math.round(value) }))
-          .sort((a, b) => b.value - a.value)
-          .slice(0, 5)
-      );
-
-      // Recent payments (last 10)
-      setRecentPayments(payments.slice(0, 10));
-
-      // Overdue accounts (plans where outstanding > 0, ordered by amount)
-      const overdue = plans
-        .map(p => ({
-          clientName: p.client?.full_name || 'Unknown',
-          accountNumber: p.client?.account_number || '—',
-          outstanding: Math.max(0, parseFloat(p.total_amount || 0) - parseFloat(p.installments_paid || 0) * parseFloat(p.installment_amount || 0)),
-        }))
-        .filter(p => p.outstanding > 0)
-        .sort((a, b) => b.outstanding - a.outstanding)
-        .slice(0, 5);
-      setOverdueAccounts(overdue);
-
-      setLastUpdated(new Date());
-    } catch (err) {
-      console.error('Accountant dashboard error:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  const {
+    loading,
+    kpis,
+    monthlyBreakdown,
+    paymentMethods,
+    recentPayments,
+    overdueAccounts,
+    lastUpdated,
+    refetch,
+  } = useAccountantDashboardContext();
 
   const statusColor = { completed: 'bg-emerald-100 text-emerald-700', pending: 'bg-yellow-100 text-yellow-700', failed: 'bg-red-100 text-red-700', reversed: 'bg-gray-100 text-gray-600' };
 
@@ -176,7 +70,7 @@ const AccountantDashboard = () => {
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors">
               <Icon name="BarChart3" size={13} color="white" /> Reports
             </button>
-            <button onClick={fetchAll}
+            <button onClick={refetch}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-xs font-medium text-muted-foreground hover:bg-muted transition-all">
               <Icon name="RefreshCw" size={12} color="currentColor" /> Refresh
             </button>

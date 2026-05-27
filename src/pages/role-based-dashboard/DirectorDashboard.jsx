@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { useDirectorDashboardContext } from '../../contexts/DirectorDashboardContext';
 
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-gray-200 rounded-xl ${className}`} />;
 
@@ -41,114 +41,19 @@ const KPICard = ({ title, value, subtitle, icon, iconBg, iconColor, trend, loadi
   </div>
 );
 
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
 const DirectorDashboard = () => {
   const navigate = useNavigate();
   const { userProfile } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [kpis, setKpis] = useState({});
-  const [collectionTrend, setCollectionTrend] = useState([]);
-  const [topAssets, setTopAssets] = useState([]);
-  const [agentPerformance, setAgentPerformance] = useState([]);
-  const [portfolioHealth, setPortfolioHealth] = useState({});
-  const [lastUpdated, setLastUpdated] = useState(null);
-
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
-    try {
-      const year = new Date().getFullYear();
-
-      const [
-        clientsRes, assetsRes, paymentsRes, plansRes, agentsRes, pendingRes
-      ] = await Promise.allSettled([
-        supabase.from('clients').select('id, outstanding_balance, client_status'),
-        supabase.from('assets').select('id, selling_price, asset_status, asset_type, asset_name'),
-        supabase.from('payments').select('amount, payment_date, payment_status').gte('payment_date', `${year}-01-01`),
-        supabase.from('installment_plans').select('total_amount, installments_paid, installment_amount, plan_status'),
-        supabase.from('agents').select('id, full_name, total_sales, total_commission, commission_rate'),
-        supabase.from('maker_checker_queue').select('id').eq('status', 'pending'),
-      ]);
-
-      const clients = clientsRes.status === 'fulfilled' ? clientsRes.value.data || [] : [];
-      const assets = assetsRes.status === 'fulfilled' ? assetsRes.value.data || [] : [];
-      const payments = paymentsRes.status === 'fulfilled' ? paymentsRes.value.data || [] : [];
-      const plans = plansRes.status === 'fulfilled' ? plansRes.value.data || [] : [];
-      const agents = agentsRes.status === 'fulfilled' ? agentsRes.value.data || [] : [];
-      const pending = pendingRes.status === 'fulfilled' ? pendingRes.value.data || [] : [];
-
-      // KPIs
-      const totalAssetValue = assets.reduce((s, a) => s + parseFloat(a.selling_price || 0), 0);
-      const totalCollected = payments.filter(p => p.payment_status === 'completed').reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-      const totalOutstanding = clients.reduce((s, c) => s + parseFloat(c.outstanding_balance || 0), 0) ||
-        plans.filter(p => p.plan_status === 'active').reduce((s, p) => s + (parseFloat(p.total_amount || 0) - parseFloat(p.installments_paid || 0) * parseFloat(p.installment_amount || 0)), 0);
-      const activeClients = clients.filter(c => c.client_status === 'active').length;
-      const soldAssets = assets.filter(a => a.asset_status === 'sold').length;
-      const efficiency = totalAssetValue > 0 ? (totalCollected / totalAssetValue) * 100 : 0;
-
-      setKpis({
-        totalAssetValue,
-        totalCollected,
-        totalOutstanding,
-        activeClients,
-        soldAssets,
-        totalAssets: assets.length,
-        efficiency,
-        pendingApprovals: pending.length,
-        totalAgents: agents.length,
-      });
-
-      // Monthly collection trend (last 6 months)
-      const currentMonth = new Date().getMonth();
-      const trend = [];
-      for (let i = 5; i >= 0; i--) {
-        const mIdx = (currentMonth - i + 12) % 12;
-        const mPayments = payments.filter(p => {
-          const d = new Date(p.payment_date);
-          return d.getMonth() === mIdx && p.payment_status === 'completed';
-        });
-        trend.push({
-          month: MONTHS[mIdx],
-          collected: Math.round(mPayments.reduce((s, p) => s + parseFloat(p.amount || 0), 0)),
-          count: mPayments.length,
-        });
-      }
-      setCollectionTrend(trend);
-
-      // Top 5 assets by selling price
-      const top = [...assets]
-        .sort((a, b) => parseFloat(b.selling_price || 0) - parseFloat(a.selling_price || 0))
-        .slice(0, 5)
-        .map(a => ({
-          name: (a.asset_name || 'Unknown').slice(0, 20),
-          value: Math.round(parseFloat(a.selling_price || 0) / 1000),
-          status: a.asset_status,
-        }));
-      setTopAssets(top);
-
-      // Agent performance
-      const agentData = agents.slice(0, 5).map(a => ({
-        name: (a.full_name || 'Agent').split(' ')[0],
-        sales: Math.round(parseFloat(a.total_sales || 0) / 1000),
-        commission: Math.round(parseFloat(a.total_commission || 0) / 1000),
-      }));
-      setAgentPerformance(agentData);
-
-      // Portfolio health
-      const activeCount = assets.filter(a => a.asset_status === 'active').length;
-      const soldCount = assets.filter(a => a.asset_status === 'sold').length;
-      const reservedCount = assets.filter(a => a.asset_status === 'reserved').length;
-      setPortfolioHealth({ activeCount, soldCount, reservedCount, total: assets.length });
-
-      setLastUpdated(new Date());
-    } catch (err) {
-      console.error('Director dashboard error:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  const {
+    loading,
+    kpis,
+    collectionTrend,
+    topAssets,
+    agentPerformance,
+    portfolioHealth,
+    lastUpdated,
+    refetch,
+  } = useDirectorDashboardContext();
 
   const kpiCards = [
     { title: 'Total Portfolio Value', value: fmt(kpis.totalAssetValue), subtitle: 'All assets', icon: 'Package', iconBg: 'bg-blue-100', iconColor: '#2563eb' },
@@ -172,7 +77,7 @@ const DirectorDashboard = () => {
               {lastUpdated && <span className="ml-2 text-xs text-emerald-600">● Updated {lastUpdated.toLocaleTimeString()}</span>}
             </p>
           </div>
-          <button onClick={fetchAll}
+          <button onClick={refetch}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-xs font-medium text-muted-foreground hover:bg-muted transition-all self-start">
             <Icon name="RefreshCw" size={12} color="currentColor" /> Refresh
           </button>

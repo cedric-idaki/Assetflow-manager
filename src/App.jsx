@@ -7,6 +7,10 @@ import { SalesAgentProvider } from './contexts/SalesAgentContext';
 import { FinanceHubProvider } from './contexts/FinanceHubContext';
 import { ClientPortalProvider } from './contexts/ClientPortalContext';
 import { RealtimeDashboardProvider } from './contexts/RealtimeDashboardContext';
+import { AccountantDashboardProvider } from './contexts/AccountantDashboardContext';
+import { DirectorDashboardProvider } from './contexts/DirectorDashboardContext';
+import { CollectionsDashboardProvider } from './contexts/CollectionsDashboardContext';
+import { StaffDashboardProvider } from './contexts/StaffDashboardContext';
 
 function App() {
   return (
@@ -22,7 +26,15 @@ function App() {
             <FinanceHubProvider>
               <ClientPortalProvider>
                 <RealtimeDashboardProvider>
-                  <Routes />
+                  <AccountantDashboardProvider>
+                    <DirectorDashboardProvider>
+                      <CollectionsDashboardProvider>
+                        <StaffDashboardProvider>
+                          <Routes />
+                        </StaffDashboardProvider>
+                      </CollectionsDashboardProvider>
+                    </DirectorDashboardProvider>
+                  </AccountantDashboardProvider>
                 </RealtimeDashboardProvider>
               </ClientPortalProvider>
             </FinanceHubProvider>
