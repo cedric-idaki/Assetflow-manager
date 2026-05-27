@@ -11,10 +11,15 @@ const SalesAgentContext = createContext(null);
 
 export const SalesAgentProvider = ({ children }) => {
   const portal = useSalesAgentPortal();
+  const [activeView, setActiveView] = useState('portal');
   const [modals, setModals] = useState({
     leadRegistration: false,
     createClient: false,
     leadDetail: null,
+    showExport: false,
+    selectedLead: null,
+    prefillLead: null,
+    successPopup: null,
   });
 
   const openModal = useCallback((name, data = null) => {
@@ -27,6 +32,8 @@ export const SalesAgentProvider = ({ children }) => {
 
   const value = {
     ...portal,
+    activeView,
+    setActiveView,
     modals,
     openModal,
     closeModal,

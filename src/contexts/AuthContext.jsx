@@ -151,14 +151,28 @@ export const AuthProvider = ({ children }) => {
       });
 
    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const incomingId = session?.user?.id ?? null;
+
+      // TOKEN_REFRESHED / USER_UPDATED: same user, just a new token — don't
+      // update the user object so downstream effects don't re-run needlessly.
+      if (
+        (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') &&
+        incomingId === currentUserIdRef.current
+      ) {
+        // Only update the expiry timestamp — nothing else changes.
+        setSessionExpiresAt(session?.expires_at ? new Date(session.expires_at * 1000) : null);
+        return;
+      }
+
+      // SIGNED_IN for the same user (e.g. StrictMode double-invoke) — ignore.
       if (
         event === 'SIGNED_IN' &&
         currentUserIdRef.current &&
-        session?.user?.id !== currentUserIdRef.current
+        incomingId === currentUserIdRef.current
       ) return;
 
       setUser(session?.user ?? null);
-      currentUserIdRef.current = session?.user?.id ?? null;
+      currentUserIdRef.current = incomingId;
       setLoading(false);
       setSessionExpiresAt(session?.expires_at ? new Date(session.expires_at * 1000) : null);
 
