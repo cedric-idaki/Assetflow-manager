@@ -5,6 +5,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { formatKEPhone } from '../../utils/phoneUtils';
 
+// Module-level counter — increments across ALL renders/remounts including StrictMode
+// double-invoke, ensuring every channel subscription gets a truly unique name.
+let _headerChannelSeq = 0;
+
 /* Brand tokens */
 const B = {
   dark:   '#0c2037',
@@ -27,20 +31,30 @@ const NOTIF_ICONS = {
 const mapAuditToNotif = (row) => {
   const action = row.action || '';
   let type = 'info';
-  if (action.includes('payment'))                        type = 'payment';
-  else if (action.includes('overdue'))                   type = 'overdue';
+  if (action.includes('payment'))                           type = 'payment';
+  else if (action.includes('overdue'))                      type = 'overdue';
   else if (action.includes('approve') || action.includes('reject')) type = 'approval';
-  else if (action.includes('kyc'))                       type = 'kyc';
+  else if (action.includes('kyc'))                          type = 'kyc';
 
   const diffMin = Math.floor((Date.now() - new Date(row.created_at)) / 60000);
-  const time = diffMin < 1 ? 'Just now' : diffMin < 60 ? `${diffMin}m ago` : diffMin < 1440 ? `${Math.floor(diffMin/60)}h ago` : `${Math.floor(diffMin/1440)}d ago`;
+  const time =
+    diffMin < 1    ? 'Just now'
+    : diffMin < 60   ? `${diffMin}m ago`
+    : diffMin < 1440 ? `${Math.floor(diffMin / 60)}h ago`
+    :                  `${Math.floor(diffMin / 1440)}d ago`;
 
   const cfg = NOTIF_ICONS[type] || NOTIF_ICONS.info;
+
   return {
-    id: row.id, type, icon: cfg.icon, iconColor: cfg.color, iconBg: cfg.bg,
-    title: action.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()),
-    message: row.description || 'System activity recorded',
-    time, read: false,
+    id:        row.id,
+    type,
+    icon:      cfg.icon,
+    iconColor: cfg.color,
+    iconBg:    cfg.bg,
+    title:     action.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    message:   row.description || 'System activity recorded',
+    time,
+    read:      false,
   };
 };
 
@@ -57,306 +71,480 @@ const RoleBadge = ({ role }) => {
     sales_agent:         { bg: '#ecfdf5', color: '#059669', label: 'Sales Agent' },
     client:              { bg: '#f5f3ff', color: '#7c3aed', label: 'Client' },
   };
-  const s = styles[role] || { bg: '#f3f4f6', color: '#6b7280', label: (role || 'Staff').replace(/_/g,' ') };
+
+  const s = styles[role] || {
+    bg:    '#f3f4f6',
+    color: '#6b7280',
+    label: (role || 'Staff').replace(/_/g, ' '),
+  };
+
   return (
     <span style={{
-      background: s.bg, color: s.color,
-      fontSize: '10px', fontWeight: 700,
-      padding: '2px 7px', borderRadius: '999px',
-      fontFamily: 'Open Sans, sans-serif',
-      textTransform: 'uppercase', letterSpacing: '0.04em',
-      display: 'inline-block', marginTop: '2px',
+      background:    s.bg,
+      color:         s.color,
+      fontSize:      '10px',
+      fontWeight:    700,
+      padding:       '2px 7px',
+      borderRadius:  '999px',
+      textTransform: 'uppercase',
     }}>
       {s.label}
     </span>
   );
 };
 
-var Header = function(props) {
-  var onThemeToggle      = props.onThemeToggle;
-  var isDarkMode         = props.isDarkMode || false;
-  var onMobileMenuToggle = props.onMobileMenuToggle;
-  var isMobileMenuOpen   = props.isMobileMenuOpen || false;
+/* ─────────────────────────────────────────────────────────
+   STALE-THRESHOLD (ms): only re-fetch on tab-return when
+   data is older than this value.  Adjust to taste.
+───────────────────────────────────────────────────────── */
+const STALE_MS = 5 * 60 * 1000; // 5 minutes
 
-  var navigate    = useNavigate();
-  var authContext = useAuth();
-  var user        = authContext.user;
-  var userProfile = authContext.userProfile;
-  var signOut     = authContext.signOut;
+const Header = function (props) {
+  const { onThemeToggle, isDarkMode = false, onMobileMenuToggle, isMobileMenuOpen = false } = props;
 
-  var [showNotif,    setShowNotif]    = useState(false);
-  var [notifications, setNotifications] = useState([]);
-  var [loadingNotif, setLoadingNotif] = useState(true);
-  var [showUserMenu, setShowUserMenu] = useState(false);
+  const navigate              = useNavigate();
+  const { user, userProfile, signOut } = useAuth();
 
-  var notifRef   = useRef(null);
-  var userRef    = useRef(null);
-  var unread     = notifications.filter(n => !n.read).length;
+  const [showNotif,      setShowNotif]      = useState(false);
+  const [notifications,  setNotifications]  = useState([]);
+  const [loadingNotif,   setLoadingNotif]   = useState(true);
+  const [showUserMenu,   setShowUserMenu]   = useState(false);
 
-  var fetchNotifs = useCallback(async function() {
-    if (!user) return;
+  const notifRef   = useRef(null);
+  const userRef    = useRef(null);
+  const lastFetch  = useRef(0);
+  const channelRef = useRef(null);
+
+  // ✅ Use primitive — avoids user-object identity causing dep churn
+  const userId = user?.id;
+
+  const unread = notifications.filter(n => !n.read).length;
+
+  /* ── fetchNotifs ──────────────────────────────────────── */
+  const fetchNotifs = useCallback(async function () {
+    if (!userId) return;
     setLoadingNotif(true);
     try {
-      var r = await supabase
+      const { data } = await supabase
         .from('audit_logs')
         .select('id, action, description, severity, created_at')
         .order('created_at', { ascending: false })
         .limit(15);
-      setNotifications((r.data || []).map(mapAuditToNotif));
-    } catch (_) {}
-    setLoadingNotif(false);
-  }, [user]);
 
-  useEffect(function() {
-    fetchNotifs();
-    var ch = supabase.channel('hdr_notifs')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs' }, fetchNotifs)
+      setNotifications((data || []).map(mapAuditToNotif));
+      lastFetch.current = Date.now();
+    } catch (_) {
+      // silently swallow – non-critical
+    } finally {
+      setLoadingNotif(false);
+    }
+  }, [userId]);
+
+  // Keep a ref to fetchNotifs so the realtime callback always calls the latest version
+  // without needing to recreate the channel subscription
+  const fetchNotifsRef = useRef(fetchNotifs);
+  useEffect(() => { fetchNotifsRef.current = fetchNotifs; }, [fetchNotifs]);
+
+  /* ── Realtime subscription + initial fetch ─────────────── */
+  useEffect(function () {
+    if (!userId) return;
+
+    // Initial load
+    fetchNotifsRef.current();
+
+    // Use a globally unique channel name — module-level counter ensures
+    // StrictMode's double-invoke never reuses the same name on a still-subscribed channel
+    const channelName = `hdr_notifs_${userId}_${++_headerChannelSeq}`;
+
+    const channel = supabase
+      .channel(channelName, { config: { broadcast: { self: false } } })
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'audit_logs' },
+        () => fetchNotifsRef.current()
+      )
       .subscribe();
-    return function() { supabase.removeChannel(ch); };
-  }, [fetchNotifs]);
 
-  useEffect(function() {
-    var handler = function(e) {
-      if (notifRef.current && !notifRef.current.contains(e.target))  setShowNotif(false);
-      if (userRef.current  && !userRef.current.contains(e.target))   setShowUserMenu(false);
+    channelRef.current = channel;
+
+    /* ── Visibility guard ──────────────────────────────────
+       Only re-fetch when the tab becomes visible AND the
+       cached data is older than STALE_MS.
+    ─────────────────────────────────────────────────────── */
+    const handleVisibility = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        Date.now() - lastFetch.current > STALE_MS
+      ) {
+        fetchNotifsRef.current();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return function () {
+      supabase.removeChannel(channel);
+      channelRef.current = null;
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [userId]); // only re-run when the user changes (login/logout)
+
+  /* ── Click-outside handler for dropdowns ──────────────── */
+  useEffect(function () {
+    const handler = (e) => {
+      if (notifRef.current && !notifRef.current.contains(e.target)) setShowNotif(false);
+      if (userRef.current  && !userRef.current.contains(e.target))  setShowUserMenu(false);
     };
     document.addEventListener('mousedown', handler);
-    return function() { document.removeEventListener('mousedown', handler); };
+    return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  var markAllRead = function() { setNotifications(prev => prev.map(n => ({ ...n, read: true }))); };
-  var markRead    = function(id) { setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); };
+  /* ── Notification helpers ─────────────────────────────── */
+  const markAllRead = () =>
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
 
-  var handleSignOut = async function() {
+  const markRead = (id) =>
+    setNotifications(prev =>
+      prev.map(n => n.id === id ? { ...n, read: true } : n)
+    );
+
+  /* ── Sign-out ─────────────────────────────────────────── */
+  const handleSignOut = async () => {
     setShowUserMenu(false);
     await signOut();
     navigate('/login');
   };
 
-  var userName = userProfile?.full_name || user?.email?.split('@')[0] || 'User';
-  var userRole = userProfile?.role || '';
-  var initials = userName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+  /* ── Derived display values ───────────────────────────── */
+  const userName = userProfile?.full_name || user?.email?.split('@')[0] || 'User';
+  const userRole = userProfile?.role || '';
+  const initials = userName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 
+  /* ── Render ───────────────────────────────────────────── */
   return (
     <header style={{
-      position: 'fixed', top: 0, left: 0, right: 0, height: '60px', zIndex: 30,
-      background: B.bg,
-      borderBottom: `1px solid ${B.border}`,
-      boxShadow: '0 1px 4px rgba(12,32,55,0.07)',
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '0 12px',
+      display:         'flex',
+      alignItems:      'center',
+      justifyContent:  'space-between',
+      padding:         '0 24px',
+      height:          '64px',
+      background:      B.bg,
+      borderBottom:    `1px solid ${B.border}`,
+      position:        'sticky',
+      top:             0,
+      zIndex:          100,
     }}>
-      {/* Left — hamburger + title */}
+
+      {/* ── Left: mobile hamburger + brand ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
         <button
           onClick={onMobileMenuToggle}
-          className="lg:hidden"
           style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: '36px', height: '36px', borderRadius: '7px',
-            border: `1px solid ${B.border}`, background: 'none', cursor: 'pointer',
-            color: B.dark,
+            display:    'flex',
+            alignItems: 'center',
+            background: 'none',
+            border:     'none',
+            cursor:     'pointer',
+            padding:    '6px',
+            color:      B.muted,
           }}
+          aria-label="Toggle menu"
         >
-          <Icon name={isMobileMenuOpen ? 'X' : 'Menu'} size={17} color="currentColor" />
+          <Icon name={isMobileMenuOpen ? 'X' : 'Menu'} size={20} />
         </button>
 
-        <div className="hidden sm:flex items-center gap-2">
-          <div style={{
-            width: '28px', height: '28px', borderRadius: '6px',
-            background: B.dark, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Icon name="Building2" size={14} color={B.accent} />
-          </div>
-          <span style={{
-            fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: '15px',
-            color: B.dark, letterSpacing: '-0.01em',
-          }}>
-            AssetFlow
-          </span>
-          <span style={{ width: '1px', height: '14px', background: B.border, margin: '0 4px' }} />
-          <span style={{ fontSize: '12px', color: B.muted, fontFamily: 'Open Sans, sans-serif' }}>
-            Management Platform
-          </span>
-        </div>
+        <span style={{ fontWeight: 700, fontSize: '18px', color: B.dark, letterSpacing: '-0.3px' }}>
+          Dashboard
+        </span>
       </div>
 
-      {/* Right — actions */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      {/* ── Right: notifications + user menu ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
 
-        {/* Notification bell */}
+        {/* Theme toggle */}
+        <button
+          onClick={onThemeToggle}
+          style={{
+            background: 'none',
+            border:     'none',
+            cursor:     'pointer',
+            padding:    '8px',
+            color:      B.muted,
+            borderRadius: '8px',
+          }}
+          aria-label="Toggle theme"
+        >
+          <Icon name={isDarkMode ? 'Sun' : 'Moon'} size={18} />
+        </button>
+
+        {/* ── Notifications bell ── */}
         <div ref={notifRef} style={{ position: 'relative' }}>
           <button
-            onClick={function() { setShowNotif(!showNotif); setShowUserMenu(false); if (!showNotif) fetchNotifs(); }}
+            onClick={() => setShowNotif(v => !v)}
             style={{
-              position: 'relative', width: '36px', height: '36px', borderRadius: '7px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'none', border: 'none', cursor: 'pointer', color: B.muted,
+              position:     'relative',
+              background:   'none',
+              border:       'none',
+              cursor:       'pointer',
+              padding:      '8px',
+              color:        B.muted,
+              borderRadius: '8px',
             }}
+            aria-label="Notifications"
           >
-            <Icon name="Bell" size={18} color="currentColor" />
+            <Icon name="Bell" size={18} />
             {unread > 0 && (
               <span style={{
-                position: 'absolute', top: '5px', right: '5px',
-                width: '16px', height: '16px', borderRadius: '50%',
-                background: '#ef4444', color: '#fff',
-                fontSize: '9px', fontWeight: 700,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                position:   'absolute',
+                top:        '4px',
+                right:      '4px',
+                background: '#ef4444',
+                color:      '#fff',
+                fontSize:   '9px',
+                fontWeight: 700,
+                minWidth:   '16px',
+                height:     '16px',
+                borderRadius: '999px',
+                display:    'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding:    '0 3px',
               }}>
                 {unread > 9 ? '9+' : unread}
               </span>
             )}
           </button>
 
+          {/* Notifications dropdown */}
           {showNotif && (
             <div style={{
-              position: 'absolute', right: 0, top: '46px',
-              width: 'min(340px, calc(100vw - 24px))',
-              background: B.bg, border: `1px solid ${B.border}`,
-              borderRadius: '12px', boxShadow: '0 8px 24px rgba(12,32,55,0.14)',
-              zIndex: 50, overflow: 'hidden',
+              position:     'absolute',
+              top:          'calc(100% + 8px)',
+              right:        0,
+              width:        '360px',
+              background:   B.bg,
+              border:       `1px solid ${B.border}`,
+              borderRadius: '12px',
+              boxShadow:    '0 8px 32px rgba(12,32,55,0.12)',
+              zIndex:       200,
+              overflow:     'hidden',
             }}>
               {/* Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: `1px solid ${B.border}` }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '14px', fontWeight: 700, color: B.dark, fontFamily: 'Georgia, serif' }}>Notifications</span>
-                  {unread > 0 && (
-                    <span style={{ width: '20px', height: '20px', borderRadius: '50%', background: '#ef4444', color: '#fff', fontSize: '10px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {unread}
-                    </span>
+              <div style={{
+                display:        'flex',
+                alignItems:     'center',
+                justifyContent: 'space-between',
+                padding:        '14px 16px',
+                borderBottom:   `1px solid ${B.border}`,
+              }}>
+                <span style={{ fontWeight: 700, fontSize: '14px', color: B.text }}>
+                  Notifications {unread > 0 && (
+                    <span style={{
+                      background: '#ef4444',
+                      color: '#fff',
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      padding: '1px 6px',
+                      borderRadius: '999px',
+                      marginLeft: '6px',
+                    }}>{unread}</span>
                   )}
-                </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  {unread > 0 && (
-                    <button onClick={markAllRead} style={{ fontSize: '11px', fontWeight: 600, color: B.accent, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Open Sans, sans-serif' }}>
-                      Mark all read
-                    </button>
-                  )}
-                  <button onClick={fetchNotifs} style={{ background: 'none', border: 'none', cursor: 'pointer', color: B.muted, display: 'flex' }}>
-                    <Icon name="RefreshCw" size={12} color="currentColor" />
+                </span>
+                {unread > 0 && (
+                  <button
+                    onClick={markAllRead}
+                    style={{
+                      background: 'none',
+                      border:     'none',
+                      cursor:     'pointer',
+                      fontSize:   '12px',
+                      color:      B.accent,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Mark all read
                   </button>
-                </div>
+                )}
               </div>
 
               {/* List */}
-              <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
+              <div style={{ maxHeight: '360px', overflowY: 'auto' }}>
                 {loadingNotif ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', gap: '8px', color: B.muted, fontSize: '13px', fontFamily: 'Open Sans, sans-serif' }}>
-                    <svg className="animate-spin" width="15" height="15" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-                    </svg>
+                  <div style={{ padding: '24px', textAlign: 'center', color: B.muted, fontSize: '13px' }}>
                     Loading…
                   </div>
                 ) : notifications.length === 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 16px', color: B.muted }}>
-                    <Icon name="Bell" size={24} color="currentColor" />
-                    <p style={{ fontSize: '13px', marginTop: '8px', fontFamily: 'Open Sans, sans-serif' }}>No notifications yet</p>
+                  <div style={{ padding: '24px', textAlign: 'center', color: B.muted, fontSize: '13px' }}>
+                    No notifications yet
                   </div>
-                ) : notifications.map(function(n) {
-                  return (
-                    <button
+                ) : (
+                  notifications.map(n => (
+                    <div
                       key={n.id}
-                      onClick={function() { markRead(n.id); }}
+                      onClick={() => markRead(n.id)}
                       style={{
-                        width: '100%', display: 'flex', alignItems: 'flex-start', gap: '10px',
-                        padding: '10px 16px', background: n.read ? 'transparent' : 'rgba(52,193,221,0.05)',
-                        borderBottom: `1px solid ${B.border}`, cursor: 'pointer', border: 'none',
-                        textAlign: 'left',
+                        display:    'flex',
+                        gap:        '12px',
+                        padding:    '12px 16px',
+                        cursor:     'pointer',
+                        background: n.read ? 'transparent' : '#f0f9ff',
+                        borderBottom: `1px solid ${B.border}`,
+                        transition: 'background 0.15s',
                       }}
                     >
-                      <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: n.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <Icon name={n.icon} size={14} color={n.iconColor} />
+                      <div style={{
+                        width:        '36px',
+                        height:       '36px',
+                        borderRadius: '8px',
+                        background:   n.iconBg,
+                        display:      'flex',
+                        alignItems:   'center',
+                        justifyContent: 'center',
+                        flexShrink:   0,
+                      }}>
+                        <Icon name={n.icon} size={16} color={n.iconColor} />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                          <p style={{ fontSize: '12px', fontWeight: 600, color: B.dark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'Open Sans, sans-serif' }}>{n.title}</p>
-                          {!n.read && <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: B.accent, flexShrink: 0 }} />}
-                        </div>
-                        <p style={{ fontSize: '11px', color: B.muted, marginTop: '2px', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', fontFamily: 'Open Sans, sans-serif' }}>{n.message}</p>
-                        <p style={{ fontSize: '10px', color: '#94a3b8', marginTop: '3px', fontFamily: 'Open Sans, sans-serif' }}>{n.time}</p>
+                        <div style={{ fontWeight: 600, fontSize: '13px', color: B.text }}>{n.title}</div>
+                        <div style={{
+                          fontSize:     '12px',
+                          color:        B.muted,
+                          marginTop:    '2px',
+                          whiteSpace:   'nowrap',
+                          overflow:     'hidden',
+                          textOverflow: 'ellipsis',
+                        }}>{n.message}</div>
+                        <div style={{ fontSize: '11px', color: B.accent, marginTop: '4px' }}>{n.time}</div>
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Footer */}
-              <div style={{ padding: '10px 16px', borderTop: `1px solid ${B.border}`, textAlign: 'center' }}>
-                <button style={{ fontSize: '12px', fontWeight: 600, color: B.dark, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Open Sans, sans-serif' }}>
-                  View all activity
-                </button>
+                      {!n.read && (
+                        <div style={{
+                          width:        '8px',
+                          height:       '8px',
+                          borderRadius: '50%',
+                          background:   B.accent,
+                          flexShrink:   0,
+                          marginTop:    '4px',
+                        }} />
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
         </div>
 
-        {/* Theme toggle */}
-        <button
-          onClick={onThemeToggle}
-          className="hidden sm:flex"
-          style={{
-            width: '36px', height: '36px', borderRadius: '7px',
-            alignItems: 'center', justifyContent: 'center',
-            background: 'none', border: 'none', cursor: 'pointer', color: B.muted,
-          }}
-        >
-          <Icon name={isDarkMode ? 'Sun' : 'Moon'} size={17} color="currentColor" />
-        </button>
-
-        <div className="hidden sm:block" style={{ width: '1px', height: '20px', background: B.border, margin: '0 4px' }} />
-
-        {/* User menu */}
+        {/* ── User menu ── */}
         <div ref={userRef} style={{ position: 'relative' }}>
           <button
-            onClick={function() { setShowUserMenu(!showUserMenu); setShowNotif(false); }}
+            onClick={() => setShowUserMenu(v => !v)}
             style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              padding: '5px 8px', borderRadius: '8px',
-              background: 'none', border: 'none', cursor: 'pointer',
+              display:      'flex',
+              alignItems:   'center',
+              gap:          '8px',
+              background:   'none',
+              border:       `1px solid ${B.border}`,
+              borderRadius: '8px',
+              cursor:       'pointer',
+              padding:      '6px 10px',
             }}
           >
             {/* Avatar */}
             <div style={{
-              width: '32px', height: '32px', borderRadius: '50%',
-              background: B.dark, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              width:          '30px',
+              height:         '30px',
+              borderRadius:   '50%',
+              background:     B.dark,
+              color:          '#fff',
+              display:        'flex',
+              alignItems:     'center',
+              justifyContent: 'center',
+              fontSize:       '11px',
+              fontWeight:     700,
+              letterSpacing:  '0.5px',
             }}>
-              <span style={{ fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: '13px', color: B.accent }}>
-                {initials}
-              </span>
+              {initials}
             </div>
-            <div className="hidden md:block" style={{ textAlign: 'left' }}>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: B.dark, lineHeight: 1.2, fontFamily: 'Open Sans, sans-serif' }}>
-                {userName}
-              </p>
+            <div style={{ textAlign: 'left' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: B.text, lineHeight: 1.2 }}>{userName}</div>
               <RoleBadge role={userRole} />
             </div>
-            <Icon name="ChevronDown" size={13} color={B.muted} className="hidden md:block" />
+            <Icon name="ChevronDown" size={14} color={B.muted} />
           </button>
 
+          {/* User dropdown */}
           {showUserMenu && (
             <div style={{
-              position: 'absolute', right: 0, top: '46px',
-              width: '200px', background: B.bg,
-              border: `1px solid ${B.border}`, borderRadius: '10px',
-              boxShadow: '0 8px 24px rgba(12,32,55,0.12)', zIndex: 50, overflow: 'hidden', paddingTop: '4px',
+              position:     'absolute',
+              top:          'calc(100% + 8px)',
+              right:        0,
+              width:        '220px',
+              background:   B.bg,
+              border:       `1px solid ${B.border}`,
+              borderRadius: '10px',
+              boxShadow:    '0 8px 24px rgba(12,32,55,0.10)',
+              zIndex:       200,
+              overflow:     'hidden',
             }}>
-              <div style={{ padding: '10px 14px 8px', borderBottom: `1px solid ${B.border}` }}>
-                <p style={{ fontSize: '13px', fontWeight: 700, color: B.dark, fontFamily: 'Georgia, serif' }}>{userName}</p>
-                <p style={{ fontSize: '11px', color: B.muted, marginTop: '2px', fontFamily: 'Open Sans, sans-serif' }}>{user?.email}</p>
+              {/* Profile info */}
+              <div style={{ padding: '14px 16px', borderBottom: `1px solid ${B.border}` }}>
+                <div style={{ fontWeight: 700, fontSize: '14px', color: B.text }}>{userName}</div>
+                <div style={{ fontSize: '12px', color: B.muted, marginTop: '2px' }}>{user?.email}</div>
+                {userProfile?.phone && (
+                  <div style={{ fontSize: '12px', color: B.muted, marginTop: '2px' }}>
+                    {formatKEPhone(userProfile.phone)}
+                  </div>
+                )}
               </div>
-              <button
-                onClick={handleSignOut}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  width: '100%', padding: '10px 14px',
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: '#b91c1c', fontSize: '13px', fontFamily: 'Open Sans, sans-serif', fontWeight: 500,
-                }}
-              >
-                <Icon name="LogOut" size={14} color="currentColor" />
-                Sign Out
-              </button>
+
+              {/* Menu items */}
+              {[
+                { icon: 'User',     label: 'My Profile',   action: () => { setShowUserMenu(false); navigate('/profile'); } },
+                { icon: 'Settings', label: 'Settings',     action: () => { setShowUserMenu(false); navigate('/settings'); } },
+              ].map(item => (
+                <button
+                  key={item.label}
+                  onClick={item.action}
+                  style={{
+                    display:    'flex',
+                    alignItems: 'center',
+                    gap:        '10px',
+                    width:      '100%',
+                    padding:    '11px 16px',
+                    background: 'none',
+                    border:     'none',
+                    cursor:     'pointer',
+                    fontSize:   '13px',
+                    color:      B.text,
+                    textAlign:  'left',
+                  }}
+                >
+                  <Icon name={item.icon} size={15} color={B.muted} />
+                  {item.label}
+                </button>
+              ))}
+
+              <div style={{ borderTop: `1px solid ${B.border}` }}>
+                <button
+                  onClick={handleSignOut}
+                  style={{
+                    display:    'flex',
+                    alignItems: 'center',
+                    gap:        '10px',
+                    width:      '100%',
+                    padding:    '11px 16px',
+                    background: 'none',
+                    border:     'none',
+                    cursor:     'pointer',
+                    fontSize:   '13px',
+                    color:      '#ef4444',
+                    textAlign:  'left',
+                  }}
+                >
+                  <Icon name="LogOut" size={15} color="#ef4444" />
+                  Sign Out
+                </button>
+              </div>
             </div>
           )}
         </div>
