@@ -102,12 +102,60 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
       };
 
       if (isEdit) {
+        // Edit: safe to update user_profiles directly — auth user already exists
         const { error: err } = await supabase.from('user_profiles').update(payload).eq('id', employee.id);
         if (err) throw err;
       } else {
-        const { error: err } = await supabase.from('user_profiles')
-          .insert({ ...payload, email: form.email });
-        if (err) throw err;
+        // New employee: must go through the Edge Function to satisfy user_profiles_id_fkey.
+        // A strong random password is auto-generated — HR never sees it and the employee
+        // receives no credentials. This is a payroll record, not a login account.
+        const autoPassword = crypto.randomUUID() + crypto.randomUUID();
+
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        if (!accessToken) throw new Error('Session expired. Please refresh and try again.');
+
+        const response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-staff-user`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify({
+              email:      form.email.trim().toLowerCase(),
+              password:   autoPassword,
+              full_name:  form.full_name.trim(),
+              role:       form.role,
+              phone:      form.phone || '',
+              department: form.department || '',
+              admin_id:   adminId,
+            }),
+          }
+        );
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Failed to create employee record.');
+
+        // Patch the profile with the HR-specific fields the Edge Function doesn't set
+        if (result.id) {
+          await supabase.from('user_profiles').update({
+            employment_type:     payload.employment_type,
+            date_joined:         payload.date_joined,
+            basic_salary:        payload.basic_salary,
+            housing_allowance:   payload.housing_allowance,
+            transport_allowance: payload.transport_allowance,
+            national_id:         payload.national_id,
+            kra_pin:             payload.kra_pin,
+            nssf_number:         payload.nssf_number,
+            sha_number:          payload.sha_number,
+            bank_name:           payload.bank_name,
+            bank_account:        payload.bank_account,
+            bank_branch:         payload.bank_branch,
+            leave_balance:       payload.leave_balance,
+            updated_at:          payload.updated_at,
+          }).eq('id', result.id);
+        }
       }
       onSaved();
       onClose();
