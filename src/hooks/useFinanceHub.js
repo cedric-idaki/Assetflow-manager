@@ -271,7 +271,7 @@ export const useFinanceHub = () => {
   }, [resolveAdminId, fetchInvoices, fetchJournalEntries, fetchPayrollRecords,
       fetchEmployees, fetchCompanyProfile, fetchCOA, computeSummary]);
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Real-time journal updates
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 
 export const useClientPortal = () => {
@@ -185,6 +185,8 @@ export const useClientPortal = () => {
   }, [payments]);
 
   // ── Fetch all ──────────────────────────────────────────────────────────────
+  const hasLoaded = useRef(false);
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -202,13 +204,15 @@ export const useClientPortal = () => {
     } catch (err) {
       setConnectionStatus('disconnected');
     } finally {
+      hasLoaded.current = true;
       setLoading(false);
     }
   }, [fetchClientProfile, fetchMyAssets, fetchBrowseAssets, fetchPayments, fetchInstallmentPlans, fetchEnquiries]);
 
   useEffect(() => {
+    if (hasLoaded.current) return;
     fetchAll();
-  }, [fetchAll]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     clientProfile,

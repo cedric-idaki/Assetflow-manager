@@ -21,6 +21,7 @@ export const useRealtimeDashboard = () => {
   const [syncing, setSyncing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const channelsRef = useRef([]);
+  const hasLoaded = useRef(false);
 
   const fetchKPIs = useCallback(async () => {
     setSyncing(true);
@@ -155,13 +156,18 @@ export const useRealtimeDashboard = () => {
       fetchRecentPayments(),
       fetchActivityFeed(),
     ]);
+    hasLoaded.current = true;
     setLoading(false);
   }, [fetchKPIs, fetchAgingAnalysis, fetchRecentPayments, fetchActivityFeed]);
 
+  // Initial load — runs once on mount
   useEffect(() => {
+    if (hasLoaded.current) return;
     fetchAll();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Real-time subscriptions
+  // Realtime subscriptions — set up once, callbacks are stable useCallback refs
+  useEffect(() => {
     const assetsCh = supabase
       ?.channel('rt_db_assets')
       ?.on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, () => fetchKPIs())
@@ -204,7 +210,7 @@ export const useRealtimeDashboard = () => {
       channelsRef?.current?.forEach(ch => supabase?.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, [fetchAll, fetchKPIs, fetchAgingAnalysis, fetchRecentPayments, fetchActivityFeed]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     kpis,
