@@ -6,6 +6,8 @@ import Select from '../../../components/ui/Select';
 import { auditLogsService } from '../../../services/supabaseService';
 import { supabase } from '../../../lib/supabase';
 
+let _auditTrailChannelSeq = 0;
+
 // ── Action type → badge config ──────────────────────────────────────────────
 const ACTION_BADGE = {
   // User management
@@ -280,7 +282,7 @@ const AuditTrailTab = () => {
     setConnStatus('connecting');
 
     const channel = supabase
-      ?.channel('audit_trail_live')
+      ?.channel(`audit_trail_live_${++_auditTrailChannelSeq}`)
       ?.on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'audit_logs' },

@@ -8,6 +8,8 @@ import ApprovalHistoryPanel from './ApprovalHistoryPanel';
 import RealtimeStatusBar from '../../../components/ui/RealtimeStatusBar';
 import LivePulseWidget from '../../../components/ui/LivePulseWidget';
 
+let _makerCheckerChannelSeq = 0;
+
 const TABS = [
   { id: 'queue', label: 'Pending Queue', icon: 'Clock' },
   { id: 'history', label: 'Approval History', icon: 'History' },
@@ -52,7 +54,7 @@ const MakerCheckerTab = ({ onBadgeCountChange }) => {
   useEffect(() => {
     fetchQueue();
     const channel = supabase
-      ?.channel('maker_checker_realtime_v2')
+      ?.channel(`maker_checker_realtime_${++_makerCheckerChannelSeq}`)
       ?.on('postgres_changes', { event: '*', schema: 'public', table: 'maker_checker_queue' }, (payload) => {
         setSyncing(true);
         fetchQueue()?.finally(() => setSyncing(false));

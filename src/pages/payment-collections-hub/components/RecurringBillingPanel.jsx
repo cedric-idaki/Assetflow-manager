@@ -9,6 +9,8 @@ import StripePaymentForm from './StripePaymentForm';
 import { supabase } from '../../../lib/supabase';
 import { clientsService } from '../../../services/supabaseService';
 
+let _recurringBillingChannelSeq = 0;
+
 const stripePromise = loadStripe(import.meta.env?.VITE_STRIPE_PUBLISHABLE_KEY || '');
 
 const SpinnerIcon = ({ size = 14 }) => (
@@ -127,7 +129,7 @@ export default function RecurringBillingPanel() {
 
   // Real-time subscription
   useEffect(() => {
-    const channel = supabase?.channel('installment_plans_changes')?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_plans' }, () => loadPlans())?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_charges' }, () => {
+    const channel = supabase?.channel(`installment_plans_changes_${++_recurringBillingChannelSeq}`)?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_plans' }, () => loadPlans())?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_charges' }, () => {
         if (selectedPlan) loadCharges(selectedPlan?.id);
       })?.subscribe();
     return () => supabase?.removeChannel(channel);

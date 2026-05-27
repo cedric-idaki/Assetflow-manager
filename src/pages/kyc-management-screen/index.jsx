@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../components/AppIcon';
 import Button from '../../components/ui/Button';
+
+let _kycMgmtChannelSeq = 0;
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 
@@ -155,7 +157,7 @@ const AssetClientManagement = () => {
       loadData();
 
       const assetsSub = supabase
-        .channel('acm_assets')
+        .channel(`kyc_acm_assets_${++_kycMgmtChannelSeq}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, () => loadAssets(true))
         .subscribe(status => {
           if (status === 'SUBSCRIBED') setConnectionStatus('connected');
@@ -163,7 +165,7 @@ const AssetClientManagement = () => {
         });
 
       const clientsSub = supabase
-        .channel('acm_clients')
+        .channel(`kyc_acm_clients_${_kycMgmtChannelSeq}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, () => loadClients(true))
         .subscribe();
 

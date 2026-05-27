@@ -5,6 +5,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { formatKEPhone } from '../../utils/phoneUtils';
 
+let _sidebarChannelSeq = 0;
+
 /* Brand tokens */
 const B = {
   dark:    '#0c2037',
@@ -37,7 +39,7 @@ var Sidebar = function(props) {
   useEffect(function() {
     fetchPendingCount();
     var ch = supabase
-      .channel('sidebar_mcq')
+      .channel(`sidebar_mcq_${++_sidebarChannelSeq}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'maker_checker_queue' }, fetchPendingCount)
       .subscribe();
     return function() { supabase.removeChannel(ch); };

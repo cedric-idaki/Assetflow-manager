@@ -14,6 +14,8 @@ import MainLayout from '../../layouts/MainLayout';
 import { auditLogsService } from '../../services/supabaseService';
 import { supabase } from '../../lib/supabase';
 
+let _acmChannelSeq = 0;
+
 const SpinnerIcon = ({ size = 14 }) => (
   <svg className="animate-spin" width={size} height={size} viewBox="0 0 24 24" fill="none">
     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -188,7 +190,7 @@ const AssetClientManagement = () => {
       loadData();
 
       const assetsSub = supabase
-        .channel('acm_assets')
+        .channel(`acm_assets_${++_acmChannelSeq}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, () => loadAssets(true))
         .subscribe(status => {
           if (status === 'SUBSCRIBED') setConnectionStatus('connected');
@@ -196,7 +198,7 @@ const AssetClientManagement = () => {
         });
 
       const clientsSub = supabase
-        .channel('acm_clients')
+        .channel(`acm_clients_${_acmChannelSeq}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, () => loadClients(true))
         .subscribe();
 

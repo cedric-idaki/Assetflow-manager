@@ -15,6 +15,8 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { auditLogsService } from '../../services/supabaseService';
 
+let _kycRenewalChannelSeq = 0;
+
 const getDaysLeft = (expiryDate) => {
   const today = new Date();
   const expiry = new Date(expiryDate);
@@ -114,7 +116,7 @@ notes: doc.rejection_reason || '',
 
     // Realtime updates
     const channel = supabase
-      .channel('kyc_renewals')
+      .channel(`kyc_renewals_${++_kycRenewalChannelSeq}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'kyc_documents' }, fetchRenewals)
       .subscribe();
 

@@ -1,361 +1,409 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 
 export const useAdminDashboard = () => {
   const [stats, setStats] = useState({
-    totalClients: 0,
-    activeClients: 0,
-    totalAssets: 0,
-    totalRevenue: 0,
-    outstandingBalance: 0,
-    totalAgents: 0,
-    pendingKYC: 0,
-    totalContracts: 0,
-    totalStaff: 0,
+    activeAccounts: 0,
+    inactiveAccounts: 0,
+    totalValue: 0,
+    totalSales: 0,
+    totalSalesUsers: 0,
+    pendingRegistrations: 0,
+    totalTransactions: 0,
   });
-
-  const [clients, setClients] = useState([]);
-  const [assets, setAssets] = useState([]);
-  const [agents, setAgents] = useState([]);
-  const [staff, setStaff] = useState([]);
-  const [contracts, setContracts] = useState([]);
-  const [payments, setPayments] = useState([]);
-  const [auditLogs, setAuditLogs] = useState([]);
-  const [subscription, setSubscription] = useState(null);
-  const [companyProfile, setCompanyProfile] = useState(null);
-  const [salesAnalytics, setSalesAnalytics] = useState([]);
+  const [assetBreakdown, setAssetBreakdown] = useState([]);
+  const [companyAnalytics, setCompanyAnalytics] = useState([]);
+  const [auditTrail, setAuditTrail] = useState([]);
+  const [salesAgents, setSalesAgents] = useState([]);
+  const [salesTarget, setSalesTarget] = useState({
+    target: 0,
+    achieved: 0,
+    percentage: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
-
   const channelsRef = useRef([]);
-  const hasLoaded = useRef(false);
-
-  const getAdminId = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    return user?.id;
-  };
-
-  // ---------------------------------------------------------------------------
-  // COMPANY PROFILE
-  // ---------------------------------------------------------------------------
-
-  const fetchCompanyProfile = useCallback(async () => {
-    try {
-      const adminId = await getAdminId();
-
-      const { data } = await supabase
-        .from('company_profiles')
-        .select('*')
-        .eq('admin_id', adminId)
-        .maybeSingle();
-
-      setCompanyProfile(data);
-    } catch (err) {}
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // SUBSCRIPTION
-  // ---------------------------------------------------------------------------
-
-  const fetchSubscription = useCallback(async () => {
-    try {
-      const adminId = await getAdminId();
-
-      const { data } = await supabase
-        .from('company_subscriptions')
-        .select('*, plan:subscription_plans(*)')
-        .eq('admin_id', adminId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      setSubscription(data);
-    } catch (err) {}
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // STATS (FIXED OUTSTANDING BALANCE)
-  // ---------------------------------------------------------------------------
 
   const fetchStats = useCallback(async () => {
     try {
-      const adminId = await getAdminId();
-
-      const { count: totalClients } = await supabase
+      const { count: activeAccounts } = await supabase
         .from('clients')
         .select('id', { count: 'exact', head: true })
-        .eq('admin_id', adminId);
-
-      const { count: activeClients } = await supabase
-        .from('clients')
-        .select('id', { count: 'exact', head: true })
-        .eq('admin_id', adminId)
         .eq('client_status', 'active');
-
-      const { count: pendingKYC } = await supabase
+      const { count: inactiveAccounts } = await supabase
         .from('clients')
         .select('id', { count: 'exact', head: true })
-        .eq('admin_id', adminId)
-        .eq('kyc_status', 'unverified');
-
-      const { data: assetData } = await supabase
+        .neq('client_status', 'active');
+      const { data: assets } = await supabase
         .from('assets')
-        .select('selling_price')
-        .eq('registered_by', adminId);
-
-      const totalAssets = (assetData || []).length;
-
-      const { count: totalAgents } = await supabase
-        .from('agents')
-        .select('id', { count: 'exact', head: true })
-        .eq('admin_id', adminId);
-
-      const { data: paymentData } = await supabase
-        .from('payments')
-        .select('amount, payment_status')
-        .eq('processed_by', adminId);
-
-      const totalRevenue = (paymentData || [])
-        .filter(p => p.payment_status === 'completed')
-        .reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-
-      // ✅ FIXED: was incorrectly hardcoded
-      const { data: clientBalances } = await supabase
-        .from('clients')
-        .select('outstanding_balance')
-        .eq('admin_id', adminId);
-
-      const outstandingBalance = (clientBalances || []).reduce(
-        (sum, c) => sum + parseFloat(c.outstanding_balance || 0),
+        .select('selling_price, asset_status');
+      const totalValue = (assets || []).reduce(
+        (s, a) => s + parseFloat(a.selling_price || 0),
         0
       );
-
-      const { count: totalContracts } = await supabase
-        .from('company_contracts')
-        .select('id', { count: 'exact', head: true })
-        .eq('admin_id', adminId);
-
-      const { count: totalStaff } = await supabase
+      const { data: completedPays } = await supabase
+        .from('payments')
+        .select('amount, client_id')
+        .eq('payment_status', 'completed');
+      const totalSales = (completedPays || []).reduce(
+        (s, p) => s + parseFloat(p.amount || 0),
+        0
+      );
+      const totalSalesUsers = new Set(
+        (completedPays || []).map((p) => p.client_id)
+      ).size;
+      const { count: pendingRegistrations } = await supabase
         .from('user_profiles')
         .select('id', { count: 'exact', head: true })
-        .eq('admin_id', adminId)
-        .eq('is_active', true);
-
+        .eq('role', 'admin')
+        .eq('is_active', false);
+      const { data: allPayments } = await supabase
+        .from('payments')
+        .select('amount');
+      const totalTransactions = (allPayments || []).reduce(
+        (s, p) => s + parseFloat(p.amount || 0),
+        0
+      );
       setStats({
-        totalClients: totalClients || 0,
-        activeClients: activeClients || 0,
-        totalAssets,
-        totalRevenue,
-        outstandingBalance,
-        totalAgents: totalAgents || 0,
-        pendingKYC: pendingKYC || 0,
-        totalContracts: totalContracts || 0,
-        totalStaff: totalStaff || 0,
+        activeAccounts: activeAccounts || 0,
+        inactiveAccounts: inactiveAccounts || 0,
+        totalValue,
+        totalSales,
+        totalSalesUsers,
+        pendingRegistrations: pendingRegistrations || 0,
+        totalTransactions,
       });
-
       setConnectionStatus('connected');
     } catch (err) {
       setConnectionStatus('disconnected');
     }
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // OTHER FETCHERS (UNCHANGED LOGIC)
-  // ---------------------------------------------------------------------------
-
-  const fetchClients = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('clients')
-      .select('*')
-      .eq('admin_id', adminId)
-      .order('created_at', { ascending: false });
-
-    setClients(data || []);
+  const fetchAssetBreakdown = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('assets')
+        .select('asset_type, selling_price, asset_status');
+      const types = {};
+      (data || []).forEach((a) => {
+        const t = a.asset_type || 'other';
+        if (!types[t])
+          types[t] = { type: t, count: 0, totalValue: 0, sold: 0 };
+        types[t].count++;
+        types[t].totalValue += parseFloat(a.selling_price || 0);
+        if (a.asset_status === 'sold') types[t].sold++;
+      });
+      setAssetBreakdown(Object.values(types));
+    } catch (err) {
+      console.error('useAdminDashboard error:', err.message);
+    }
   }, []);
 
-  const fetchAssets = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('assets')
-      .select('*, linked_client:clients(full_name, account_number)')
-      .eq('registered_by', adminId);
-
-    setAssets(data || []);
+  const fetchCompanyAnalytics = useCallback(async () => {
+    try {
+      const { data: admins } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, email, is_active, created_at')
+        .eq('role', 'admin');
+      const { data: clients } = await supabase
+        .from('clients')
+        .select('id, client_status, outstanding_balance, created_by, created_at');
+      const { data: payments } = await supabase
+        .from('payments')
+        .select('amount, payment_status, client_id, processed_by');
+      const analytics = (admins || []).map((admin) => {
+        const adminClients = (clients || []).filter(
+          (c) => c.created_by === admin.id
+        );
+        const activeClients = adminClients.filter(
+          (c) => c.client_status === 'active'
+        ).length;
+        const clientIds = adminClients.map((c) => c.id);
+        const adminPayments = (payments || []).filter((p) =>
+          clientIds.includes(p.client_id)
+        );
+        const totalRevenue = adminPayments
+          .filter((p) => p.payment_status === 'completed')
+          .reduce((s, p) => s + parseFloat(p.amount || 0), 0);
+        const outstanding = adminClients.reduce(
+          (s, c) => s + parseFloat(c.outstanding_balance || 0),
+          0
+        );
+        return {
+          id: admin.id,
+          name: admin.full_name || 'Unknown Company',
+          email: admin.email,
+          isActive: admin.is_active,
+          totalClients: adminClients.length,
+          activeClients,
+          totalRevenue,
+          outstanding,
+          joinedDate: admin.created_at,
+          transactionCount: adminPayments.length,
+        };
+      });
+      setCompanyAnalytics(analytics);
+    } catch (err) {
+      console.error('useAdminDashboard error:', err.message);
+    }
   }, []);
 
-  const fetchAgents = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('agents')
-      .select('*')
-      .eq('admin_id', adminId);
-
-    setAgents(data || []);
+  const fetchAuditTrail = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('audit_logs')
+        .select('id, action, description, table_name, severity, created_at, old_values, new_values, record_id, user_id')
+        .in('action', [
+          'create',
+          'update',
+          'delete',
+          'login',
+          'logout',
+          'approve',
+          'reject',
+          'kyc_status_change',
+        ])
+        .order('created_at', { ascending: false })
+        .limit(50);
+      
+      // Fetch user data separately to avoid relationship ambiguity
+      if (data && data.length > 0) {
+        const userIds = [...new Set(data.map(log => log.user_id).filter(Boolean))];
+        const { data: users } = await supabase
+          .from('user_profiles')
+          .select('id, full_name, role, email')
+          .in('id', userIds);
+        
+        const userMap = {};
+        (users || []).forEach(u => { userMap[u.id] = u; });
+        
+        const enrichedData = data.map(log => ({
+          ...log,
+          user: userMap[log.user_id] || null,
+        }));
+        setAuditTrail(enrichedData);
+      } else {
+        setAuditTrail(data || []);
+      }
+    } catch (err) {
+      console.error('useAdminDashboard error:', err.message);
+    }
   }, []);
 
-  const fetchStaff = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('admin_id', adminId);
-
-    setStaff(data || []);
+  const fetchSalesAgents = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('agents')
+        .select('*, user:user_id(id, full_name, email, is_active), admin:admin_id(id, full_name, email)')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setSalesAgents(data || []);
+    } catch (err) {
+      console.error('fetchSalesAgents error:', err.message);
+    }
   }, []);
 
-  const fetchContracts = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('company_contracts')
-      .select('*, client:clients(full_name, account_number)')
-      .eq('admin_id', adminId);
-
-    setContracts(data || []);
+  const fetchSalesTarget = useCallback(async () => {
+    try {
+      const { data: agents } = await supabase
+        .from('agents')
+        .select('target_amount, total_sales');
+      const target = (agents || []).reduce(
+        (s, a) => s + parseFloat(a.target_amount || 0),
+        0
+      );
+      const achieved = (agents || []).reduce(
+        (s, a) => s + parseFloat(a.total_sales || 0),
+        0
+      );
+      const percentage =
+        target > 0 ? Math.min(100, Math.round((achieved / target) * 100)) : 0;
+      setSalesTarget({ target, achieved, percentage });
+    } catch (err) {
+      console.error('useAdminDashboard error:', err.message);
+    }
   }, []);
 
-  const fetchPayments = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('payments')
-      .select('*, client:clients(full_name, account_number)')
-      .eq('processed_by', adminId);
+  const createSalesAgent = useCallback(
+    async (agentData) => {
+      // POST directly to Supabase Auth REST API — bypasses the JS client's
+      // session management entirely so the admin is never signed out.
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-    setPayments(data || []);
+      const signUpRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': supabaseAnonKey,
+        },
+        body: JSON.stringify({
+          email: agentData.email,
+          password: agentData.password,
+          data: { full_name: agentData.fullName, role: 'sales_agent' },
+        }),
+      });
+
+      const signUpJson = await signUpRes.json();
+      if (!signUpRes.ok) {
+        throw new Error(signUpJson?.msg || signUpJson?.message || 'Failed to create agent auth account.');
+      }
+
+      const userId = signUpJson?.id ?? signUpJson?.user?.id;
+      if (!userId) throw new Error('Agent creation failed — no user ID returned.');
+
+      // Upsert user profile (runs as admin — session untouched)
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .upsert({
+          id: userId,
+          email: agentData.email,
+          full_name: agentData.fullName,
+          role: 'sales_agent',
+          phone: agentData.phone || '',
+          is_active: true,
+        });
+      if (profileError)
+        console.error('Profile upsert error:', profileError.message);
+
+      // Insert into agents table
+      const { data: agent, error: agentError } = await supabase
+        .from('agents')
+        .insert({
+          user_id: userId,
+          agent_code: `AGT-${Date.now()}`,
+          full_name: agentData.fullName,
+          email: agentData.email,
+          phone: agentData.phone,
+          region: agentData.region,
+          commission_rate: agentData.commissionRate || 5,
+          target_amount: agentData.targetAmount || 0,
+        })
+        .select()
+        .maybeSingle();
+      if (agentError) throw agentError;
+
+      await fetchSalesAgents();
+      return agent;
+    },
+    [fetchSalesAgents]
+  );
+
+  const exportCSV = useCallback((data, filename) => {
+    if (!data || data.length === 0) return;
+    const keys = Object.keys(data[0]);
+    const csv = [
+      keys.join(','),
+      ...data.map((row) =>
+        keys
+          .map((k) => `"${String(row[k] ?? '').replace(/"/g, '""')}"`)
+          .join(',')
+      ),
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }, []);
-
-  const fetchAuditLogs = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('audit_logs')
-      .select('*')
-      .eq('admin_id', adminId);
-
-    setAuditLogs(data || []);
-  }, []);
-
-  const fetchSalesAnalytics = useCallback(async () => {
-    const adminId = await getAdminId();
-    const { data } = await supabase
-      .from('agents')
-      .select(
-        'id, full_name, total_sales, total_commission, target_amount, agent_status'
-      )
-      .eq('admin_id', adminId);
-
-    setSalesAnalytics(data || []);
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // FETCH ALL
-  // ---------------------------------------------------------------------------
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-
     await Promise.all([
       fetchStats(),
-      fetchCompanyProfile(),
-      fetchSubscription(),
-      fetchClients(),
-      fetchAssets(),
-      fetchAgents(),
-      fetchStaff(),
-      fetchContracts(),
-      fetchPayments(),
-      fetchAuditLogs(),
-      fetchSalesAnalytics(),
+      fetchAssetBreakdown(),
+      fetchCompanyAnalytics(),
+      fetchAuditTrail(),
+      fetchSalesAgents(),
+      fetchSalesTarget(),
     ]);
-
-    hasLoaded.current = true;
     setLoading(false);
   }, [
     fetchStats,
-    fetchCompanyProfile,
-    fetchSubscription,
-    fetchClients,
-    fetchAssets,
-    fetchAgents,
-    fetchStaff,
-    fetchContracts,
-    fetchPayments,
-    fetchAuditLogs,
-    fetchSalesAnalytics,
+    fetchAssetBreakdown,
+    fetchCompanyAnalytics,
+    fetchAuditTrail,
+    fetchSalesAgents,
+    fetchSalesTarget,
   ]);
 
-  // ---------------------------------------------------------------------------
-  // INITIAL LOAD — runs once on mount; realtime handles updates after that
-  // ---------------------------------------------------------------------------
-
   useEffect(() => {
-    if (hasLoaded.current) return;
     fetchAll();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---------------------------------------------------------------------------
-  // REALTIME — set up once; callbacks reference stable useCallback functions
-  // ---------------------------------------------------------------------------
+    const auditCh = supabase
+      .channel(`admin_audit_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'audit_logs' },
+        fetchAuditTrail
+      )
+      .subscribe((s) => {
+        if (s === 'SUBSCRIBED') setConnectionStatus('connected');
+        if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT')
+          setConnectionStatus('disconnected');
+      });
 
-  useEffect(() => {
     const clientsCh = supabase
-      .channel('admin_clients')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, () => {
-        fetchClients();
-        fetchStats();
-      })
+      .channel(`admin_clients_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'clients' },
+        fetchStats
+      )
       .subscribe();
 
     const paymentsCh = supabase
-      .channel('admin_payments')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
-        fetchPayments();
-        fetchStats();
-      })
+      .channel(`admin_payments_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'payments' },
+        () => {
+          fetchStats();
+          fetchCompanyAnalytics();
+        }
+      )
       .subscribe();
 
     const agentsCh = supabase
-      .channel('admin_agents')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' }, () => {
-        fetchAgents();
-        fetchSalesAnalytics();
-      })
+      .channel(`admin_agents_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'agents' },
+        () => {
+          fetchSalesAgents();
+          fetchSalesTarget();
+        }
+      )
       .subscribe();
 
-    const staffCh = supabase
-      .channel('admin_staff')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'user_profiles' }, () => {
-        fetchStaff();
-        fetchStats();
-      })
-      .subscribe();
-
-    channelsRef.current = [clientsCh, paymentsCh, agentsCh, staffCh];
-
+    channelsRef.current = [auditCh, clientsCh, paymentsCh, agentsCh];
     return () => {
-      channelsRef.current.forEach(ch => supabase.removeChannel(ch));
+      channelsRef.current.forEach((ch) => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ---------------------------------------------------------------------------
-  // RETURN
-  // ---------------------------------------------------------------------------
+  }, [
+    fetchAll,
+    fetchAuditTrail,
+    fetchStats,
+    fetchCompanyAnalytics,
+    fetchSalesAgents,
+    fetchSalesTarget,
+  ]);
 
   return {
     stats,
-    clients,
-    assets,
-    agents,
-    staff,
-    contracts,
-    payments,
-    auditLogs,
-    subscription,
-    companyProfile,
-    salesAnalytics,
+    assetBreakdown,
+    companyAnalytics,
+    auditTrail,
+    salesAgents,
+    salesTarget,
     loading,
     connectionStatus,
     refetch: fetchAll,
+    createSalesAgent,
+    exportCSV,
   };
 };
 

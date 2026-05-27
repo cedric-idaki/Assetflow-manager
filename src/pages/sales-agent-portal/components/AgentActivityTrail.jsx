@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../contexts/AuthContext';
 import Icon from '../../../components/AppIcon';
+
+// Module-level counter ensures a unique channel name on every mount,
+// preventing the "cannot add callbacks after subscribe()" error in StrictMode.
+let _activityChannelSeq = 0;
 
 // ── Action metadata ───────────────────────────────────────────────────────────
 const ACTION_META = {
@@ -94,8 +98,9 @@ const AgentActivityTrail = () => {
   // Realtime subscription
   useEffect(() => {
     if (!user?.id) return;
+    const channelName = `agent_audit_${user.id}_${++_activityChannelSeq}`;
     const ch = supabase
-      .channel(`agent_audit_${user.id}`)
+      .channel(channelName)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',

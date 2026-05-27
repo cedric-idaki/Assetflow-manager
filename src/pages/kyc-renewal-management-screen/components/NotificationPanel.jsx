@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
 
+let _kycNotifChannelSeq = 0;
+
 const notificationIcons = {
   approved:     { icon: 'CheckCircle2', color: '#22c55e' },
   rejected:     { icon: 'XCircle',      color: '#ef4444' },
@@ -71,7 +73,7 @@ const NotificationPanel = () => {
     fetchNotifications();
 
     const channel = supabase
-      .channel('kyc_notif_panel')
+      .channel(`kyc_notif_panel_${++_kycNotifChannelSeq}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs' }, (payload) => {
         const action = payload?.new?.action || '';
         if (['kyc_document_upload', 'kyc_status_change', 'kyc_verification', 'kyc_renewal'].includes(action)) {
