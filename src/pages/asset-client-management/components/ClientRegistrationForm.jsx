@@ -81,7 +81,7 @@ const DirectorRow = ({ director, index, onChange, onRemove, errors }) => {
         </div>
         <div>
           <Label required>Phone Number</Label>
-          <input type="tel" value={director.phone} onChange={e => set('phone', formatKEPhone(e.target.value))}
+          <input type="tel" value={director.phone} onChange={e => set('phone', e.target.value)} onBlur={e => set('phone', formatKEPhone(e.target.value))}
             placeholder="+254 7XX XXX XXX" className={ic(e.phone)} />
           <FieldError msg={e.phone} />
         </div>
@@ -617,13 +617,13 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label required>Primary Phone</Label>
-                  <input type="tel" value={form.phone} onChange={e => set('phone', formatKEPhone(e.target.value))}
+                  <input type="tel" value={form.phone} onChange={e => set('phone', e.target.value)} onBlur={e => set('phone', formatKEPhone(e.target.value))}
                     placeholder="+254 7XX XXX XXX" className={ic(errors.phone)} />
                   <FieldError msg={errors.phone} />
                 </div>
                 <div>
                   <Label>Secondary Phone</Label>
-                  <input type="tel" value={form.alternate_phone} onChange={e => set('alternate_phone', formatKEPhone(e.target.value))}
+                  <input type="tel" value={form.alternate_phone} onChange={e => set('alternate_phone', e.target.value)} onBlur={e => set('alternate_phone', formatKEPhone(e.target.value))}
                     placeholder="+254 7XX XXX XXX" className={ic(false)} />
                 </div>
               </div>
@@ -683,7 +683,7 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
                   </div>
                   <div>
                     <Label>Employer Phone</Label>
-                    <input type="tel" value={form.employer_phone} onChange={e => set('employer_phone', formatKEPhone(e.target.value))}
+                    <input type="tel" value={form.employer_phone} onChange={e => set('employer_phone', e.target.value)} onBlur={e => set('employer_phone', formatKEPhone(e.target.value))}
                       placeholder="+254 XX XXX XXXX" className={ic(false)} />
                   </div>
                   <div className="sm:col-span-2">
@@ -716,7 +716,7 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
                 </div>
                 <div>
                   <Label required>Phone Number</Label>
-                  <input type="tel" value={form.nok_phone} onChange={e => set('nok_phone', formatKEPhone(e.target.value))}
+                  <input type="tel" value={form.nok_phone} onChange={e => set('nok_phone', e.target.value)} onBlur={e => set('nok_phone', formatKEPhone(e.target.value))}
                     placeholder="+254 7XX XXX XXX" className={ic(errors.nok_phone)} />
                   <p className="text-xs text-muted-foreground mt-0.5">Must differ from client phone</p>
                   <FieldError msg={errors.nok_phone} />
@@ -776,7 +776,7 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
                 </div>
                 <div>
                   <Label required>Company Phone</Label>
-                  <input type="tel" value={form.company_phone} onChange={e => set('company_phone', formatKEPhone(e.target.value))}
+                  <input type="tel" value={form.company_phone} onChange={e => set('company_phone', e.target.value)} onBlur={e => set('company_phone', formatKEPhone(e.target.value))}
                     placeholder="+254 XX XXX XXXX" className={ic(errors.company_phone)} />
                   <FieldError msg={errors.company_phone} />
                 </div>
