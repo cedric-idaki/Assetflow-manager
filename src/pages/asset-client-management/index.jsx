@@ -130,6 +130,8 @@ const AssetClientManagement = () => {
         id: c.account_number,
         _id: c.id,
         name: c.full_name,
+        fullName: c.full_name,
+        accountNumber: c.account_number,
         email: c.email,
         phone: c.phone,
         nationalId: c.national_id,
@@ -159,6 +161,7 @@ const AssetClientManagement = () => {
         postal_address:     c.postal_address,
         country:            c.country,
         photo_url:          c.photo_url,
+        photoUrl:           c.photo_url,
         nok_name:           c.nok_name,
         nok_phone:          c.nok_phone,
         nok_relationship:   c.nok_relationship,
@@ -396,6 +399,7 @@ const AssetClientManagement = () => {
           nok_relationship: clientData.nok_relationship || null,
           client_status:    clientData.client_status    || clientData.status || 'active',
           kyc_status:       clientData.kyc_status       || 'incomplete',
+          photo_url:        clientData.photo_url        || null,
         };
         Object.keys(updatePayload).forEach(k => updatePayload[k] === undefined && delete updatePayload[k]);
         const { error: updateErr } = await supabase.from('clients').update(updatePayload).eq('id', editingClient._id);
@@ -430,9 +434,10 @@ const AssetClientManagement = () => {
           company_reg_number: clientData.company_reg_number || null,
           client_type:      clientData.client_type      || null,
           directors:        clientData.directors        || null,
+          photo_url:        clientData.photo_url        || null,
         };
         // Strip keys that may not exist as columns to avoid 400 errors
-        const safeKeys = ['account_number','full_name','email','phone','national_id','passport_number','kra_pin','alternate_phone','date_of_birth','occupation','employer_name','monthly_income','physical_address','postal_address','city','country','nok_name','nok_phone','nok_relationship','client_status','kyc_status','admin_id','created_by','company_name','company_reg_number','client_type','directors'];
+        const safeKeys = ['account_number','full_name','email','phone','national_id','passport_number','kra_pin','alternate_phone','date_of_birth','occupation','employer_name','monthly_income','physical_address','postal_address','city','country','nok_name','nok_phone','nok_relationship','client_status','kyc_status','admin_id','created_by','company_name','company_reg_number','client_type','directors','photo_url'];
         const safePayload = Object.fromEntries(Object.entries(insertPayload).filter(([k]) => safeKeys.includes(k) && insertPayload[k] !== undefined));
         // Insert client record and retrieve the new row's id
         const { data: insertedClient, error: insertErr } = await supabase

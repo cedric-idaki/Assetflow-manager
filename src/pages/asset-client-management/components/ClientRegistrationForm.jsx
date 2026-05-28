@@ -274,9 +274,18 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
     setErrors(p => ({ ...p, photo_url: '' }));
 
     try {
+      // Ensure the bucket exists (creates it if missing — idempotent)
+      await supabase.storage.createBucket('client-photos', {
+        public: true,
+        allowedMimeTypes: ['image/jpeg', 'image/jpg', 'image/png'],
+        fileSizeLimit: 2 * 1024 * 1024,
+      }).catch(() => {}); // ignore error if bucket already exists
+
       // Upload to Supabase Storage bucket 'client-photos'
-      const ext = file.name.split('.').pop();
-      const fileName = `client_${Date.now()}.${ext}`;
+      const ext      = file.name.split('.').pop();
+      // Use client ID in filename when editing so the file overwrites the old one
+      const clientId = editData?._id || editData?.id || Date.now();
+      const fileName = `client_${clientId}.${ext}`;
       const { error: uploadErr } = await supabase.storage
         .from('client-photos')
         .upload(fileName, file, { upsert: true, contentType: file.type });
@@ -294,14 +303,15 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
       setForm(p => ({ ...p, photo_url: publicUrl }));
       setErrors(p => ({ ...p, photo_url: '' }));
     } catch (err) {
-      // Fallback: store base64 locally if storage fails
-      console.warn('[AssetFlow] Storage upload failed, using base64 fallback:', err?.message);
-      const reader2 = new FileReader();
-      reader2.onloadend = () => {
-        setForm(p => ({ ...p, photo_url: reader2.result }));
-        setErrors(p => ({ ...p, photo_url: '' }));
-      };
-      reader2.readAsDataURL(file);
+      // Storage upload failed — show error to user instead of silently falling back
+      console.error('[AssetFlow] Storage upload failed:', err?.message);
+      setErrors(p => ({
+        ...p,
+        photo_url: `Photo upload failed: ${err?.message || 'Storage error'}. Please ensure the "client-photos" bucket exists in Supabase Storage and is set to public.`,
+      }));
+      // Revert preview to nothing so user knows upload didn't succeed
+      setPhotoPreview('');
+      setForm(p => ({ ...p, photo_url: '' }));
     } finally {
       setPhotoUploading(false);
     }
