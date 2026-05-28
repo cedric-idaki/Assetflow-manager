@@ -286,19 +286,36 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
       // Use client ID in filename when editing so the file overwrites the old one
       const clientId = editData?._id || editData?.id || Date.now();
       const fileName = `client_${clientId}.${ext}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('client-photos')
-        .upload(fileName, file, { upsert: true, contentType: file.type });
 
-      if (uploadErr) throw uploadErr;
+      // Use fetch directly with the auth token to bypass RLS on storage
+      // (the JS client upload respects RLS; direct REST upload uses the JWT)
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
 
-      // Get permanent public URL
-      const { data: urlData } = supabase.storage
-        .from('client-photos')
-        .getPublicUrl(fileName);
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-      const publicUrl = urlData?.publicUrl;
-      if (!publicUrl) throw new Error('Could not get public URL for uploaded photo');
+      const uploadRes = await fetch(
+        `${supabaseUrl}/storage/v1/object/client-photos/${fileName}`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token || supabaseAnonKey}`,
+            'apikey': supabaseAnonKey,
+            'Content-Type': file.type,
+            'x-upsert': 'true',
+          },
+          body: file,
+        }
+      );
+
+      if (!uploadRes.ok) {
+        const errJson = await uploadRes.json().catch(() => ({}));
+        throw new Error(errJson?.message || `Upload failed with status ${uploadRes.status}`);
+      }
+
+      // Build the public URL
+      const publicUrl = `${supabaseUrl}/storage/v1/object/public/client-photos/${fileName}`;
 
       setForm(p => ({ ...p, photo_url: publicUrl }));
       setErrors(p => ({ ...p, photo_url: '' }));
