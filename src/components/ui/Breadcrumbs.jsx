@@ -14,6 +14,7 @@ const Breadcrumbs = () => {
     'sales-agent-portal': 'Sales Portal',
     'reports-analytics-center': 'Reports & Analytics',
     'system-administration': 'Administration',
+    'pos': 'POS', 
   };
 
   const getBreadcrumbLabel = (path) => {
