@@ -58,12 +58,20 @@ const ConnDot = ({ status }) => (
   </div>
 );
 
+// Role label colours
+const ROLE_STYLES = {
+  accountant: 'bg-blue-100 text-blue-700',
+  hr:         'bg-purple-100 text-purple-700',
+  manager:    'bg-amber-100 text-amber-700',
+  staff:      'bg-gray-100 text-gray-600',
+};
+
 const SuperAdminDashboard = () => {
   const { userProfile } = useAuth();
   const navigate = useNavigate();
   const {
     stats, assetBreakdown, companyAnalytics,
-    auditTrail, salesAgents, salesTarget,
+    auditTrail, salesAgents, salesTarget, staffUsers,
     loading, connectionStatus, refetch, createSalesAgent, exportCSV,
   } = useSuperAdminDashboard();
 
@@ -87,6 +95,15 @@ const SuperAdminDashboard = () => {
       active_clients: c.activeClients, revenue: c.totalRevenue,
     })),
     'inactive_accounts'
+  );
+
+  const exportStaff = () => exportCSV(
+    staffUsers.map(s => ({
+      name: s.full_name, email: s.email, role: s.role,
+      phone: s.phone || '', status: s.is_active ? 'Active' : 'Inactive',
+      joined: s.created_at ? new Date(s.created_at).toLocaleDateString() : '',
+    })),
+    'staff_users'
   );
 
   const kpiCards = [
@@ -150,11 +167,11 @@ const SuperAdminDashboard = () => {
   ];
 
   const tabs = [
-    { id: 'overview',  label: 'Overview',     icon: 'LayoutDashboard' },
-    { id: 'companies', label: 'Companies',     icon: 'Building2' },
-    { id: 'audit',     label: 'Audit Trail',   icon: 'Shield', badge: auditTrail.filter(a => a.action === 'delete').length },
-    { id: 'agents',    label: 'Sales Agents',  icon: 'Users' },
-    { id: 'staff',     label: 'Staff Users',   icon: 'UserCog' },
+    { id: 'overview',  label: 'Overview',              icon: 'LayoutDashboard' },
+    { id: 'companies', label: 'Companies',              icon: 'Building2' },
+    { id: 'audit',     label: 'Audit Trail',            icon: 'Shield', badge: auditTrail.filter(a => a.action === 'delete').length },
+    { id: 'agents',    label: 'Sales Agents',           icon: 'Users' },
+    { id: 'staff',     label: 'Staff Users',            icon: 'UserCog' },
     { id: 'billing',   label: 'Subscription & Billing', icon: 'CreditCard' },
   ];
 
@@ -299,35 +316,121 @@ const SuperAdminDashboard = () => {
         {activeTab === 'staff' && (
           <div className="space-y-4">
             <div className="bg-card border border-border rounded-xl overflow-hidden">
+
+              {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-border">
                 <div>
                   <h2 className="text-base font-semibold text-foreground">Staff Users</h2>
-                  <p className="text-xs text-muted-foreground">Accountants, HR, Managers and other internal staff</p>
+                  <p className="text-xs text-muted-foreground">
+                    Accountants, HR, Managers and other internal staff
+                    {!loading && staffUsers.length > 0 && (
+                      <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
+                        {staffUsers.length}
+                      </span>
+                    )}
+                  </p>
                 </div>
-                <button
-                  onClick={() => setShowCreateStaff(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
-                  style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
-                >
-                  <Icon name="Plus" size={13} color="currentColor" />
-                  New Staff User
-                </button>
-              </div>
-              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-                <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mb-3">
-                  <Icon name="UserCog" size={24} color="#1A56DB" />
+                <div className="flex items-center gap-2">
+                  {!loading && staffUsers.length > 0 && (
+                    <button
+                      onClick={exportStaff}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+                    >
+                      <Icon name="Download" size={12} color="currentColor" />
+                      Export
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowCreateStaff(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
+                    style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
+                  >
+                    <Icon name="Plus" size={13} color="currentColor" />
+                    New Staff User
+                  </button>
                 </div>
-                <p className="text-sm font-medium text-foreground">Create your first staff account</p>
-                <p className="text-xs text-muted-foreground mt-1 mb-4">Add accountants, HR managers, and other internal users</p>
-                <button
-                  onClick={() => setShowCreateStaff(true)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white"
-                  style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
-                >
-                  <Icon name="Plus" size={14} color="currentColor" />
-                  Create Staff User
-                </button>
               </div>
+
+              {/* Body */}
+              {loading ? (
+                <div className="p-5 space-y-3">
+                  {[1, 2, 3, 4].map(i => (
+                    <div key={i} className="flex items-center gap-3">
+                      <Sk className="h-9 w-9 rounded-full flex-shrink-0" />
+                      <div className="flex-1 space-y-2">
+                        <Sk className="h-3.5 w-40" />
+                        <Sk className="h-3 w-52" />
+                      </div>
+                      <Sk className="h-6 w-20 rounded-full" />
+                      <Sk className="h-6 w-16 rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              ) : staffUsers.length === 0 ? (
+                /* Empty state — only when truly no staff exist */
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mb-3">
+                    <Icon name="UserCog" size={24} color="#1A56DB" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">No staff accounts yet</p>
+                  <p className="text-xs text-muted-foreground mt-1 mb-4">
+                    Add accountants, HR managers, and other internal users
+                  </p>
+                  <button
+                    onClick={() => setShowCreateStaff(true)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white"
+                    style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
+                  >
+                    <Icon name="Plus" size={14} color="currentColor" />
+                    Create Staff User
+                  </button>
+                </div>
+              ) : (
+                /* Populated list */
+                <div className="divide-y divide-border">
+                  {staffUsers.map(staff => (
+                    <div
+                      key={staff.id}
+                      className="flex items-center justify-between px-5 py-3.5 hover:bg-muted/40 transition-colors"
+                    >
+                      {/* Avatar + name/email */}
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                          <Icon name="User" size={16} color="#1A56DB" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">
+                            {staff.full_name || '—'}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">{staff.email}</p>
+                        </div>
+                      </div>
+
+                      {/* Role + status badges */}
+                      <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+                        {staff.phone && (
+                          <span className="hidden sm:inline text-xs text-muted-foreground">
+                            {staff.phone}
+                          </span>
+                        )}
+                        <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium capitalize ${
+                          ROLE_STYLES[staff.role] || 'bg-gray-100 text-gray-600'
+                        }`}>
+                          {staff.role}
+                        </span>
+                        <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
+                          staff.is_active
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-red-100 text-red-600'
+                        }`}>
+                          {staff.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
             </div>
           </div>
         )}
@@ -345,9 +448,7 @@ const SuperAdminDashboard = () => {
         <CreateStaffUserModal
           isOpen={showCreateStaff}
           onClose={() => setShowCreateStaff(false)}
-          onSuccess={(staff) => {
-            refetch();
-          }}
+          onSuccess={() => refetch()}
         />
       )}
     </MainLayout>

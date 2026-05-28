@@ -1,5 +1,5 @@
-import __vite__cjsImport0_react from "/node_modules/.vite/deps/react.js?v=6aaa92c3"; const useState = __vite__cjsImport0_react["useState"]; const useEffect = __vite__cjsImport0_react["useEffect"]; const useCallback = __vite__cjsImport0_react["useCallback"]; const useRef = __vite__cjsImport0_react["useRef"];
-import { supabase } from "/src/lib/supabase.js";
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { supabase } from '/src/lib/supabase.js';
 
 export const useSuperAdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -11,6 +11,7 @@ export const useSuperAdminDashboard = () => {
   const [auditTrail, setAuditTrail]             = useState([]);
   const [salesAgents, setSalesAgents]           = useState([]);
   const [salesTarget, setSalesTarget]           = useState({ target: 0, achieved: 0, percentage: 0 });
+  const [staffUsers, setStaffUsers]             = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const channelsRef = useRef([]);
@@ -50,7 +51,7 @@ export const useSuperAdminDashboard = () => {
       });
       setAssetBreakdown(Object.values(types));
     } catch (err) {
-      console.error('useSuperAdminDashboard error:', err.message);
+      console.error('fetchAssetBreakdown error:', err.message);
     }
   }, []);
 
@@ -70,7 +71,7 @@ export const useSuperAdminDashboard = () => {
       });
       setCompanyAnalytics(analytics);
     } catch (err) {
-      console.error('useSuperAdminDashboard error:', err.message);
+      console.error('fetchCompanyAnalytics error:', err.message);
     }
   }, []);
 
@@ -82,28 +83,21 @@ export const useSuperAdminDashboard = () => {
         .in('action', ['create', 'update', 'delete', 'login', 'logout', 'approve', 'reject', 'kyc_status_change'])
         .order('created_at', { ascending: false })
         .limit(50);
-      
-      // Fetch user data separately if needed
+
       if (data && data.length > 0) {
         const userIds = [...new Set(data.map(log => log.user_id).filter(Boolean))];
         const { data: users } = await supabase
           .from('user_profiles')
           .select('id, full_name, role, email')
           .in('id', userIds);
-        
         const userMap = {};
         (users || []).forEach(u => { userMap[u.id] = u; });
-        
-        const enrichedData = data.map(log => ({
-          ...log,
-          user: userMap[log.user_id] || null,
-        }));
-        setAuditTrail(enrichedData);
+        setAuditTrail(data.map(log => ({ ...log, user: userMap[log.user_id] || null })));
       } else {
         setAuditTrail(data || []);
       }
     } catch (err) {
-      console.error('useSuperAdminDashboard error:', err.message);
+      console.error('fetchAuditTrail error:', err.message);
     }
   }, []);
 
@@ -128,16 +122,25 @@ export const useSuperAdminDashboard = () => {
       const percentage = target > 0 ? Math.min(100, Math.round((achieved / target) * 100)) : 0;
       setSalesTarget({ target, achieved, percentage });
     } catch (err) {
-      console.error('useSuperAdminDashboard error:', err.message);
+      console.error('fetchSalesTarget error:', err.message);
+    }
+  }, []);
+
+  const fetchStaffUsers = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, email, role, phone, is_active, created_at')
+        .in('role', ['accountant', 'hr', 'manager', 'staff','it_support'])
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setStaffUsers(data || []);
+    } catch (err) {
+      console.error('fetchStaffUsers error:', err.message);
     }
   }, []);
 
   const createSalesAgent = useCallback(async (agentData) => {
-    // ── Create auth user via a one-shot isolated Supabase client ────────────
-    // Using the main supabase client's signUp() auto-signs-in the new user,
-    // which kicks the admin out. Instead we POST directly to the Auth REST API
-    // using the anon key — this creates the user without touching the browser
-    // session at all.
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -146,7 +149,6 @@ export const useSuperAdminDashboard = () => {
       headers: {
         'Content-Type': 'application/json',
         'apikey': supabaseAnonKey,
-        // No Authorization header — anon signup, no session involved
       },
       body: JSON.stringify({
         email: agentData.email,
@@ -156,7 +158,6 @@ export const useSuperAdminDashboard = () => {
     });
 
     const signUpJson = await signUpRes.json();
-
     if (!signUpRes.ok) {
       throw new Error(signUpJson?.msg || signUpJson?.message || 'Failed to create agent auth account.');
     }
@@ -164,29 +165,20 @@ export const useSuperAdminDashboard = () => {
     const userId = signUpJson?.id ?? signUpJson?.user?.id;
     if (!userId) throw new Error('Agent creation failed — no user ID returned.');
 
-    // ── Upsert user profile (runs as admin — session untouched) ─────────────
     const { error: profileError } = await supabase.from('user_profiles').upsert({
-      id:        userId,
-      email:     agentData.email,
-      full_name: agentData.fullName,
-      role:      'sales_agent',
-      phone:     agentData.phone || '',
-      is_active: true,
+      id: userId, email: agentData.email, full_name: agentData.fullName,
+      role: 'sales_agent', phone: agentData.phone || '', is_active: true,
     });
     if (profileError) console.error('Profile upsert error:', profileError.message);
 
-    // ── Insert into agents table ─────────────────────────────────────────────
     const { data: agent, error: agentError } = await supabase
       .from('agents')
       .insert({
-        user_id:         userId,
-        agent_code:      `AGT-${Date.now()}`,
-        full_name:       agentData.fullName,
-        email:           agentData.email,
-        phone:           agentData.phone,
-        region:          agentData.region,
+        user_id: userId, agent_code: `AGT-${Date.now()}`,
+        full_name: agentData.fullName, email: agentData.email,
+        phone: agentData.phone, region: agentData.region,
         commission_rate: agentData.commissionRate || 5,
-        target_amount:   agentData.targetAmount || 0,
+        target_amount: agentData.targetAmount || 0,
       })
       .select()
       .maybeSingle();
@@ -213,9 +205,17 @@ export const useSuperAdminDashboard = () => {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchStats(), fetchAssetBreakdown(), fetchCompanyAnalytics(), fetchAuditTrail(), fetchSalesAgents(), fetchSalesTarget()]);
+    await Promise.all([
+      fetchStats(),
+      fetchAssetBreakdown(),
+      fetchCompanyAnalytics(),
+      fetchAuditTrail(),
+      fetchSalesAgents(),
+      fetchSalesTarget(),
+      fetchStaffUsers(),
+    ]);
     setLoading(false);
-  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget]);
+  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers]);
 
   useEffect(() => {
     fetchAll();
@@ -232,18 +232,36 @@ export const useSuperAdminDashboard = () => {
       .subscribe();
 
     const paymentsCh = supabase.channel(`sa_payments_${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => { fetchStats(); fetchCompanyAnalytics(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
+        fetchStats();
+        fetchCompanyAnalytics();
+      })
       .subscribe();
 
     const agentsCh = supabase.channel(`sa_agents_${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' }, () => { fetchSalesAgents(); fetchSalesTarget(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' }, () => {
+        fetchSalesAgents();
+        fetchSalesTarget();
+      })
       .subscribe();
 
-    channelsRef.current = [auditCh, clientsCh, paymentsCh, agentsCh];
-    return () => { channelsRef.current.forEach(ch => supabase.removeChannel(ch)); channelsRef.current = []; };
-  }, [fetchAll, fetchAuditTrail, fetchStats, fetchCompanyAnalytics, fetchSalesAgents, fetchSalesTarget]);
+    const staffCh = supabase.channel(`sa_staff_${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_profiles' }, fetchStaffUsers)
+      .subscribe();
 
-  return { stats, assetBreakdown, companyAnalytics, auditTrail, salesAgents, salesTarget, loading, connectionStatus, refetch: fetchAll, createSalesAgent, exportCSV };
+    channelsRef.current = [auditCh, clientsCh, paymentsCh, agentsCh, staffCh];
+    return () => {
+      channelsRef.current.forEach(ch => supabase.removeChannel(ch));
+      channelsRef.current = [];
+    };
+  }, [fetchAll, fetchAuditTrail, fetchStats, fetchCompanyAnalytics, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers]);
+
+  return {
+    stats, assetBreakdown, companyAnalytics, auditTrail,
+    salesAgents, salesTarget, staffUsers,
+    loading, connectionStatus,
+    refetch: fetchAll, createSalesAgent, exportCSV,
+  };
 };
 
 export default useSuperAdminDashboard;
