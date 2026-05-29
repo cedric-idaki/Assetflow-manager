@@ -45,6 +45,23 @@ const ASSET_TYPES = [
 
 const steps = ['Account', 'Company', 'Plan', 'Payment'];
 
+// ── System colors (matching LoginPage) ──────────────────────────────
+const C = {
+  primary:     '#34c1dd',
+  primaryDark: '#1da8c5',
+  navy:        '#0c2037',
+  navyMid:     '#1a3a5c',
+  bg:          '#f5f8fa',
+  card:        '#ffffff',
+  border:      '#d0dce6',
+  inputBg:     '#f5f8fa',
+  text:        '#0c2037',
+  textMuted:   '#5a7185',
+  error:       '#b91c1c',
+  errorBg:     '#fef2f2',
+  errorBorder: '#fecaca',
+};
+
 const AdminRegistration = () => {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
@@ -231,49 +248,71 @@ const AdminRegistration = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="min-h-screen flex" style={{ background: C.card }}>
       {/* Left branding panel */}
       <div
-        className="hidden lg:flex lg:w-2/5 flex-col justify-between p-12 relative overflow-hidden"
-        style={{ background: 'linear-gradient(160deg, #1E429F 0%, #1A56DB 50%, #1C3FAA 100%)' }}
+        className="hidden lg:flex lg:w-[52%] flex-col justify-between p-12 relative overflow-hidden"
+        style={{ background: `linear-gradient(160deg, ${C.navy} 0%, ${C.navyMid} 60%, ${C.navy} 100%)` }}
       >
+        {/* Top accent line */}
         <div className="absolute top-0 left-0 right-0 h-1"
-          style={{ background: 'linear-gradient(90deg, #FF6B35, #FF8C5A, #FF6B35)' }}
+          style={{ background: `linear-gradient(90deg, ${C.primary}, #5dd3e8, ${C.primary})` }}
         />
-        <div className="relative z-10">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex items-center justify-center w-12 h-12 rounded-lg"
-              style={{ background: 'linear-gradient(135deg, #FF6B35, #E85D2F)' }}
-            >
-              <Icon name="Building2" size={24} color="#0A1628" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Merriweather, serif' }}>AssetFlow</h1>
-              <p className="text-xs" style={{ color: '#FF8C5A' }}>Business Management Platform</p>
-            </div>
+
+        {/* Decorative circles */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-16 right-16 w-72 h-72 rounded-full"
+            style={{ border: '1.5px solid rgba(52,193,221,0.08)' }} />
+          <div className="absolute top-32 right-32 w-44 h-44 rounded-full"
+            style={{ border: '1px solid rgba(52,193,221,0.06)' }} />
+          <div className="absolute bottom-32 left-8 w-56 h-56 rounded-full"
+            style={{ border: '1px solid rgba(52,193,221,0.06)' }} />
+          <div className="absolute bottom-16 left-24 w-32 h-32 rounded-full"
+            style={{ border: '1px solid rgba(52,193,221,0.04)' }} />
+          {/* Glow blob */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(52,193,221,0.06) 0%, transparent 70%)' }} />
+        </div>
+
+        {/* Brand */}
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+            style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}>
+            <Icon name="Building2" size={24} color={C.navy} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-white">AssetFlow</h1>
+            <p className="text-xs" style={{ color: C.primary }}>Business Management Platform</p>
           </div>
         </div>
 
+        {/* Headline */}
         <div className="relative z-10 flex-1 flex flex-col justify-center">
-          <div className="w-12 h-0.5 mb-6" style={{ background: '#FF6B35' }} />
-          <h2 className="text-3xl font-bold text-white leading-tight mb-4" style={{ fontFamily: 'Merriweather, serif' }}>
+          <div className="w-12 h-0.5 mb-6" style={{ background: C.primary }} />
+          <h2 className="text-4xl font-bold text-white leading-tight mb-4">
             Grow Your Business with AssetFlow
           </h2>
-          <p className="text-base leading-relaxed mb-8" style={{ color: '#A8BDD4' }}>
+          <p className="text-base leading-relaxed mb-10" style={{ color: '#7a9cb8' }}>
             Manage your assets, clients, and sales team all in one place.
           </p>
+
           {/* Steps indicator */}
           <div className="space-y-3">
             {steps.map((step, i) => (
               <div key={step} className="flex items-center gap-3">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
-                  i < currentStep ? 'bg-emerald-500 text-white' :
-                  i === currentStep ? 'bg-white text-blue-900' :
-                  'bg-white/20 text-white/50'
-                }`}>
+                  i < currentStep ? 'text-white' : 'text-white'
+                }`}
+                  style={{
+                    background: i < currentStep 
+                      ? '#10b981'
+                      : i === currentStep
+                      ? C.primary
+                      : 'rgba(52,193,221,0.15)',
+                  }}>
                   {i < currentStep ? <Icon name="Check" size={14} color="white" /> : i + 1}
                 </div>
-                <span className={`text-sm font-medium ${i <= currentStep ? 'text-white' : 'text-white/40'}`}>
+                <span className="text-sm font-medium" style={{ color: i <= currentStep ? 'white' : 'rgba(255,255,255,0.4)' }}>
                   {step}
                 </span>
               </div>
@@ -281,55 +320,57 @@ const AdminRegistration = () => {
           </div>
         </div>
 
+        {/* Footer */}
         <div className="relative z-10">
-          <p className="text-xs" style={{ color: '#5A7A9A' }}>
+          <p className="text-xs" style={{ color: '#3a5a7a' }}>
             © {new Date().getFullYear()} AssetFlow. All rights reserved.
           </p>
         </div>
       </div>
 
       {/* Right form panel */}
-      <div className="flex-1 flex flex-col justify-center items-center p-8 overflow-y-auto">
+      <div className="flex-1 flex flex-col justify-center items-center p-8 overflow-y-auto" style={{ background: C.card }}>
         <div className="w-full max-w-lg">
 
           {/* Mobile logo */}
           <div className="lg:hidden mb-8 text-center">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-lg mb-2"
-              style={{ background: 'linear-gradient(135deg, #1B3A6B, #2C5282)' }}
-            >
+              style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})` }}>
               <Icon name="Building2" size={22} color="white" />
             </div>
-            <h1 className="text-xl font-bold text-foreground">AssetFlow</h1>
+            <h1 className="text-xl font-bold" style={{ color: C.navy }}>AssetFlow</h1>
           </div>
 
           {/* Step header */}
           <div className="mb-6">
-            <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-1">
+            <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: C.primary }}>
               Step {currentStep + 1} of {steps.length}
             </p>
-            <h2 className="text-2xl font-bold text-foreground">
+            <h2 className="text-2xl font-bold mb-3" style={{ color: C.navy }}>
               {currentStep === 0 && 'Create Your Account'}
               {currentStep === 1 && 'Company Details'}
               {currentStep === 2 && 'Choose Your Plan'}
               {currentStep === 3 && 'Complete Payment'}
             </h2>
-            <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
+            <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: C.border }}>
               <div
                 className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${((currentStep + 1) / steps.length) * 100}%`, background: '#1A56DB' }}
+                style={{ width: `${((currentStep + 1) / steps.length) * 100}%`, background: `linear-gradient(90deg, ${C.primary}, ${C.primaryDark})` }}
               />
             </div>
           </div>
 
           {/* Error / Success */}
           {error && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm mb-4">
+            <div className="flex items-center gap-2 p-3 rounded-lg text-sm mb-4"
+              style={{ background: C.errorBg, border: `1px solid ${C.errorBorder}`, color: C.error }}>
               <Icon name="AlertCircle" size={15} color="currentColor" />
               {error}
             </div>
           )}
           {success && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm mb-4">
+            <div className="flex items-center gap-2 p-3 rounded-lg text-sm mb-4"
+              style={{ background: '#f0fdf4', border: '1px solid #86efac', color: '#15803d' }}>
               <Icon name="CheckCircle" size={15} color="currentColor" />
               {success}
             </div>
@@ -346,13 +387,26 @@ const AdminRegistration = () => {
                 { label: 'Confirm Password *', key: 'confirmPassword', type: 'password', placeholder: 'Repeat password' },
               ].map(field => (
                 <div key={field.key}>
-                  <label className="block text-xs font-semibold text-muted-foreground mb-1">{field.label}</label>
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>{field.label}</label>
                   <input
                     type={field.type}
                     value={account[field.key]}
                     onChange={e => setAcc(field.key, field.key === 'phone' ? formatKEPhone(e.target.value) : e.target.value)}
                     placeholder={field.placeholder}
-                    className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
+                    className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                    style={{
+                      border: `1.5px solid ${C.border}`,
+                      color: C.text,
+                      background: C.inputBg,
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = C.primary;
+                      e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = C.border;
+                      e.target.style.boxShadow = 'none';
+                    }}
                   />
                 </div>
               ))}
@@ -370,19 +424,32 @@ const AdminRegistration = () => {
                 { label: 'City', key: 'city', placeholder: 'Nairobi' },
               ].map(field => (
                 <div key={field.key}>
-                  <label className="block text-xs font-semibold text-muted-foreground mb-1">{field.label}</label>
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>{field.label}</label>
                   <input
                     type="text"
                     value={company[field.key]}
                     onChange={e => setCo(field.key, e.target.value)}
                     placeholder={field.placeholder}
-                    className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
+                    className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                    style={{
+                      border: `1.5px solid ${C.border}`,
+                      color: C.text,
+                      background: C.inputBg,
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = C.primary;
+                      e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = C.border;
+                      e.target.style.boxShadow = 'none';
+                    }}
                   />
                 </div>
               ))}
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground mb-2">
+                <label className="block text-xs font-semibold mb-2" style={{ color: C.navy }}>
                   Asset Types You Deal In *
                 </label>
                 <div className="grid grid-cols-2 gap-2">
@@ -391,15 +458,19 @@ const AdminRegistration = () => {
                       key={type}
                       type="button"
                       onClick={() => toggleAssetType(type)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-all text-left ${
-                        company.assetTypes.includes(type)
-                          ? 'bg-primary/10 border-primary text-primary font-medium'
-                          : 'bg-background border-border text-muted-foreground hover:border-primary/50'
-                      }`}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-all text-left"
+                      style={{
+                        background: company.assetTypes.includes(type) ? 'rgba(52,193,221,0.1)' : C.inputBg,
+                        border: `1px solid ${company.assetTypes.includes(type) ? C.primary : C.border}`,
+                        color: company.assetTypes.includes(type) ? C.primary : C.text,
+                        fontWeight: company.assetTypes.includes(type) ? '500' : '400',
+                      }}
                     >
-                      <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${
-                        company.assetTypes.includes(type) ? 'bg-primary' : 'border border-border'
-                      }`}>
+                      <div className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                        style={{
+                          background: company.assetTypes.includes(type) ? C.primary : 'transparent',
+                          border: company.assetTypes.includes(type) ? 'none' : `1px solid ${C.border}`,
+                        }}>
                         {company.assetTypes.includes(type) && (
                           <Icon name="Check" size={10} color="white" />
                         )}
@@ -420,41 +491,39 @@ const AdminRegistration = () => {
                   key={plan.id}
                   type="button"
                   onClick={() => setSelectedPlan(plan.id)}
-                  className={`w-full p-4 rounded-xl border-2 text-left transition-all relative ${
-                    selectedPlan === plan.id
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border bg-card hover:border-primary/40'
-                  }`}
+                  className="w-full p-4 rounded-xl border-2 text-left transition-all relative"
+                  style={{
+                    borderColor: selectedPlan === plan.id ? C.primary : C.border,
+                    background: selectedPlan === plan.id ? 'rgba(52,193,221,0.05)' : C.card,
+                  }}
                 >
                   {plan.popular && (
                     <span className="absolute top-3 right-3 px-2 py-0.5 rounded-full text-xs font-bold"
-                      style={{ background: '#1A56DB', color: 'white' }}
-                    >
+                      style={{ background: C.primary, color: C.navy }}>
                       Popular
                     </span>
                   )}
                   <div className="flex items-center gap-3 mb-2">
                     <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm"
-                      style={{ background: plan.color, color: '#fff' }}
-                    >
+                      style={{ background: plan.color, color: '#fff' }}>
                       {plan.name[0]}
                     </div>
                     <div>
-                      <p className="font-bold text-foreground">{plan.name}</p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="font-bold" style={{ color: C.navy }}>{plan.name}</p>
+                      <p className="text-xs" style={{ color: C.textMuted }}>
                         {plan.maxUsers ? `Up to ${plan.maxUsers} users` : 'Unlimited users'}
                       </p>
                     </div>
                     <div className="ml-auto text-right">
-                      <p className="text-lg font-bold text-foreground">
+                      <p className="text-lg font-bold" style={{ color: C.navy }}>
                         KES {plan.price.toLocaleString()}
                       </p>
-                      <p className="text-xs text-muted-foreground">per month</p>
+                      <p className="text-xs" style={{ color: C.textMuted }}>per month</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-1 mt-2">
                     {plan.features.map(f => (
-                      <div key={f} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div key={f} className="flex items-center gap-1.5 text-xs" style={{ color: C.textMuted }}>
                         <Icon name="Check" size={11} color="#10b981" />
                         {f}
                       </div>
@@ -462,7 +531,7 @@ const AdminRegistration = () => {
                   </div>
                   {selectedPlan === plan.id && (
                     <div className="absolute top-3 left-3">
-                      <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: C.primary }}>
                         <Icon name="Check" size={11} color="white" />
                       </div>
                     </div>
@@ -479,20 +548,20 @@ const AdminRegistration = () => {
               {selectedPlan && (() => {
                 const plan = PLANS.find(p => p.id === selectedPlan);
                 return (
-                  <div className="p-4 rounded-xl bg-muted/50 border border-border">
+                  <div className="p-4 rounded-xl" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-xs text-muted-foreground">Selected Plan</p>
-                        <p className="font-bold text-foreground">{plan.name} Plan</p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs" style={{ color: C.textMuted }}>Selected Plan</p>
+                        <p className="font-bold" style={{ color: C.navy }}>{plan.name} Plan</p>
+                        <p className="text-xs" style={{ color: C.textMuted }}>
                           {plan.maxUsers ? `Up to ${plan.maxUsers} users` : 'Unlimited users'}
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-2xl font-bold text-foreground">
+                        <p className="text-2xl font-bold" style={{ color: C.navy }}>
                           KES {plan.price.toLocaleString()}
                         </p>
-                        <p className="text-xs text-muted-foreground">per month</p>
+                        <p className="text-xs" style={{ color: C.textMuted }}>per month</p>
                       </div>
                     </div>
                   </div>
@@ -501,22 +570,35 @@ const AdminRegistration = () => {
 
               {paymentStatus === 'idle' && (
                 <div>
-                  <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>
                     Mpesa Phone Number *
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <Icon name="Phone" size={15} color="var(--color-muted-foreground)" />
+                      <Icon name="Phone" size={15} color={C.textMuted} />
                     </div>
                     <input
                       type="tel"
                       value={mpesaPhone}
                       onChange={e => setMpesaPhone(e.target.value)}
                       placeholder="+254 7XX XXX XXX"
-                      className="w-full pl-9 pr-3 py-2.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
+                      className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                      style={{
+                        border: `1.5px solid ${C.border}`,
+                        color: C.text,
+                        background: C.inputBg,
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = C.primary;
+                        e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = C.border;
+                        e.target.style.boxShadow = 'none';
+                      }}
                     />
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs mt-1" style={{ color: C.textMuted }}>
                     You will receive an STK push on this number to confirm payment
                   </p>
                 </div>
@@ -524,30 +606,31 @@ const AdminRegistration = () => {
 
               {paymentStatus === 'stk_sent' && (
                 <div className="text-center py-6 space-y-4">
-                  <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mx-auto">
-                    <Icon name="Smartphone" size={28} color="#059669" />
+                  <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto"
+                    style={{ background: 'rgba(52,193,221,0.12)' }}>
+                    <Icon name="Smartphone" size={28} color={C.primary} />
                   </div>
                   <div>
-                    <p className="font-bold text-foreground text-lg">Check your phone!</p>
-                    <p className="text-sm text-muted-foreground mt-1">
+                    <p className="font-bold text-lg" style={{ color: C.navy }}>Check your phone!</p>
+                    <p className="text-sm mt-1" style={{ color: C.textMuted }}>
                       An Mpesa STK push has been sent to
                     </p>
-                    <p className="font-bold text-primary">{mpesaPhone}</p>
-                    <p className="text-sm text-muted-foreground mt-2">
+                    <p className="font-bold" style={{ color: C.primary }}>{mpesaPhone}</p>
+                    <p className="text-sm mt-2" style={{ color: C.textMuted }}>
                       Enter your Mpesa PIN to complete the payment of{' '}
-                      <span className="font-bold text-foreground">
+                      <span className="font-bold" style={{ color: C.navy }}>
                         KES {PLANS.find(p => p.id === selectedPlan)?.price.toLocaleString()}
                       </span>
                     </p>
                   </div>
                   <button
                     onClick={() => navigate('/login')}
-                    className="w-full py-3 rounded-xl text-sm font-bold text-white"
-                    style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
+                    className="w-full py-3 rounded-xl text-sm font-bold text-white transition-all"
+                    style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
                   >
                     I have completed payment — Go to Login
                   </button>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs" style={{ color: C.textMuted }}>
                     Your account will be activated within a few minutes after payment confirmation
                   </p>
                 </div>
@@ -562,7 +645,12 @@ const AdminRegistration = () => {
                 <button
                   onClick={handleBack}
                   disabled={loading}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all"
+                  style={{
+                    border: `1px solid ${C.border}`,
+                    color: C.textMuted,
+                    background: C.card,
+                  }}
                 >
                   <Icon name="ArrowLeft" size={15} color="currentColor" />
                   Back
@@ -570,7 +658,8 @@ const AdminRegistration = () => {
               ) : (
                 <button
                   onClick={() => navigate('/login')}
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  className="text-sm transition-colors"
+                  style={{ color: C.textMuted }}
                 >
                   Already have an account? Sign in
                 </button>
@@ -579,8 +668,8 @@ const AdminRegistration = () => {
               <button
                 onClick={handleNext}
                 disabled={loading}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold text-white transition-all disabled:opacity-60 ml-auto"
-                style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold text-white transition-all disabled:opacity-60 ml-auto"
+                style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
               >
                 {loading ? (
                   <>
@@ -611,3 +700,4 @@ const AdminRegistration = () => {
 };
 
 export default AdminRegistration;
+
