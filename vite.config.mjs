@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
+  appType: 'spa',
   test: {
     environment: 'jsdom',
     globals: true,
@@ -28,6 +29,7 @@ export default defineConfig({
     port: "4028",
     host: "0.0.0.0",
     strictPort: true,
+    historyApiFallback: true,
     allowedHosts: ['.amazonaws.com', '.builtwithrocket.new']
   }
 });

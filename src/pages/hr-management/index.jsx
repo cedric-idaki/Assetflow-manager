@@ -110,7 +110,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         // New employee: must go through the Edge Function to satisfy user_profiles_id_fkey.
         // A strong random password is auto-generated — HR never sees it and the employee
         // receives no credentials. This is a payroll record, not a login account.
-        const autoPassword = crypto.randomUUID() + crypto.randomUUID();
+        const autoPassword = `${Date.now()}-${Math.random().toString(36).substring(2)}-${Math.random().toString(36).substring(2)}`;
 
         const { data: sessionData } = await supabase.auth.getSession();
         const accessToken = sessionData?.session?.access_token;
