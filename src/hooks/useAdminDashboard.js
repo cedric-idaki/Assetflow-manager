@@ -317,25 +317,33 @@ export const useAdminDashboard = () => {
   }, [fetchStaff]);
 
   // ── Action: upload contract ──────────────────────────────────────────────────
-  const uploadContract = useCallback(async (formData, file) => {
-    const adminId  = await getAdminId();
-    const filePath = `contracts/${adminId}/${Date.now()}_${file.name}`;
+const uploadContract = useCallback(async (formData, file) => {
+  const adminId   = await getAdminId();
+  const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath  = `${adminId}/${Date.now()}_${cleanName}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from('documents').upload(filePath, file);
-    if (uploadError) throw uploadError;
-
-    const { data: { publicUrl } } = supabase.storage.from('documents').getPublicUrl(filePath);
-
-    const { error } = await supabase.from('company_contracts').insert({
-      admin_id: adminId, name: formData.name, type: formData.type,
-      client_id: formData.clientId || null,
-      file_url: publicUrl, is_template: formData.isTemplate || false,
+  const { error: uploadError } = await supabase.storage
+    .from('contracts').upload(filePath, file, {
+      cacheControl: '3600',
+      upsert: true,
+      contentType: file.type || 'application/pdf',
     });
-    if (error) throw error;
+  if (uploadError) throw uploadError;
 
-    await fetchContracts();
-  }, [fetchContracts]);
+  const { data: { publicUrl } } = supabase.storage.from('contracts').getPublicUrl(filePath);
+
+  const { error } = await supabase.from('company_contracts').insert({
+    admin_id: adminId,
+    contract_name: formData.name,
+    contract_type: formData.type,
+    client_id: formData.clientId || null,
+    file_url: publicUrl,
+    is_template: formData.isTemplate || false,
+  });
+  if (error) throw error;
+
+  await fetchContracts();
+}, [fetchContracts]);
 
   // ── Export CSV ───────────────────────────────────────────────────────────────
   const exportCSV = useCallback((data, filename) => {
