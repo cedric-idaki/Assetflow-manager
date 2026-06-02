@@ -232,7 +232,7 @@ const Header = function (props) {
       borderBottom:    `1px solid ${B.border}`,
       position:        'sticky',
       top:             0,
-      zIndex:          100,
+      
     }}>
 
       {/* ── Left: mobile hamburger + brand ── */}
