@@ -10,21 +10,11 @@ const STAFF_ROLES = [
   { value: 'manager',             label: 'Manager',             color: 'bg-teal-100 text-teal-700' },
   { value: 'finance',             label: 'Finance',             color: 'bg-green-100 text-green-700' },
   { value: 'operations',          label: 'Operations',          color: 'bg-yellow-100 text-yellow-700' },
-  { value: 'hr',                  label: 'HR',                  color: 'bg-pink-100 text-pink-700' },
   { value: 'sales_agent',         label: 'Sales Agent',         color: 'bg-emerald-100 text-emerald-700' },
 ];
 
-// HR employees are stored with the 'staff' enum role (no login portal). Display
-// them as "Employee" here so the label matches the HR Management screen.
-const DISPLAY_ONLY_ROLES = {
-  staff:      { label: 'Employee',   color: 'bg-slate-100 text-slate-700' },
-  it_support: { label: 'IT Support', color: 'bg-gray-100 text-gray-600' },
-};
-
-const getRoleStyle = (role) =>
-  STAFF_ROLES.find(r => r.value === role)?.color || DISPLAY_ONLY_ROLES[role]?.color || 'bg-gray-100 text-gray-600';
-const getRoleLabel = (role) =>
-  STAFF_ROLES.find(r => r.value === role)?.label || DISPLAY_ONLY_ROLES[role]?.label || (role || '').replace(/_/g,' ');
+const getRoleStyle = (role) => STAFF_ROLES.find(r => r.value === role)?.color || 'bg-gray-100 text-gray-600';
+const getRoleLabel = (role) => STAFF_ROLES.find(r => r.value === role)?.label || (role || '').replace(/_/g,' ');
 
 const Avatar = ({ name }) => {
   const initials = (name || 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
@@ -48,9 +38,7 @@ const Toast = ({ message, type, onClose }) => (
 
 // ── InviteModal defined OUTSIDE StaffTab to prevent focus loss ────────────────
 const InviteModal = ({ onClose, onInvite, subscription, currentStaffCount }) => {
-  // Prefer the subscription's own seat count (reflects purchased extra users)
-  // over the catalog plan's base value.
-  const maxUsers  = subscription?.max_users ?? subscription?.plan?.max_users ?? null;
+  const maxUsers  = subscription?.plan?.max_users || subscription?.max_users || null;
   const slotsLeft = maxUsers ? maxUsers - currentStaffCount : null;
 
   const [form, setForm] = useState({
@@ -125,13 +113,13 @@ const InviteModal = ({ onClose, onInvite, subscription, currentStaffCount }) => 
           {slotsLeft !== null && slotsLeft <= 2 && slotsLeft > 0 && (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-yellow-50 border border-yellow-200 text-yellow-800 text-xs">
               <Icon name="AlertTriangle" size={14} color="#ca8a04" />
-              Only {slotsLeft} user slot{slotsLeft !== 1 ? 's' : ''} left on your plan. Upgrade to add more (KES 360 per extra user).
+              Only {slotsLeft} staff slot{slotsLeft !== 1 ? 's' : ''} left on your plan. Consider upgrading.
             </div>
           )}
           {slotsLeft !== null && slotsLeft <= 0 && (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
               <Icon name="XCircle" size={14} color="#dc2626" />
-              User limit reached. Upgrade your plan to add more users — extra users are KES 360 each.
+              Staff limit reached. Please upgrade your subscription to add more users.
             </div>
           )}
           {errors.submit && (
@@ -269,13 +257,8 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
   const [toast, setToast]               = useState(null);
   const [confirmToggle, setConfirmToggle] = useState(null);
 
-  const maxUsers     = subscription?.max_users ?? subscription?.plan?.max_users ?? null;
-  // Shown in this tab: portal staff + HR employees. Clients live in the Clients tab.
-  const members      = staff.filter(s => s.role !== 'client');
-  // Only portal-staff accounts consume a plan seat. HR employees (role 'staff',
-  // no login portal) and clients are unlimited — they do NOT count toward the limit.
-  const consumesSeat = (s) => s.role !== 'client' && s.role !== 'staff';
-  const activeCount  = members.filter(s => s.is_active !== false && consumesSeat(s)).length;
+  const maxUsers     = subscription?.plan?.max_users || subscription?.max_users || null;
+  const activeCount  = staff.filter(s => s.is_active !== false).length;
   const slotsLeft    = maxUsers ? maxUsers - activeCount : null;
   const usagePercent = maxUsers ? Math.min(100, Math.round((activeCount / maxUsers) * 100)) : 0;
 
@@ -301,7 +284,7 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
     }
   };
 
-  const filtered = members.filter(s => {
+  const filtered = staff.filter(s => {
     const q = search.toLowerCase();
     const matchSearch = !search ||
       s.full_name?.toLowerCase().includes(q) ||
@@ -347,8 +330,7 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
           </div>
           {slotsLeft !== null && slotsLeft <= 0 && (
             <p className="text-xs text-red-600 mt-1.5 font-medium">
-              User limit reached. Upgrade your plan to add more users — extra users are KES 360 each.
-              Employees without a login portal are unlimited.
+              Staff limit reached. Contact your super admin to upgrade your plan.
             </p>
           )}
         </div>
@@ -394,10 +376,10 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total Staff', value: members.length,                           icon: 'Users',     bg: 'bg-blue-50',    ic: '#3b82f6' },
-          { label: 'Active',      value: members.filter(s => isActive(s)).length,  icon: 'UserCheck', bg: 'bg-emerald-50', ic: '#10b981' },
-          { label: 'Inactive',    value: members.filter(s => !isActive(s)).length, icon: 'UserX',     bg: 'bg-red-50',     ic: '#ef4444' },
-          { label: 'Roles',       value: [...new Set(members.map(s => s.role))].length, icon: 'Shield', bg: 'bg-purple-50', ic: '#8b5cf6' },
+          { label: 'Total Staff', value: staff.length,                           icon: 'Users',     bg: 'bg-blue-50',    ic: '#3b82f6' },
+          { label: 'Active',      value: staff.filter(s => isActive(s)).length,  icon: 'UserCheck', bg: 'bg-emerald-50', ic: '#10b981' },
+          { label: 'Inactive',    value: staff.filter(s => !isActive(s)).length, icon: 'UserX',     bg: 'bg-red-50',     ic: '#ef4444' },
+          { label: 'Roles',       value: [...new Set(staff.map(s => s.role))].length, icon: 'Shield', bg: 'bg-purple-50', ic: '#8b5cf6' },
         ].map((s, i) => (
           <div key={i} className="bg-card border border-border rounded-xl p-5 flex items-center gap-3">
             <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${s.bg}`}>
@@ -523,7 +505,7 @@ const StaffTab = ({ staff = [], subscription, onInvite, onToggleActive, onExport
             </div>
 
             <div className="px-5 py-3 border-t border-border text-xs text-muted-foreground">
-              Showing {filtered.length} of {members.length} staff members
+              Showing {filtered.length} of {staff.length} staff members
             </div>
           </>
         )}

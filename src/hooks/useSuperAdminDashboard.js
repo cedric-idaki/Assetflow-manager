@@ -12,9 +12,16 @@ export const useSuperAdminDashboard = () => {
   const [salesAgents, setSalesAgents]           = useState([]);
   const [salesTarget, setSalesTarget]           = useState({ target: 0, achieved: 0, percentage: 0 });
   const [staffUsers, setStaffUsers]             = useState([]);
+  const [contracts, setContracts]               = useState([]);
+  const [clients, setClients]                   = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const channelsRef = useRef([]);
+
+  const getAdminId = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    return user?.id;
+  };
 
   const fetchStats = useCallback(async () => {
     try {
@@ -140,7 +147,62 @@ export const useSuperAdminDashboard = () => {
     }
   }, []);
 
+  const fetchClients = useCallback(async () => {
+    const adminId = await getAdminId();
+    if (!adminId) return;
+    const { data } = await supabase
+      .from('clients')
+      .select('id, full_name, account_number')
+      .eq('admin_id', adminId)
+      .order('created_at', { ascending: false });
+    setClients(data || []);
+  }, []);
+
+  const fetchContracts = useCallback(async () => {
+    const adminId = await getAdminId();
+    if (!adminId) return;
+    const { data } = await supabase
+      .from('company_contracts')
+      .select('*, client:clients(full_name, account_number)')
+      .eq('admin_id', adminId)
+      .order('created_at', { ascending: false });
+    setContracts(data || []);
+  }, []);
+
+  // ── Action: upload contract (mirrors admin dashboard) ────────────────────────
+  const uploadContract = useCallback(async (formData, file) => {
+    const adminId   = await getAdminId();
+    const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath  = `${adminId}/${Date.now()}_${cleanName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('contracts').upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: true,
+        contentType: file.type || 'application/pdf',
+      });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = supabase.storage.from('contracts').getPublicUrl(filePath);
+
+    const { error } = await supabase.from('company_contracts').insert({
+      admin_id: adminId,
+      contract_name: formData.name,
+      contract_type: formData.type,
+      client_id: formData.clientId || null,
+      file_url: publicUrl,
+      is_template: formData.isTemplate || false,
+    });
+    if (error) throw error;
+
+    await fetchContracts();
+  }, [fetchContracts]);
+
   const createSalesAgent = useCallback(async (agentData) => {
+    // The super admin creating the agent becomes the agent's admin. Without this,
+    // agents.admin_id stays null and the agent's portal can't resolve an admin when
+    // creating clients ("Cannot determine admin. Contact support.").
+    const adminId = await getAdminId();
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -168,6 +230,7 @@ export const useSuperAdminDashboard = () => {
     const { error: profileError } = await supabase.from('user_profiles').upsert({
       id: userId, email: agentData.email, full_name: agentData.fullName,
       role: 'sales_agent', phone: agentData.phone || '', is_active: true,
+      admin_id: adminId,
     });
     if (profileError) console.error('Profile upsert error:', profileError.message);
 
@@ -177,6 +240,7 @@ export const useSuperAdminDashboard = () => {
         user_id: userId, agent_code: `AGT-${Date.now()}`,
         full_name: agentData.fullName, email: agentData.email,
         phone: agentData.phone, region: agentData.region,
+        admin_id: adminId,
         commission_rate: agentData.commissionRate || 5,
         target_amount: agentData.targetAmount || 0,
       })
@@ -213,9 +277,11 @@ export const useSuperAdminDashboard = () => {
       fetchSalesAgents(),
       fetchSalesTarget(),
       fetchStaffUsers(),
+      fetchContracts(),
+      fetchClients(),
     ]);
     setLoading(false);
-  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers]);
+  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchContracts, fetchClients]);
 
   useEffect(() => {
     fetchAll();
@@ -258,9 +324,9 @@ export const useSuperAdminDashboard = () => {
 
   return {
     stats, assetBreakdown, companyAnalytics, auditTrail,
-    salesAgents, salesTarget, staffUsers,
+    salesAgents, salesTarget, staffUsers, contracts, clients,
     loading, connectionStatus,
-    refetch: fetchAll, createSalesAgent, exportCSV,
+    refetch: fetchAll, createSalesAgent, uploadContract, exportCSV,
   };
 };
 

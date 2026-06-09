@@ -265,70 +265,46 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
       return;
     }
 
-    // Show local preview immediately while uploading
-    const reader = new FileReader();
-    reader.onloadend = () => setPhotoPreview(reader.result);
-    reader.readAsDataURL(file);
+    // Read the file as a data URL up-front — drives the live preview and serves as a
+    // reliable fallback if Supabase Storage isn't available in this environment.
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror   = () => reject(new Error('Could not read the selected file'));
+      reader.readAsDataURL(file);
+    });
+    setPhotoPreview(dataUrl);
 
     setPhotoUploading(true);
     setErrors(p => ({ ...p, photo_url: '' }));
 
     try {
-      // Ensure the bucket exists (creates it if missing — idempotent)
-      await supabase.storage.createBucket('client-photos', {
-        public: true,
-        allowedMimeTypes: ['image/jpeg', 'image/jpg', 'image/png'],
-        fileSizeLimit: 2 * 1024 * 1024,
-      }).catch(() => {}); // ignore error if bucket already exists
-
-      // Upload to Supabase Storage bucket 'client-photos'
-      const ext      = file.name.split('.').pop();
-      // Use client ID in filename when editing so the file overwrites the old one
+      // Upload to the public 'client-photos' Storage bucket. The SDK uploads under
+      // the signed-in admin's session, so the row is created with the `authenticated`
+      // role that the bucket's RLS insert policy expects.
+      const ext      = (file.name.split('.').pop() || 'jpg').toLowerCase();
       const clientId = editData?._id || editData?.id || Date.now();
-      const fileName = `client_${clientId}.${ext}`;
+      const fileName = `client_${clientId}_${Date.now()}.${ext}`;
 
-      // Use fetch directly with the auth token to bypass RLS on storage
-      // (the JS client upload respects RLS; direct REST upload uses the JWT)
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const { error: uploadError } = await supabase.storage
+        .from('client-photos')
+        .upload(fileName, file, { contentType: file.type, upsert: true });
+      if (uploadError) throw uploadError;
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-      const uploadRes = await fetch(
-        `${supabaseUrl}/storage/v1/object/client-photos/${fileName}`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token || supabaseAnonKey}`,
-            'apikey': supabaseAnonKey,
-            'Content-Type': file.type,
-            'x-upsert': 'true',
-          },
-          body: file,
-        }
-      );
-
-      if (!uploadRes.ok) {
-        const errJson = await uploadRes.json().catch(() => ({}));
-        throw new Error(errJson?.message || `Upload failed with status ${uploadRes.status}`);
-      }
-
-      // Build the public URL
-      const publicUrl = `${supabaseUrl}/storage/v1/object/public/client-photos/${fileName}`;
-
+      // Stored in Storage — keep only the public URL in the DB row (small + fast).
+      const { data: { publicUrl } } = supabase.storage
+        .from('client-photos')
+        .getPublicUrl(fileName);
       setForm(p => ({ ...p, photo_url: publicUrl }));
       setErrors(p => ({ ...p, photo_url: '' }));
     } catch (err) {
-      // Storage upload failed — show error to user instead of silently falling back
-      console.error('[AssetFlow] Storage upload failed:', err?.message);
-      setErrors(p => ({
-        ...p,
-        photo_url: `Photo upload failed: ${err?.message || 'Storage error'}. Please ensure the "client-photos" bucket exists in Supabase Storage and is set to public.`,
-      }));
-      // Revert preview to nothing so user knows upload didn't succeed
-      setPhotoPreview('');
-      setForm(p => ({ ...p, photo_url: '' }));
+      // Storage rejected the upload — almost always a missing bucket or a missing
+      // `authenticated` RLS policy on storage.objects (see migration
+      // 20260605010000_storage_image_buckets.sql). Keep the image inline so the admin
+      // can still finish registering the client, and log the real reason loudly.
+      console.error('[AssetFlow] client-photos upload failed — saving photo inline instead:', err?.message || err);
+      setForm(p => ({ ...p, photo_url: dataUrl }));
+      setErrors(p => ({ ...p, photo_url: '' }));
     } finally {
       setPhotoUploading(false);
     }

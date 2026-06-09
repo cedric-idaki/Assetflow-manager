@@ -34,7 +34,7 @@ const ROLE_REDIRECT_MAP = {
   finance:             '/role-based-dashboard',
   manager:             '/role-based-dashboard',
   operations:          '/role-based-dashboard',
-  hr:                  '/role-based-dashboard',
+  hr:                  '/hr-management',
   it_support:          '/role-based-dashboard',
   staff:               '/role-based-dashboard',
   sales:               '/sales-agent-portal',

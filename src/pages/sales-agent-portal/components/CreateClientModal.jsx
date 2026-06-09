@@ -4,6 +4,20 @@ import { formatKEPhone } from '../../../utils/phoneUtils';
 import { useAuth } from '../../../contexts/AuthContext';
 import Icon from '../../../components/AppIcon';
 
+// ── Subscription plans (mirrors the "Register Your Company" flow) ───────────────
+// Flat KES 360 / month per plan. The plan sets the company's staff-portal user
+// limit; extra users beyond the tier cost KES 360 each (upgrade).
+const PLANS = [
+  { id: 'bronze', name: 'Bronze', price: 360, maxUsers: 5,    storageGb: 5,  userRange: '1–5 users',  color: '#CD7F32' },
+  { id: 'silver', name: 'Silver', price: 360, maxUsers: 16,   storageGb: 10, userRange: '6–16 users', color: '#C0C0C0', popular: true },
+  { id: 'gold',   name: 'Gold',   price: 360, maxUsers: null, storageGb: 15, userRange: '17+ users',  color: '#C9A84C' },
+];
+
+const ASSET_TYPES = [
+  'Vehicles', 'Property/Land', 'Construction Dealers',
+  'Electronics', 'Furnitures', 'Heavy Equipment',
+];
+
 // ── Password strength ─────────────────────────────────────────────────────────
 const getPasswordStrength = (pwd) => {
   if (!pwd) return { score: 0, label: '', color: '' };
@@ -25,7 +39,9 @@ const ic = (err) =>
     err ? 'border-red-400 bg-red-50' : 'border-gray-200'
   }`;
 
-// ── Helper: call Edge Function safely ────────────────────────────────────────
+// ── Helper: call Edge Function safely (keeps the agent's session intact) ───────
+// A plain supabase.auth.signUp would swap the logged-in agent for the new admin.
+// The create-staff-user function provisions the auth user server-side instead.
 const callEdgeFunction = async (payload) => {
   const supabaseUrl  = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -35,8 +51,8 @@ const callEdgeFunction = async (payload) => {
   }
 
   // Force-refresh the session to guarantee a non-expired token
-  const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
-  
+  const { data: refreshData } = await supabase.auth.refreshSession();
+
   // Fall back to getSession if refresh fails (e.g. already fresh)
   let accessToken = refreshData?.session?.access_token;
   if (!accessToken) {
@@ -86,7 +102,7 @@ const callEdgeFunction = async (payload) => {
 };
 
 // ── Success Popup ─────────────────────────────────────────────────────────────
-const SuccessPopup = ({ client, agentName, onDone }) => (
+const SuccessPopup = ({ account, onDone }) => (
   <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8 flex flex-col items-center text-center animate-[scaleIn_0.25s_ease-out]">
       {/* Animated checkmark circle */}
@@ -98,33 +114,38 @@ const SuccessPopup = ({ client, agentName, onDone }) => (
         </div>
       </div>
 
-      <h3 className="text-2xl font-bold text-gray-900 mb-1">Client Created!</h3>
+      <h3 className="text-2xl font-bold text-gray-900 mb-1">Company Account Created!</h3>
       <p className="text-sm text-gray-500 mb-5">
-        Account successfully registered for
+        An admin portal account is ready for
       </p>
 
-      {/* Client summary card */}
+      {/* Account summary card */}
       <div className="w-full bg-gray-50 rounded-xl p-4 space-y-2 text-left mb-6">
         <div className="flex justify-between text-sm">
-          <span className="text-gray-500">Name</span>
-          <span className="font-semibold text-gray-900">{client.full_name}</span>
+          <span className="text-gray-500">Company</span>
+          <span className="font-semibold text-gray-900 truncate ml-4">{account.company_name}</span>
         </div>
         <div className="flex justify-between text-sm">
-          <span className="text-gray-500">Email</span>
-          <span className="font-semibold text-gray-900 truncate ml-4">{client.email}</span>
+          <span className="text-gray-500">Admin</span>
+          <span className="font-semibold text-gray-900 truncate ml-4">{account.full_name}</span>
         </div>
         <div className="flex justify-between text-sm">
-          <span className="text-gray-500">Phone</span>
-          <span className="font-semibold text-gray-900">{client.phone}</span>
+          <span className="text-gray-500">Login Email</span>
+          <span className="font-semibold text-gray-900 truncate ml-4">{account.email}</span>
         </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-gray-500">Account No.</span>
-          <span className="font-semibold text-emerald-700">{client.account_number}</span>
-        </div>
+        {account.plan_name && (
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-500">Plan</span>
+            <span className="font-semibold text-emerald-700 capitalize">{account.plan_name}</span>
+          </div>
+        )}
       </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 mb-6 text-left w-full">
-        ⚠️ Share the login credentials securely with the client — the password cannot be retrieved later.
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 mb-3 text-left w-full">
+        ⚠️ Share the login email and password securely — the password cannot be retrieved later.
+      </div>
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-700 mb-6 text-left w-full">
+        The admin logs in at the portal and lands on the admin dashboard to manage their company.
       </div>
 
       <button
@@ -138,31 +159,31 @@ const SuccessPopup = ({ client, agentName, onDone }) => (
 );
 
 // ── Main component ────────────────────────────────────────────────────────────
-const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
-  const { user, userProfile } = useAuth();
+const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSuccess }) => {
+  const { user } = useAuth();
 
-  const [step, setStep]           = useState(1);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState('');
-  const [success, setSuccess]     = useState(false);         // ✅ was missing
-  const [createdClient, setCreatedClient] = useState(null);  // ✅ was missing
+  const [step, setStep]       = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [success, setSuccess] = useState(false);
+  const [createdAccount, setCreatedAccount] = useState(null);
 
   const [form, setForm] = useState({
-    full_name:        '',
-    email:            '',
-    phone:            '',
-    national_id:      '',
-    physical_address: '',
-    postal_address:   '',
-    kra_pin:          '',
-    nok_name:         '',
-    nok_phone:        '',
-    nok_relationship: '',
+    // Admin contact (prefilled from a lead when converting one)
+    full_name:        prefillLead?.full_name || '',
+    email:            prefillLead?.email || '',
+    phone:            prefillLead?.phone || '',
+    // Company details
+    company_name:        '',
+    business_reg_number: '',
+    business_type:       '',
+    location:            '',
+    city:                '',
+    asset_types:         [],
+    plan:                '',
+    // Credentials
     password:         '',
     confirm_password: '',
-    asset_interest:   '',
-    budget_range:     '',
-    notes:            '',
   });
   const [errors, setErrors]     = useState({});
   const [showPwd, setShowPwd]   = useState(false);
@@ -176,27 +197,34 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
     setError('');
   };
 
+  const toggleAssetType = (type) => {
+    set('asset_types', form.asset_types.includes(type)
+      ? form.asset_types.filter(t => t !== type)
+      : [...form.asset_types, type]
+    );
+  };
+
   // ── Validation ────────────────────────────────────────────────────────────
   const validateStep1 = () => {
     const e = {};
-    if (!form.full_name.trim())       e.full_name       = 'Full name is required';
-    if (!form.email.trim())           e.email           = 'Email is required';
+    if (!form.full_name.trim())    e.full_name    = 'Admin full name is required';
+    if (!form.email.trim())        e.email        = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Invalid email';
-    if (!form.phone.trim())           e.phone           = 'Phone number is required';
-    if (!form.physical_address.trim()) e.physical_address = 'Physical address is required';
-    if (!form.kra_pin.trim())         e.kra_pin         = 'KRA PIN is required';
-    if (!form.nok_name.trim())        e.nok_name        = 'Next of kin name is required';
+    if (!form.phone.trim())        e.phone        = 'Phone number is required';
+    if (!form.company_name.trim()) e.company_name = 'Company name is required';
+    if (!form.location.trim())     e.location     = 'Location is required';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
   const validateStep2 = () => {
     const e = {};
-    if (!form.password)                e.password         = 'Password is required';
-    else if (form.password.length < 8) e.password         = 'Minimum 8 characters';
-    else if (pwdStrength.score < 2)    e.password         = 'Password too weak';
+    if (form.asset_types.length === 0) e.asset_types = 'Select at least one asset type';
+    if (!form.plan)                    e.plan        = 'Select a subscription plan';
+    if (!form.password)                e.password    = 'Password is required';
+    else if (form.password.length < 8) e.password    = 'Minimum 8 characters';
+    else if (pwdStrength.score < 2)    e.password    = 'Password too weak';
     if (form.password !== form.confirm_password) e.confirm_password = 'Passwords do not match';
-    if (!form.asset_interest)          e.asset_interest   = 'Asset interest is required';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -206,7 +234,6 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
     if (step === 2 && validateStep2()) setStep(3);
   };
 
-  // ✅ handleBack was referenced but never defined
   const handleBack = () => {
     setError('');
     setStep(s => s - 1);
@@ -216,127 +243,85 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
   const handleClose = () => {
     setStep(1);
     setForm({
-      full_name: '', email: '', phone: '', national_id: '',
-      physical_address: '', postal_address: '', kra_pin: '',
-      nok_name: '', nok_phone: '', nok_relationship: '',
-      password: '', confirm_password: '', asset_interest: '', budget_range: '', notes: '',
+      full_name: '', email: '', phone: '',
+      company_name: '', business_reg_number: '', business_type: '',
+      location: '', city: '', asset_types: [], plan: '',
+      password: '', confirm_password: '',
     });
     setErrors({});
     setError('');
-    setSuccess(false);       // ✅ now defined
-    setCreatedClient(null);  // ✅ now defined
+    setSuccess(false);
+    setCreatedAccount(null);
     onClose();
   };
 
-  // ── Submit ────────────────────────────────────────────────────────────────
+  // ── Submit — provision an admin / company account ───────────────────────────
   const handleSubmit = async () => {
     setLoading(true);
     setError('');
 
     try {
-      const adminId = agentProfile?.admin_id || userProfile?.admin_id;
-      if (!adminId) throw new Error('Cannot determine admin. Contact support.');
+      const email = form.email.trim().toLowerCase();
 
-      // Step 1: Create auth user via Edge Function
+      // Create the admin/company account via the Edge Function. Doing this
+      // server-side keeps the acting sales agent logged in (a client-side
+      // supabase.auth.signUp would swap their session) and provisions the
+      // company_profiles + company_subscriptions rows with the service role
+      // (bypassing RLS). The function authorises sales agents to create admins.
       const result = await callEdgeFunction({
-        email:      form.email.trim().toLowerCase(),
-        password:   form.password,
-        full_name:  form.full_name.trim(),
-        role:       'client',
-        phone:      form.phone.trim(),
-        department: '',
-        admin_id:   adminId,
+        email,
+        password:            form.password,
+        full_name:           form.full_name.trim(),
+        role:                'admin',
+        phone:               form.phone.trim(),
+        department:          '',
+        admin_id:            null, // an admin is the top of their own company tree
+        // Company details (used server-side when role === 'admin')
+        company_name:        form.company_name.trim(),
+        business_reg_number: form.business_reg_number.trim() || null,
+        business_type:       form.business_type.trim() || null,
+        location:            form.location.trim(),
+        city:                form.city.trim() || null,
+        asset_types:         form.asset_types,
+        plan:                form.plan,
       });
 
       const newUserId = result.id;
-      if (!newUserId) throw new Error('User creation returned no ID.');
+      if (!newUserId) throw new Error('Account creation returned no user ID.');
 
-      // Step 2: Create client record
-      const accountNumber = `ACC-${Date.now().toString().slice(-6)}`;
-
-      const { data: clientRecord, error: clientErr } = await supabase
-        .from('clients')
-        .insert({
-          admin_id:       adminId,
-          full_name:      form.full_name.trim(),
-          email:          form.email.trim().toLowerCase(),
-          phone:          form.phone.trim(),
-          national_id:      form.national_id.trim()      || null,
-          physical_address: form.physical_address.trim()  || null,
-          postal_address:   form.postal_address.trim()    || null,
-          kra_pin:          form.kra_pin.trim()           || null,
-          nok_name:         form.nok_name.trim()          || null,
-          nok_phone:        form.nok_phone.trim()         || null,
-          nok_relationship: form.nok_relationship.trim()  || null,
-          account_number:   accountNumber,
-          client_status:    'pending',
-          kyc_status:       'unverified',
-          notes:            form.notes.trim()             || null,
-        })
-        .select()
-        .single();
-
-      if (clientErr) throw new Error('Client record error: ' + clientErr.message);
-
-      // Step 3: Audit log — includes agent info so admin portal also sees it
-      // ✅ user_id is now passed so the audit links to the agent AND appears for admin
+      // Audit log — links the new company account to the acting agent.
       try {
         const { auditLogsService } = await import('../../../services/supabaseService');
         await auditLogsService.log(
           'user_created',
-          'clients',
-          `Sales agent ${agentProfile?.full_name || 'Agent'} (${agentProfile?.agent_code || ''}) created client "${form.full_name.trim()}" (${form.email.trim().toLowerCase()}) — Account: ${accountNumber}`,
-          clientRecord.id,
-          user?.id,   // ✅ was null before — now links the log to the acting user
+          'company_profiles',
+          `Sales agent ${agentProfile?.full_name || 'Agent'} (${agentProfile?.agent_code || ''}) registered company "${form.company_name.trim()}" with admin ${form.full_name.trim()} (${email})`,
+          newUserId,
+          user?.id,
           {
-            email:            form.email.trim().toLowerCase(),
+            email,
             phone:            form.phone.trim(),
-            account_number:   accountNumber,
+            company_name:     form.company_name.trim(),
+            plan:             form.plan,
             created_by_agent: agentProfile?.agent_code,
             agent_name:       agentProfile?.full_name,
-            asset_interest:   form.asset_interest,
-            budget_range:     form.budget_range,
-            admin_id:         adminId,
           }
         );
       } catch (auditErr) {
         console.warn('Audit log skipped:', auditErr.message);
       }
 
-      // Step 4: Mark existing lead as closed / create closed lead record
-      if (agentProfile?.id) {
-        await supabase
-          .from('leads')
-          .update({ stage: 'closed', updated_at: new Date().toISOString() })
-          .eq('agent_id', agentProfile.id)
-          .eq('email', form.email.trim().toLowerCase())
-          .catch(() => {});
-
-        await supabase.from('leads').insert({
-          agent_id:       agentProfile.id,
-          full_name:      form.full_name.trim(),
-          email:          form.email.trim().toLowerCase(),
-          phone:          form.phone.trim(),
-          asset_interest: form.asset_interest,
-          budget_range:   form.budget_range,
-          stage:          'closed',
-          priority:       'medium',
-          source:         'direct_client',
-          notes:          `Direct client created by agent. ${form.notes || ''}`.trim(),
-        }).catch(() => {});
-      }
-
-      // ✅ Show success popup INSTEAD of opening the client portal
-      const clientDetails = {
-        full_name:      form.full_name.trim(),
-        email:          form.email.trim().toLowerCase(),
-        phone:          form.phone.trim(),
-        account_number: accountNumber,
+      const accountDetails = {
+        full_name:    form.full_name.trim(),
+        email,
+        phone:        form.phone.trim(),
+        company_name: form.company_name.trim(),
+        plan_name:    form.plan,
       };
 
-      setCreatedClient(clientDetails);
-      setSuccess(true);           // triggers success popup
-      onSuccess?.(clientDetails); // notify parent (e.g. refresh list) without navigating
+      setCreatedAccount(accountDetails);
+      setSuccess(true);
+      onSuccess?.(accountDetails);
 
     } catch (err) {
       setError(err.message || 'Something went wrong. Please try again.');
@@ -346,14 +331,8 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
   };
 
   // ── Render: success popup replaces the modal ──────────────────────────────
-  if (success && createdClient) {
-    return (
-      <SuccessPopup
-        client={createdClient}
-        agentName={agentProfile?.full_name}
-        onDone={handleClose}
-      />
-    );
+  if (success && createdAccount) {
+    return <SuccessPopup account={createdAccount} onDone={handleClose} />;
   }
 
   if (!isOpen) return null;
@@ -366,12 +345,11 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center">
-              <Icon name="UserPlus" size={18} color="white" />
+              <Icon name="Building2" size={18} color="white" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-gray-900">Create Client Account</h2>
-              {/* ✅ Was a plain string — now properly interpolated */}
-              <p className="text-xs text-gray-500">Step {step} of 3</p>
+              <h2 className="text-base font-bold text-gray-900">Register Company</h2>
+              <p className="text-xs text-gray-500">Admin portal account · Step {step} of 3</p>
             </div>
           </div>
           <button onClick={handleClose} className="p-1.5 hover:bg-gray-100 rounded-lg">
@@ -381,7 +359,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
 
         {/* Step indicators */}
         <div className="flex items-center gap-2 px-6 py-3 bg-gray-50 border-b border-gray-100">
-          {['Personal Info', 'Account Setup', 'Review'].map((label, i) => (
+          {['Company & Admin', 'Plan & Access', 'Review'].map((label, i) => (
             <React.Fragment key={label}>
               <div className="flex items-center gap-2">
                 <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
@@ -401,74 +379,133 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
 
         <div className="px-6 py-5">
 
-          {/* ── Step 1: Personal Info ── */}
+          {/* ── Step 1: Company & Admin ── */}
           {step === 1 && (
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Full Name *</label>
-                <input type="text" value={form.full_name} onChange={e => set('full_name', e.target.value)}
-                  placeholder="e.g. Jane Mwangi" className={ic(errors.full_name)} />
-                {errors.full_name && <p className="mt-1 text-xs text-red-500">{errors.full_name}</p>}
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Company Name *</label>
+                <input type="text" value={form.company_name} onChange={e => set('company_name', e.target.value)}
+                  placeholder="e.g. Acme Ltd" className={ic(errors.company_name)} />
+                {errors.company_name && <p className="mt-1 text-xs text-red-500">{errors.company_name}</p>}
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Email Address *</label>
-                <input type="email" value={form.email} onChange={e => set('email', e.target.value)}
-                  placeholder="client@example.com" className={ic(errors.email)} />
-                {errors.email && <p className="mt-1 text-xs text-red-500">{errors.email}</p>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                    Business Reg. No. <span className="text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input type="text" value={form.business_reg_number} onChange={e => set('business_reg_number', e.target.value)}
+                    placeholder="e.g. CPR/2024/001" className={ic(false)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                    Business Type <span className="text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input type="text" value={form.business_type} onChange={e => set('business_type', e.target.value)}
+                    placeholder="e.g. Limited Company" className={ic(false)} />
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Phone Number *</label>
-                <input type="tel" value={form.phone} onChange={e => set('phone', formatKEPhone(e.target.value))}
-                  placeholder="+254 7XX XXX XXX" className={ic(errors.phone)} />
-                {errors.phone && <p className="mt-1 text-xs text-red-500">{errors.phone}</p>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">Location / Address *</label>
+                  <input type="text" value={form.location} onChange={e => set('location', e.target.value)}
+                    placeholder="e.g. Westlands, Nairobi" className={ic(errors.location)} />
+                  {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                    City <span className="text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input type="text" value={form.city} onChange={e => set('city', e.target.value)}
+                    placeholder="Nairobi" className={ic(false)} />
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                  National ID <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <input type="text" value={form.national_id} onChange={e => set('national_id', e.target.value)}
-                  placeholder="ID Number" className={ic(false)} />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Physical Address / Location *</label>
-                <input type="text" value={form.physical_address} onChange={e => set('physical_address', e.target.value)}
-                  placeholder="e.g. 123 Ngong Road, Kilimani, Nairobi" className={ic(errors.physical_address)} />
-                {errors.physical_address && <p className="mt-1 text-xs text-red-500">{errors.physical_address}</p>}
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                  Postal Address <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <input type="text" value={form.postal_address} onChange={e => set('postal_address', e.target.value)}
-                  placeholder="e.g. P.O Box 12345-00100, Nairobi" className={ic(false)} />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">KRA PIN *</label>
-                <input type="text" value={form.kra_pin} onChange={e => set('kra_pin', e.target.value.toUpperCase())}
-                  placeholder="e.g. A012345678P" maxLength={11}
-                  className={ic(errors.kra_pin) + ' font-mono tracking-wider'} />
-                {errors.kra_pin && <p className="mt-1 text-xs text-red-500">{errors.kra_pin}</p>}
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Next of Kin *</label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+
+              <div className="pt-2 border-t border-gray-100">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Admin Account Holder</p>
+                <div className="space-y-4">
                   <div>
-                    <input type="text" value={form.nok_name} onChange={e => set('nok_name', e.target.value)}
-                      placeholder="Full Name" className={ic(errors.nok_name)} />
-                    {errors.nok_name && <p className="mt-1 text-xs text-red-500">{errors.nok_name}</p>}
+                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">Full Name *</label>
+                    <input type="text" value={form.full_name} onChange={e => set('full_name', e.target.value)}
+                      placeholder="e.g. Jane Mwangi" className={ic(errors.full_name)} />
+                    {errors.full_name && <p className="mt-1 text-xs text-red-500">{errors.full_name}</p>}
                   </div>
-                  <input type="tel" value={form.nok_phone} onChange={e => set('nok_phone', e.target.value)}
-                    placeholder="Phone Number" className={ic(false)} />
-                  <input type="text" value={form.nok_relationship} onChange={e => set('nok_relationship', e.target.value)}
-                    placeholder="Relationship" className={ic(false)} />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1.5">Email Address *</label>
+                      <input type="email" value={form.email} onChange={e => set('email', e.target.value)}
+                        placeholder="admin@company.com" className={ic(errors.email)} />
+                      {errors.email && <p className="mt-1 text-xs text-red-500">{errors.email}</p>}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1.5">Phone Number *</label>
+                      <input type="tel" value={form.phone} onChange={e => set('phone', formatKEPhone(e.target.value))}
+                        placeholder="+254 7XX XXX XXX" className={ic(errors.phone)} />
+                      {errors.phone && <p className="mt-1 text-xs text-red-500">{errors.phone}</p>}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           )}
 
-          {/* ── Step 2: Account Setup ── */}
+          {/* ── Step 2: Plan & Access ── */}
           {step === 2 && (
             <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-2">Asset Types Dealt In *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {ASSET_TYPES.map(type => {
+                    const active = form.asset_types.includes(type);
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => toggleAssetType(type)}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm border text-left transition-all ${
+                          active ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-medium' : 'border-gray-200 text-gray-600 hover:border-emerald-300'
+                        }`}
+                      >
+                        <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${active ? 'bg-emerald-600' : 'border border-gray-300'}`}>
+                          {active && <Icon name="Check" size={10} color="white" />}
+                        </div>
+                        {type}
+                      </button>
+                    );
+                  })}
+                </div>
+                {errors.asset_types && <p className="mt-1 text-xs text-red-500">{errors.asset_types}</p>}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-2">Subscription Plan *</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {PLANS.map(plan => {
+                    const active = form.plan === plan.id;
+                    return (
+                      <button
+                        key={plan.id}
+                        type="button"
+                        onClick={() => set('plan', plan.id)}
+                        className={`relative p-3 rounded-xl border-2 text-left transition-all ${
+                          active ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200 hover:border-emerald-300'
+                        }`}
+                      >
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs text-white mb-1.5"
+                          style={{ background: plan.color }}>
+                          {plan.name[0]}
+                        </div>
+                        <p className="text-sm font-bold text-gray-900">{plan.name}</p>
+                        <p className="text-xs text-gray-500">KES {plan.price.toLocaleString()}/mo</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          {plan.userRange} · {plan.storageGb}GB
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+                {errors.plan && <p className="mt-1 text-xs text-red-500">{errors.plan}</p>}
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1.5">Password *</label>
                 <div className="relative">
@@ -506,42 +543,6 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
                 </div>
                 {errors.confirm_password && <p className="mt-1 text-xs text-red-500">{errors.confirm_password}</p>}
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Asset Interest *</label>
-                <select value={form.asset_interest} onChange={e => set('asset_interest', e.target.value)}
-                  className={ic(errors.asset_interest)}>
-                  <option value="">Select asset type...</option>
-                  <option value="land">Land</option>
-                  <option value="apartment">Apartment</option>
-                  <option value="commercial_property">Commercial Property</option>
-                  <option value="vehicle">Vehicle</option>
-                  <option value="equipment">Equipment</option>
-                  <option value="other">Other</option>
-                </select>
-                {errors.asset_interest && <p className="mt-1 text-xs text-red-500">{errors.asset_interest}</p>}
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Budget Range</label>
-                <select value={form.budget_range} onChange={e => set('budget_range', e.target.value)} className={ic(false)}>
-                  <option value="">Select range...</option>
-                  <option value="under_500k">Under KES 500,000</option>
-                  <option value="500k_1m">KES 500K – 1M</option>
-                  <option value="1m_3m">KES 1M – 3M</option>
-                  <option value="3m_5m">KES 3M – 5M</option>
-                  <option value="above_5m">Above KES 5M</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                  Notes <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <textarea value={form.notes} onChange={e => set('notes', e.target.value)} rows={2}
-                  placeholder="Any relevant notes about this client..."
-                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 bg-white resize-none" />
-              </div>
             </div>
           )}
 
@@ -549,42 +550,41 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
           {step === 3 && (
             <div className="space-y-4">
               <div className="bg-gray-50 rounded-xl p-5 space-y-2">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Personal Info</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Company</p>
                 {[
-                  { label: 'Name',             value: form.full_name },
-                  { label: 'Email',            value: form.email },
-                  { label: 'Phone',            value: form.phone },
-                  { label: 'National ID',      value: form.national_id || '—' },
-                  { label: 'Physical Address', value: form.physical_address || '—' },
-                  { label: 'Postal Address',   value: form.postal_address || '—' },
-                  { label: 'KRA PIN',          value: form.kra_pin || '—' },
-                  { label: 'Next of Kin',      value: form.nok_name ? `${form.nok_name} (${form.nok_relationship || 'N/A'}) · ${form.nok_phone || 'N/A'}` : '—' },
+                  { label: 'Company Name',  value: form.company_name },
+                  { label: 'Reg. Number',   value: form.business_reg_number || '—' },
+                  { label: 'Business Type', value: form.business_type || '—' },
+                  { label: 'Location',      value: form.location || '—' },
+                  { label: 'City',          value: form.city || '—' },
+                  { label: 'Asset Types',   value: form.asset_types.join(', ') || '—' },
+                  { label: 'Plan',          value: form.plan ? `${PLANS.find(p => p.id === form.plan)?.name} (KES ${PLANS.find(p => p.id === form.plan)?.price.toLocaleString()}/mo)` : '—' },
                 ].map(r => (
-                  <div key={r.label} className="flex justify-between text-sm">
-                    <span className="text-gray-500">{r.label}</span>
-                    <span className="font-medium text-gray-900">{r.value}</span>
+                  <div key={r.label} className="flex justify-between text-sm gap-4">
+                    <span className="text-gray-500 flex-shrink-0">{r.label}</span>
+                    <span className="font-medium text-gray-900 text-right">{r.value}</span>
                   </div>
                 ))}
               </div>
 
               <div className="bg-gray-50 rounded-xl p-5 space-y-2">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Account Details</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Admin Account</p>
                 {[
-                  { label: 'Asset Interest', value: form.asset_interest.replace(/_/g, ' ') },
-                  { label: 'Budget Range',   value: form.budget_range ? form.budget_range.replace(/_/g, ' ') : '—' },
-                  { label: 'Role',           value: 'Client' },
-                  { label: 'Created By',     value: agentProfile?.full_name || 'Sales Agent' },
-                  { label: 'Agent Code',     value: agentProfile?.agent_code || '—' },
+                  { label: 'Name',       value: form.full_name },
+                  { label: 'Email',      value: form.email },
+                  { label: 'Phone',      value: form.phone },
+                  { label: 'Role',       value: 'Admin (admin portal)' },
+                  { label: 'Created By', value: `${agentProfile?.full_name || 'Sales Agent'} (${agentProfile?.agent_code || '—'})` },
                 ].map(r => (
-                  <div key={r.label} className="flex justify-between text-sm">
-                    <span className="text-gray-500">{r.label}</span>
-                    <span className="font-medium text-gray-900 capitalize">{r.value}</span>
+                  <div key={r.label} className="flex justify-between text-sm gap-4">
+                    <span className="text-gray-500 flex-shrink-0">{r.label}</span>
+                    <span className="font-medium text-gray-900 text-right break-all">{r.value}</span>
                   </div>
                 ))}
               </div>
 
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-                ⚠️ Make sure to note the password — it cannot be retrieved after creation. Share it securely with the client.
+                ⚠️ Note the password — it cannot be retrieved after creation. Share it securely with the company admin.
               </div>
 
               {error && (
@@ -600,7 +600,6 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
         {/* Footer */}
         <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
           {step > 1 && (
-            // ✅ handleBack is now defined above
             <button onClick={handleBack} disabled={loading}
               className="px-5 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 disabled:opacity-50">
               ← Back
@@ -620,7 +619,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, onSuccess }) => {
                 Creating Account...
               </>
             ) : step < 3 ? 'Next →' : (
-              <><Icon name="UserPlus" size={15} color="white" /> Create Client Account</>
+              <><Icon name="Building2" size={15} color="white" /> Register Company</>
             )}
           </button>
         </div>

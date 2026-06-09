@@ -198,6 +198,9 @@ export const useAdminDashboard = () => {
 
   // ── Action: create sales agent (REST — no session hijack) ────────────────────
   const createSalesAgent = useCallback(async (agentData) => {
+    // Tag the agent with its creating admin so the agent's portal can resolve an
+    // admin when registering clients (prevents "Cannot determine admin").
+    const adminId         = await getAdminId();
     const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -218,6 +221,7 @@ export const useAdminDashboard = () => {
     await supabase.from('user_profiles').upsert({
       id: userId, email: agentData.email, full_name: agentData.fullName,
       role: 'sales_agent', phone: agentData.phone || '', is_active: true,
+      admin_id: adminId,
     });
 
     const { data: agent, error: agentError } = await supabase
@@ -228,6 +232,7 @@ export const useAdminDashboard = () => {
         phone: agentData.phone, region: agentData.region,
         commission_rate: agentData.commissionRate || 5,
         target_amount:   agentData.targetAmount   || 0,
+        admin_id:        adminId,
       })
       .select().maybeSingle();
     if (agentError) throw agentError;
@@ -282,6 +287,33 @@ export const useAdminDashboard = () => {
     const adminId         = await getAdminId();
     const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    // ── Enforce the plan's user limit ───────────────────────────────────────────
+    // Only portal-staff consume seats. Clients (customers) and HR employees
+    // (role 'staff', no login portal) are unlimited and do NOT count. Once the
+    // limit is hit the admin must upgrade (extra users are KES 360 each).
+    const { data: sub } = await supabase
+      .from('company_subscriptions')
+      .select('max_users, plan:subscription_plans(max_users)')
+      .eq('admin_id', adminId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const maxUsers = sub?.max_users ?? sub?.plan?.max_users ?? null;
+    if (maxUsers != null) {
+      const { count: seatCount } = await supabase
+        .from('user_profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('admin_id', adminId)
+        .eq('is_active', true)
+        .neq('role', 'client')
+        .neq('role', 'staff');
+      if ((seatCount || 0) >= maxUsers) {
+        throw new Error(
+          `You've reached your plan's user limit (${maxUsers}). Upgrade your plan to add more users — extra users are KES 360 each. Employees without a login portal are unlimited.`
+        );
+      }
+    }
 
     const res  = await fetch(`${supabaseUrl}/auth/v1/signup`, {
       method: 'POST',

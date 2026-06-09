@@ -30,8 +30,8 @@ import ClientPortal from './pages/client-portal';
 import SubscriptionBilling from './pages/subscription-billing';
 
 const ADMIN_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
-const FINANCE_ROLES = ['admin', 'accountant', 'finance', 'director', 'manager'];
-const STAFF_ROLES   = ['admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
+const FINANCE_ROLES = ['super_admin', 'admin', 'accountant', 'finance', 'director', 'manager'];
+const STAFF_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
 const ALL_INTERNAL  = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations', 'sales_agent', 'sales'];
 
 const Routes = () => {
@@ -166,7 +166,7 @@ const Routes = () => {
           {/* ── POS Module ─────────────────────────────────────────────── */}
           <Route path="/pos" element={
             <ProtectedRoute>
-              <RoleGuard allowedRoles={['admin', 'manager', 'sales_agent', 'sales', 'director', 'operations']}>
+              <RoleGuard allowedRoles={['super_admin', 'admin', 'manager', 'sales_agent', 'sales', 'director', 'operations']}>
                 <POSModule />
               </RoleGuard>
             </ProtectedRoute>
@@ -190,10 +190,10 @@ const Routes = () => {
             </ProtectedRoute>
           } />
 
-          {/* ── HR Management ──────────────────────────────────────────── */}
+          {/* ── HR Management — HR role + CEO (admin) only ─────────────── */}
           <Route path="/hr-management" element={
             <ProtectedRoute>
-              <RoleGuard allowedRoles={FINANCE_ROLES}>
+              <RoleGuard allowedRoles={['hr', 'admin']}>
                 <HRPage />
               </RoleGuard>
             </ProtectedRoute>

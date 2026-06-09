@@ -12,7 +12,15 @@ import CompanyAnalytics from './components/CompanyAnalytics';
 import AuditTrail from './components/AuditTrail';
 import SalesAgentsList from './components/SalesAgentsList';
 import CreateAgentModal from './components/CreateAgentModal';
-import CreateStaffUserModal from './components/CreateStaffUserModal';
+
+// Admin portal tabs for super admin
+import OverviewTab from './components/OverviewTab';
+import AgentsTab from './components/AgentsTab';
+import ContractsTab from './components/ContractsTab';
+import SettlementsTab from './components/SettlementsTab';
+import PaymentRemindersTab from './components/PaymentRemindersTab';
+import SalesReportTab from './components/SalesReportTab';
+import KYCReviewTab from './components/KYCReviewTab';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -58,26 +66,17 @@ const ConnDot = ({ status }) => (
   </div>
 );
 
-// Role label colours
-const ROLE_STYLES = {
-  accountant: 'bg-blue-100 text-blue-700',
-  hr:         'bg-purple-100 text-purple-700',
-  manager:    'bg-amber-100 text-amber-700',
-  staff:      'bg-gray-100 text-gray-600',
-};
-
 const SuperAdminDashboard = () => {
   const { userProfile } = useAuth();
   const navigate = useNavigate();
   const {
     stats, assetBreakdown, companyAnalytics,
-    auditTrail, salesAgents, salesTarget, staffUsers,
-    loading, connectionStatus, refetch, createSalesAgent, exportCSV,
+    auditTrail, salesAgents, salesTarget, contracts, clients,
+    loading, connectionStatus, refetch, createSalesAgent, uploadContract, exportCSV,
   } = useSuperAdminDashboard();
 
   const [activeTab, setActiveTab] = useState('overview');
   const [showCreateAgent, setShowCreateAgent] = useState(false);
-  const [showCreateStaff, setShowCreateStaff] = useState(false);
 
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -95,15 +94,6 @@ const SuperAdminDashboard = () => {
       active_clients: c.activeClients, revenue: c.totalRevenue,
     })),
     'inactive_accounts'
-  );
-
-  const exportStaff = () => exportCSV(
-    staffUsers.map(s => ({
-      name: s.full_name, email: s.email, role: s.role,
-      phone: s.phone || '', status: s.is_active ? 'Active' : 'Inactive',
-      joined: s.created_at ? new Date(s.created_at).toLocaleDateString() : '',
-    })),
-    'staff_users'
   );
 
   const kpiCards = [
@@ -167,12 +157,15 @@ const SuperAdminDashboard = () => {
   ];
 
   const tabs = [
-    { id: 'overview',  label: 'Overview',              icon: 'LayoutDashboard' },
-    { id: 'companies', label: 'Companies',              icon: 'Building2' },
-    { id: 'audit',     label: 'Audit Trail',            icon: 'Shield', badge: auditTrail.filter(a => a.action === 'delete').length },
-    { id: 'agents',    label: 'Sales Agents',           icon: 'Users' },
-    { id: 'staff',     label: 'Staff Users',            icon: 'UserCog' },
-    { id: 'billing',   label: 'Subscription & Billing', icon: 'CreditCard' },
+    { id: 'overview',     label: 'Overview',                icon: 'LayoutDashboard' },
+    { id: 'agents',       label: 'Sales Agents',            icon: 'UserCheck' },
+    { id: 'contracts',    label: 'Contracts',               icon: 'FileText' },
+    { id: 'kyc',          label: 'KYC Review',              icon: 'Shield', badge: stats?.pendingKYC || 0 },
+    { id: 'reports',      label: 'Sales Reports',           icon: 'BarChart3' },
+    { id: 'settlements',  label: 'Settlements',             icon: 'Award' },
+    { id: 'reminders',    label: 'Reminders',               icon: 'Bell' },
+    { id: 'companies',    label: 'Companies',               icon: 'Building2' },
+    { id: 'audit',        label: 'Audit Trail',             icon: 'Shield', badge: auditTrail?.filter(a => a.action === 'delete').length || 0 },
   ];
 
   return (
@@ -216,7 +209,7 @@ const SuperAdminDashboard = () => {
               label={t.label}
               icon={t.icon}
               badge={t.badge}
-              onClick={() => t.id === 'billing' ? navigate('/subscription-billing') : setActiveTab(t.id)}
+              onClick={() => t.path ? navigate(t.path) : setActiveTab(t.id)}
             />
           ))}
         </div>
@@ -312,126 +305,61 @@ const SuperAdminDashboard = () => {
           </div>
         )}
 
-        {/* STAFF USERS TAB */}
-        {activeTab === 'staff' && (
+        {/* CONTRACTS TAB — render directly (no loading swap) so the upload modal
+            and its selected-file state aren't torn down by a background refetch */}
+        {activeTab === 'contracts' && (
           <div className="space-y-4">
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <ContractsTab
+              contracts={contracts}
+              clients={clients}
+              onUpload={uploadContract}
+              onExport={exportCSV}
+            />
+          </div>
+        )}
 
-              {/* Header */}
-              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-                <div>
-                  <h2 className="text-base font-semibold text-foreground">Staff Users</h2>
-                  <p className="text-xs text-muted-foreground">
-                    Accountants, HR, Managers and other internal staff
-                    {!loading && staffUsers.length > 0 && (
-                      <span className="ml-2 inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
-                        {staffUsers.length}
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {!loading && staffUsers.length > 0 && (
-                    <button
-                      onClick={exportStaff}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-                    >
-                      <Icon name="Download" size={12} color="currentColor" />
-                      Export
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setShowCreateStaff(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
-                    style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
-                  >
-                    <Icon name="Plus" size={13} color="currentColor" />
-                    New Staff User
-                  </button>
-                </div>
-              </div>
+        {/* KYC REVIEW TAB */}
+        {activeTab === 'kyc' && (
+          <div className="space-y-4">
+            {loading ? <Sk className="h-64" /> : (
+              <KYCReviewTab adminId={userProfile?.id} />
+            )}
+          </div>
+        )}
 
-              {/* Body */}
-              {loading ? (
-                <div className="p-5 space-y-3">
-                  {[1, 2, 3, 4].map(i => (
-                    <div key={i} className="flex items-center gap-3">
-                      <Sk className="h-9 w-9 rounded-full flex-shrink-0" />
-                      <div className="flex-1 space-y-2">
-                        <Sk className="h-3.5 w-40" />
-                        <Sk className="h-3 w-52" />
-                      </div>
-                      <Sk className="h-6 w-20 rounded-full" />
-                      <Sk className="h-6 w-16 rounded-full" />
-                    </div>
-                  ))}
-                </div>
-              ) : staffUsers.length === 0 ? (
-                /* Empty state — only when truly no staff exist */
-                <div className="flex flex-col items-center justify-center py-16">
-                  <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mb-3">
-                    <Icon name="UserCog" size={24} color="#1A56DB" />
-                  </div>
-                  <p className="text-sm font-medium text-foreground">No staff accounts yet</p>
-                  <p className="text-xs text-muted-foreground mt-1 mb-4">
-                    Add accountants, HR managers, and other internal users
-                  </p>
-                  <button
-                    onClick={() => setShowCreateStaff(true)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white"
-                    style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
-                  >
-                    <Icon name="Plus" size={14} color="currentColor" />
-                    Create Staff User
-                  </button>
-                </div>
-              ) : (
-                /* Populated list */
-                <div className="divide-y divide-border">
-                  {staffUsers.map(staff => (
-                    <div
-                      key={staff.id}
-                      className="flex items-center justify-between px-5 py-3.5 hover:bg-muted/40 transition-colors"
-                    >
-                      {/* Avatar + name/email */}
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                          <Icon name="User" size={16} color="#1A56DB" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate">
-                            {staff.full_name || '—'}
-                          </p>
-                          <p className="text-xs text-muted-foreground truncate">{staff.email}</p>
-                        </div>
-                      </div>
+        {/* SALES REPORTS TAB */}
+        {activeTab === 'reports' && (
+          <div className="space-y-4">
+            {loading ? <Sk className="h-64" /> : (
+              <SalesReportTab
+                assets={stats.assets || []}
+                payments={stats.payments || []}
+                agents={salesAgents}
+                clients={stats.clients || []}
+                onExport={exportCSV}
+              />
+            )}
+          </div>
+        )}
 
-                      {/* Role + status badges */}
-                      <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-                        {staff.phone && (
-                          <span className="hidden sm:inline text-xs text-muted-foreground">
-                            {staff.phone}
-                          </span>
-                        )}
-                        <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium capitalize ${
-                          ROLE_STYLES[staff.role] || 'bg-gray-100 text-gray-600'
-                        }`}>
-                          {staff.role}
-                        </span>
-                        <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
-                          staff.is_active
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-red-100 text-red-600'
-                        }`}>
-                          {staff.is_active ? 'Active' : 'Inactive'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+        {/* SETTLEMENTS TAB */}
+        {activeTab === 'settlements' && (
+          <div className="space-y-4">
+            {loading ? <Sk className="h-64" /> : (
+              <SettlementsTab
+                adminId={userProfile?.id}
+                clients={stats.clients || []}
+              />
+            )}
+          </div>
+        )}
 
-            </div>
+        {/* PAYMENT REMINDERS TAB */}
+        {activeTab === 'reminders' && (
+          <div className="space-y-4">
+            {loading ? <Sk className="h-64" /> : (
+              <PaymentRemindersTab adminId={userProfile?.id} />
+            )}
           </div>
         )}
 
@@ -441,14 +369,6 @@ const SuperAdminDashboard = () => {
         <CreateAgentModal
           onClose={() => setShowCreateAgent(false)}
           onCreate={createSalesAgent}
-        />
-      )}
-
-      {showCreateStaff && (
-        <CreateStaffUserModal
-          isOpen={showCreateStaff}
-          onClose={() => setShowCreateStaff(false)}
-          onSuccess={() => refetch()}
         />
       )}
     </MainLayout>

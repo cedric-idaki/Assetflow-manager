@@ -10,9 +10,29 @@ import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
-const ROLES = ['accountant','collections_officer','manager','finance','operations','sales_agent'];
+// HR employees exist purely as payroll records (they never log in), so the role value
+// carries no permissions — it's just a label. We store the already-valid 'staff' enum
+// value and display it as "Employee"; no new enum value or DB migration is required.
+// `value` = role stored on the profile (valid user_role enum value); `label` = UI text.
+const ROLES = [
+  { value: 'staff',               label: 'Employee' },
+  { value: 'accountant',          label: 'Accountant' },
+  { value: 'collections_officer', label: 'Collections Officer' },
+  { value: 'manager',             label: 'Manager' },
+  { value: 'finance',             label: 'Finance' },
+  { value: 'operations',          label: 'Operations' },
+  { value: 'sales_agent',         label: 'Sales Agent' },
+];
 const DEPTS = ['Finance','Sales','Operations','Administration','HR','IT','Management'];
 const EMP_TYPES = ['full_time','part_time','contract','intern'];
+
+// Display label for a stored role value (e.g. 'staff' → 'Employee'). Falls back to a
+// title-cased version of the raw value for any role not in the ROLES list.
+const roleLabel = (role) => {
+  const found = ROLES.find(r => r.value === role);
+  if (found) return found.label;
+  return (role || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+};
 
 const S = {
   input:  'w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all',
@@ -55,7 +75,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     full_name:           employee?.full_name           || '',
     email:               employee?.email               || '',
     phone:               employee?.phone               || '',
-    role:                employee?.role                || 'operations',
+    role:                employee?.role                || 'staff',
     department:          employee?.department          || '',
     employment_type:     employee?.employment_type     || 'full_time',
     date_joined:         employee?.date_joined         || '',
@@ -98,7 +118,9 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         bank_branch:         form.bank_branch         || null,
         leave_balance:       parseInt(form.leave_balance) || 21,
         is_active:           form.is_active,
-        admin_id:            adminId,
+        // On create → tag the record with the creator's account id.
+        // On edit  → preserve the original owner so editing never reassigns it.
+        admin_id:            isEdit ? (employee.admin_id || adminId) : adminId,
         updated_at:          new Date().toISOString(),
       };
 
@@ -138,9 +160,15 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Failed to create employee record.');
 
-        // Patch the profile with the HR-specific fields the Edge Function doesn't set
+        // Patch the profile with the HR-specific fields the Edge Function doesn't set.
+        // Critically, admin_id must be written here — the handle_new_user trigger only
+        // copies id/email/full_name/role, so without this the new employee would have a
+        // NULL admin_id and never appear in the creator's scoped list.
         if (result.id) {
           await supabase.from('user_profiles').update({
+            admin_id:            payload.admin_id,
+            department:          payload.department,
+            is_active:           payload.is_active,
             employment_type:     payload.employment_type,
             date_joined:         payload.date_joined,
             basic_salary:        payload.basic_salary,
@@ -207,7 +235,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             <div>
               <label className={S.label}>Role</label>
               <select className={S.select} value={form.role} onChange={e => set('role', e.target.value)}>
-                {ROLES.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
+                {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
             </div>
             <div>
@@ -319,7 +347,7 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onClose }) => {
             </div>
             <div>
               <p className="text-base font-semibold">{employee.full_name}</p>
-              <p className="text-xs text-muted-foreground capitalize">{(employee.role || '').replace(/_/g, ' ')} · {employee.department || '—'}</p>
+              <p className="text-xs text-muted-foreground">{roleLabel(employee.role)} · {employee.department || '—'}</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -694,7 +722,11 @@ const HRPage = () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
     const { data: profile } = await supabase.from('user_profiles').select('id, role, admin_id').eq('id', user.id).maybeSingle();
-    return profile?.role === 'admin' ? user.id : (profile?.admin_id || user.id);
+    // admin & super_admin own the records they create (scope by their own id).
+    // Other staff inherit their parent admin's scope via admin_id.
+    return (profile?.role === 'admin' || profile?.role === 'super_admin')
+      ? user.id
+      : (profile?.admin_id || user.id);
   }, []);
 
   const fetchAll = useCallback(async () => {
@@ -707,8 +739,11 @@ const HRPage = () => {
     const [empRes, payRes] = await Promise.all([
       supabase.from('user_profiles')
         .select('id, full_name, email, role, department, phone, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, nssf_number, sha_number, national_id, bank_name, bank_account, bank_branch')
+        // Scoped to the viewer's account: an admin sees all staff under their account;
+        // a super admin sees only the staff they created. Account-holder roles
+        // (client / admin / super_admin) are never listed as "employees".
         .eq('admin_id', aId)
-        .not('role', 'in', '("client","super_admin")')
+        .not('role', 'in', '("client","super_admin","admin")')
         .order('full_name'),
       supabase.from('payroll_records')
         .select('id, employee_id, pay_month, gross_salary, net_salary, paye, nssf, shif, status, meal_allowance, bonus, gift, loan_deduction, advance_deduction')
@@ -894,7 +929,7 @@ const HRPage = () => {
                               </div>
                             </div>
                           </td>
-                          <td className={S.td + ' capitalize'}>{(emp.role || '').replace(/_/g, ' ')}</td>
+                          <td className={S.td}>{roleLabel(emp.role)}</td>
                           <td className={S.td}>{emp.department || '—'}</td>
                           <td className={S.td}><Badge status={emp.employment_type} /></td>
                           <td className={`${S.td} font-mono font-semibold text-foreground`}>{fmt(gross)}</td>

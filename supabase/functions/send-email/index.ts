@@ -2,6 +2,10 @@
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+// Set EMAIL_FROM to a verified-domain sender (e.g. "AssetFlow <noreply@yourco.com>")
+// so emails deliver to any recipient. The onboarding@resend.dev fallback only
+// delivers to the Resend account owner's own address (test mode).
+const EMAIL_FROM = Deno.env.get("EMAIL_FROM") || "AssetFlow <onboarding@resend.dev>";
 
 const formatCurrency = (val: number, currency = "KES") =>
   new Intl.NumberFormat("en-KE", { style: "currency", currency, minimumFractionDigits: 0 }).format(val || 0);
@@ -298,6 +302,43 @@ const buildReminderEmail = (data: any) => {
 </body></html>`;
 };
 
+const buildCredentialsEmail = (data: any) => {
+  const { fullName, email, password, accountNumber, portalUrl } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🔑</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Welcome to AssetFlow</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Your client portal account is ready</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Client"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      An account has been created for you on the AssetFlow client portal. Use the credentials below to sign in. For your security, please change your password after your first login.
+    </p>
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Login Email</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${email}</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Temporary Password</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right;font-family:monospace">${password}</td></tr>
+        ${accountNumber ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Account No.</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${accountNumber}</td></tr>` : ""}
+      </table>
+    </div>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Sign in to your portal</a>
+    </div>` : ""}
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#92400e">Keep these details private. If you didn't expect this email, please contact your provider.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -340,6 +381,10 @@ serve(async (req) => {
           : `🔔 Payment Reminder – Due ${data?.daysUntilDue === 0 ? "Today" : `in ${data?.daysUntilDue} Day(s)`}`;
         html = buildReminderEmail(data);
         break;
+      case "client_welcome":
+        subject = "Your AssetFlow client portal login";
+        html = buildCredentialsEmail(data);
+        break;
       default:
         throw new Error(`Unknown email type: ${type}`);
     }
@@ -351,7 +396,7 @@ serve(async (req) => {
         Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: "onboarding@resend.dev",
+        from: EMAIL_FROM,
         to: Array.isArray(to) ? to : [to],
         subject,
         html,

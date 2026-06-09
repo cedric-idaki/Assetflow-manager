@@ -59,9 +59,15 @@ var Sidebar = function(props) {
 
   /* ── Navigation items per role ──────────────────────────────────────── */
   var superAdminItems = [
-    { label: 'SA Dashboard',   path: '/super-admin-dashboard',    icon: 'Crown' },
-    { label: 'Reports',        path: '/reports-analytics-center', icon: 'BarChart3' },
-    { label: 'Administration', path: '/system-administration',    icon: 'Settings', badge: pendingCount || null },
+    { label: 'SA Dashboard',   path: '/super-admin-dashboard',         icon: 'Crown' },
+    { label: 'Finance Hub',    path: '/finance-hub',                   icon: 'Landmark' },
+    { label: 'POS / New Sale', path: '/pos',                           icon: 'ShoppingCart' },
+    { label: 'E-Signature',    path: '/e-signature',                   icon: 'PenTool' },
+    { label: 'Payments',       path: '/payment-collections-hub',       icon: 'CreditCard' },
+    { label: 'KYC Management', path: '/kyc-management-screen',         icon: 'ShieldCheck' },
+    { label: 'KYC Renewals',   path: '/kyc-renewal-management-screen', icon: 'RefreshCw' },
+    { label: 'Reports',        path: '/reports-analytics-center',      icon: 'BarChart3' },
+    { label: 'Administration', path: '/system-administration',         icon: 'Settings', badge: pendingCount || null },
   ];
 
   var adminItems = [
@@ -82,8 +88,12 @@ var Sidebar = function(props) {
     { label: 'Assets & Clients', path: '/asset-client-management', icon: 'Briefcase' },
     { label: 'Payments',         path: '/payment-collections-hub', icon: 'CreditCard' },
     { label: 'KYC Management',   path: '/kyc-management-screen',   icon: 'ShieldCheck' },
-    { label: 'HR Management',    path: '/hr-management',           icon: 'Users' },
     { label: 'Reports',          path: '/reports-analytics-center',icon: 'BarChart3' },
+  ];
+
+  // HR role: access is limited to the HR segment only.
+  var hrItems = [
+    { label: 'HR Management', path: '/hr-management', icon: 'Users' },
   ];
 
   var clientItems     = [
@@ -106,6 +116,7 @@ var Sidebar = function(props) {
   var navItems =
     role === 'super_admin'       ? superAdminItems :
     role === 'admin'             ? adminItems :
+    role === 'hr'                ? hrItems :
     role === 'client'            ? clientItems :
     (role === 'sales_agent' || role === 'sales') ? salesAgentItems :
     (role === 'director' || role === 'accountant' || role === 'collections_officer' ||
@@ -125,7 +136,7 @@ var Sidebar = function(props) {
       super_admin: 'System Owner', admin: 'Administrator',
       director: 'Director', accountant: 'Accountant',
       collections_officer: 'Collections', manager: 'Manager',
-      finance: 'Finance', operations: 'Operations',
+      finance: 'Finance', operations: 'Operations', hr: 'Human Resources',
       sales_agent: 'Sales Agent', sales: 'Sales Agent', client: 'Client',
     })[r] || (r || 'Staff').replace(/_/g, ' ');
   };

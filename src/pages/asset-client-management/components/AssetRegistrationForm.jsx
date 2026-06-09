@@ -3,6 +3,40 @@ import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 import Input from '../../../components/ui/Input';
 import Select from '../../../components/ui/Select';
+import { supabase } from '../../../lib/supabase';
+
+// Upload a single image to the public 'asset-images' Storage bucket using the
+// user's JWT. Returns the public URL, or null if Storage isn't available (caller
+// then falls back to an inline base64 preview).
+const uploadAssetImage = async (file) => {
+  try {
+    const ext      = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const fileName = `asset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    const res = await fetch(
+      `${supabaseUrl}/storage/v1/object/asset-images/${fileName}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token || supabaseAnonKey}`,
+          'apikey': supabaseAnonKey,
+          'Content-Type': file.type,
+          'x-upsert': 'true',
+        },
+        body: file,
+      }
+    );
+    if (!res.ok) return null;
+    return `${supabaseUrl}/storage/v1/object/public/asset-images/${fileName}`;
+  } catch {
+    return null;
+  }
+};
 
 // ── Asset-type smart field configs ────────────────────────────────────────────
 const ASSET_CONFIGS = {
@@ -113,14 +147,20 @@ const ASSET_CONFIGS = {
 // ── Image Upload ──────────────────────────────────────────────────────────────
 const ImageUpload = ({ images, onAdd, onRemove }) => {
   const fileRef = useRef();
-  const handleFiles = (e) => {
+  const handleFiles = async (e) => {
     const files = Array.from(e.target.files);
-    files.forEach(file => {
-      if (!file.type.startsWith('image/')) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => onAdd({ file, preview: ev.target.result, name: file.name });
-      reader.readAsDataURL(file);
-    });
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      // Read base64 for instant preview / fallback
+      const preview = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => resolve(ev.target.result);
+        reader.readAsDataURL(file);
+      });
+      // Try to push to Storage; on failure `url` stays undefined and we keep base64
+      const url = await uploadAssetImage(file);
+      onAdd({ name: file.name, preview, url: url || undefined });
+    }
     e.target.value = '';
   };
   return (
@@ -135,7 +175,7 @@ const ImageUpload = ({ images, onAdd, onRemove }) => {
       <div className="flex flex-wrap gap-3">
         {images.map((img, i) => (
           <div key={i} className="relative w-20 h-20 rounded-xl overflow-hidden border-2 border-border group">
-            <img src={img.preview} alt={img.name} className="w-full h-full object-cover" />
+            <img src={img.preview || img.url} alt={img.name} className="w-full h-full object-cover" />
             <button type="button" onClick={() => onRemove(i)}
               className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               <Icon name="Trash2" size={14} color="white" />
@@ -267,7 +307,9 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
   const [formData, setFormData]   = useState(initial);
   const [errors, setErrors]       = useState({});
   const [pricingErrors, setPricingErrors] = useState({});
-  const [images, setImages]       = useState([]);
+  // Seed from any existing images so editing an asset preserves them instead of
+  // overwriting with an empty list on save.
+  const [images, setImages]       = useState(Array.isArray(editData?.images) ? editData.images : []);
 
   const defaultAssetTypes = [
     { value: 'vehicle',              label: 'Vehicle / Car Dealer' },
@@ -407,7 +449,10 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
       plateNumber:       formData.vehiclePlate      || '',
       chassisNumber:     formData.vehicleChassis    || '',
       specifications:    formData.specifications    || '',
-      images:            images.map(img => ({ name: img.name, preview: img.preview })),
+      // Prefer the Storage URL (keeps the DB row small); fall back to inline base64.
+      images:            images.map(img => img.url
+        ? { name: img.name, url: img.url }
+        : { name: img.name, preview: img.preview }),
     });
   };
 

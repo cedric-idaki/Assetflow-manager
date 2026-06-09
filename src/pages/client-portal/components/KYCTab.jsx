@@ -56,6 +56,10 @@ const KYCTab = ({ clientProfile }) => {
 
   const handleUpload = async function(docType, file) {
     if (!file) return;
+    if (!clientProfile || !clientProfile.id) {
+      showToast('Your client profile could not be loaded. Please refresh the page or contact your company admin.', 'error');
+      return;
+    }
     if (file.size > 5 * 1024 * 1024) {
       showToast('File too large. Maximum size is 5MB.', 'error');
       return;
@@ -67,7 +71,9 @@ const KYCTab = ({ clientProfile }) => {
     });
     try {
       var authResult = await supabase.auth.getUser();
-      var user = authResult.data.user;
+      var user = authResult.data && authResult.data.user;
+      if (!user) throw new Error('Your session has expired. Please sign in again.');
+
       var cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       var filePath = clientProfile.id + '/' + docType + '_' + Date.now() + '_' + cleanName;
 
@@ -83,8 +89,9 @@ const KYCTab = ({ clientProfile }) => {
 
       var existing = getDocStatus(docType);
 
+      var writeResult;
       if (existing) {
-        await supabase
+        writeResult = await supabase
           .from('kyc_documents')
           .update({
             file_url: fileUrl,
@@ -95,7 +102,7 @@ const KYCTab = ({ clientProfile }) => {
           })
           .eq('id', existing.id);
       } else {
-        await supabase
+        writeResult = await supabase
           .from('kyc_documents')
           .insert({
             client_id: clientProfile.id,
@@ -107,7 +114,9 @@ const KYCTab = ({ clientProfile }) => {
             admin_id: clientProfile.admin_id,
           });
       }
+      if (writeResult && writeResult.error) throw writeResult.error;
 
+      // Best-effort: a DB trigger also sets this server-side, so ignore RLS errors here.
       await supabase
         .from('clients')
         .update({ kyc_status: 'under_review' })

@@ -76,9 +76,11 @@ const AdminDashboard = () => {
   const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
   const navigate = useNavigate();
 
-  // Max users from either subscription.plan.max_users or subscription.max_users
-  const maxUsers = subscription?.plan?.max_users || subscription?.max_users || null;
-  const activeStaff = (staff || []).filter(s => s.is_active !== false).length;
+  // Seat limit comes from the subscription's own snapshot (reflects purchased
+  // extra users), falling back to the catalog plan. Only portal-staff consume
+  // seats — clients (customers) and HR employees (role 'staff', no login) do not.
+  const maxUsers = subscription?.max_users ?? subscription?.plan?.max_users ?? null;
+  const activeStaff = (staff || []).filter(s => s.role !== 'client' && s.role !== 'staff' && s.is_active !== false).length;
   const staffSlotsLeft = maxUsers ? maxUsers - activeStaff : null;
 
   const tabs = [

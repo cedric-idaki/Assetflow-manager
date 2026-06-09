@@ -374,13 +374,13 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient }) =>
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
             <p className="text-xs font-semibold text-emerald-800 mb-1">🎯 Ready to convert this lead?</p>
             <p className="text-xs text-emerald-700 mb-2">
-              Create a client account so they can access the portal and make payments.
+              Register them as a company with an admin portal account. Their details are prefilled.
             </p>
             <button
               onClick={() => { onClose(); onConvertToClient(lead); }}
               className="w-full py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
             >
-              Create Client Account →
+              Register as Company →
             </button>
           </div>
         </div>
@@ -429,8 +429,8 @@ const MyClientsSection = ({ leads, onCreateClient }) => {
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white"
           style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
         >
-          <Icon name="UserPlus" size={13} color="white" />
-          New Client
+          <Icon name="Building2" size={13} color="white" />
+          Register Company
         </button>
       </div>
 
@@ -438,12 +438,12 @@ const MyClientsSection = ({ leads, onCreateClient }) => {
         <div className="text-center py-8 text-muted-foreground">
           <Icon name="Users" size={28} color="currentColor" />
           <p className="text-xs mt-2 font-medium">No converted clients yet</p>
-          <p className="text-xs opacity-60 mt-0.5">Convert a lead or create a new client account</p>
+          <p className="text-xs opacity-60 mt-0.5">Convert a lead or register a new company</p>
           <button
             onClick={() => onCreateClient(null)}
             className="mt-3 text-xs text-emerald-600 hover:underline font-semibold"
           >
-            Create first client account →
+            Register a company →
           </button>
         </div>
       ) : (
@@ -470,7 +470,7 @@ const MyClientsSection = ({ leads, onCreateClient }) => {
                   onClick={() => onCreateClient(lead)}
                   className="text-xs text-blue-600 hover:underline"
                 >
-                  Create account
+                  Register company
                 </button>
               </div>
             </div>
@@ -518,9 +518,8 @@ const SalesAgentPortal = () => {
     openModal('createClient');
   };
 
-  const handleClientCreated = (clientDetails) => {
-    // Show detailed success popup with client info
-    openModal('successPopup', clientDetails || {});
+  const handleClientCreated = () => {
+    // The CreateClientModal shows its own success popup; just refresh data here.
     refetch();
   };
 
@@ -580,14 +579,14 @@ const SalesAgentPortal = () => {
               </button>
             </div>
 
-            {/* Create client */}
+            {/* Register company / admin account */}
             <button
               onClick={() => { closeModal('prefillLead'); openModal('createClient'); }}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
             >
-              <Icon name="UserPlus" size={15} color="white" />
-              Create Client
+              <Icon name="Building2" size={15} color="white" />
+              Register Company
             </button>
 
             {/* Export */}
@@ -758,7 +757,7 @@ const SalesAgentPortal = () => {
         />
       )}
 
-      {/* ── Create Client Modal ── */}
+      {/* ── Register Company / Create Admin Modal ── */}
       {modals.createClient && (
         <CreateClientModal
           isOpen={modals.createClient}
@@ -767,72 +766,6 @@ const SalesAgentPortal = () => {
           prefillLead={modals.prefillLead}
           onSuccess={handleClientCreated}
         />
-      )}
-
-      {/* ── Client Created Success Popup ── */}
-      {modals.successPopup && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[400] flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-            {/* Green header */}
-            <div className="bg-emerald-600 px-6 py-5 text-center">
-              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
-                <Icon name="CheckCircle" size={32} color="white" />
-              </div>
-              <h2 className="text-lg font-bold text-white">Client Account Created!</h2>
-              <p className="text-xs text-emerald-100 mt-1">The account is ready to use</p>
-            </div>
-
-            {/* Details */}
-            <div className="px-6 py-5 space-y-3">
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2">
-                <div className="text-xs font-semibold text-emerald-800 uppercase tracking-wide mb-2">Account Details</div>
-                {[
-                  { icon: 'User',    label: 'Name',           value: modals.successPopup.full_name },
-                  { icon: 'Mail',    label: 'Login Email',    value: modals.successPopup.email },
-                  { icon: 'Phone',   label: 'Phone',          value: modals.successPopup.phone },
-                  { icon: 'Hash',    label: 'Account Number', value: modals.successPopup.account_number },
-                  { icon: 'Shield',  label: 'KYC Status',     value: 'Pending Verification' },
-                ].filter(r => r.value).map(row => (
-                  <div key={row.label} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-1.5 text-emerald-700">
-                      <Icon name={row.icon} size={12} color="currentColor" />
-                      <span className="font-medium">{row.label}</span>
-                    </div>
-                    <span className="font-semibold text-emerald-900 text-right max-w-[180px] truncate">{row.value}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-                <span className="font-semibold">⚠️ Important:</span> Share the login email and password with the client securely. The password cannot be retrieved later.
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-700">
-                <span className="font-semibold">Next steps:</span> The client logs in at the portal, completes KYC verification, and can then view their assets and make payments.
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="px-6 pb-5 flex gap-3">
-              <button
-                onClick={() => closeModal('successPopup')}
-                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl transition-colors"
-              >
-                Done ✓
-              </button>
-              <button
-                onClick={() => {
-                  const text = `Client Account Created\n\nName: ${modals.successPopup.full_name}\nEmail: ${modals.successPopup.email}\nAccount: ${modals.successPopup.account_number}\n\nPlease log in at the client portal.`;
-                  navigator.clipboard?.writeText(text).then(() => showToast('Details copied to clipboard'));
-                  closeModal('successPopup');
-                }}
-                className="px-4 py-2.5 border border-border text-muted-foreground text-sm font-medium rounded-xl hover:bg-muted"
-              >
-                Copy & Close
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
     </MainLayout>

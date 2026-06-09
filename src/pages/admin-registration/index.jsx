@@ -4,37 +4,45 @@ import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { formatKEPhone } from '../../utils/phoneUtils';
 
+// Flat KES 360 / month per plan. The plan sets how many staff portal accounts
+// the company may create; extra users beyond the tier cost KES 360 each (upgrade).
 const PLANS = [
   {
     id: 'bronze',
     name: 'Bronze',
-    price: 5000,
-    maxUsers: 7,
+    price: 360,
+    maxUsers: 5,
+    storageGb: 5,
+    userRange: '1–5 users',
     color: '#CD7F32',
     bg: 'bg-amber-50',
     border: 'border-amber-300',
-    features: ['Up to 7 users', 'Asset management', 'Client portal', 'Basic reporting'],
+    features: ['1–5 users', '5 GB free storage', 'Asset management', 'Client portal', 'Basic reporting'],
   },
   {
     id: 'silver',
     name: 'Silver',
-    price: 10000,
+    price: 360,
     maxUsers: 16,
+    storageGb: 10,
+    userRange: '6–16 users',
     color: '#C0C0C0',
     bg: 'bg-slate-50',
     border: 'border-slate-300',
-    features: ['Up to 16 users', 'Asset management', 'Client portal', 'Sales agent portal', 'KYC management', 'Advanced reporting'],
+    features: ['6–16 users', '10 GB free storage', 'Asset management', 'Client portal', 'Sales agent portal', 'KYC management', 'Advanced reporting'],
     popular: true,
   },
   {
     id: 'gold',
     name: 'Gold',
-    price: 20000,
+    price: 360,
     maxUsers: null,
+    storageGb: 15,
+    userRange: '17+ users',
     color: '#C9A84C',
     bg: 'bg-yellow-50',
     border: 'border-yellow-300',
-    features: ['Unlimited users', 'Asset management', 'Client portal', 'Sales agent portal', 'KYC management', 'Full reporting', 'Priority support', 'Custom contracts'],
+    features: ['17+ users', '15 GB free storage', 'Asset management', 'Client portal', 'Sales agent portal', 'KYC management', 'Full reporting', 'Priority support', 'Custom contracts'],
   },
 ];
 
@@ -497,13 +505,7 @@ const AdminRegistration = () => {
                     background: selectedPlan === plan.id ? 'rgba(52,193,221,0.05)' : C.card,
                   }}
                 >
-                  {plan.popular && (
-                    <span className="absolute top-3 right-3 px-2 py-0.5 rounded-full text-xs font-bold"
-                      style={{ background: C.primary, color: C.navy }}>
-                      Popular
-                    </span>
-                  )}
-                  <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm"
                       style={{ background: plan.color, color: '#fff' }}>
                       {plan.name[0]}
@@ -511,7 +513,7 @@ const AdminRegistration = () => {
                     <div>
                       <p className="font-bold" style={{ color: C.navy }}>{plan.name}</p>
                       <p className="text-xs" style={{ color: C.textMuted }}>
-                        {plan.maxUsers ? `Up to ${plan.maxUsers} users` : 'Unlimited users'}
+                        {plan.userRange} · {plan.storageGb} GB free
                       </p>
                     </div>
                     <div className="ml-auto text-right">
@@ -520,14 +522,6 @@ const AdminRegistration = () => {
                       </p>
                       <p className="text-xs" style={{ color: C.textMuted }}>per month</p>
                     </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1 mt-2">
-                    {plan.features.map(f => (
-                      <div key={f} className="flex items-center gap-1.5 text-xs" style={{ color: C.textMuted }}>
-                        <Icon name="Check" size={11} color="#10b981" />
-                        {f}
-                      </div>
-                    ))}
                   </div>
                   {selectedPlan === plan.id && (
                     <div className="absolute top-3 left-3">
@@ -538,6 +532,17 @@ const AdminRegistration = () => {
                   )}
                 </button>
               ))}
+
+              <div className="flex items-start gap-2 p-3 rounded-xl text-xs"
+                style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: '#075985' }}>
+                <Icon name="Info" size={14} color="#0284c7" />
+                <span>
+                  Every plan is a flat <span className="font-semibold">KES 360 / month</span>. Your plan sets how many
+                  staff portal accounts you can create. Once you reach your user limit you must upgrade to add more —
+                  extra users are <span className="font-semibold">KES 360 each</span>. Employees without a login portal
+                  are unlimited.
+                </span>
+              </div>
             </div>
           )}
 
@@ -554,7 +559,7 @@ const AdminRegistration = () => {
                         <p className="text-xs" style={{ color: C.textMuted }}>Selected Plan</p>
                         <p className="font-bold" style={{ color: C.navy }}>{plan.name} Plan</p>
                         <p className="text-xs" style={{ color: C.textMuted }}>
-                          {plan.maxUsers ? `Up to ${plan.maxUsers} users` : 'Unlimited users'}
+                          {plan.userRange} · {plan.storageGb} GB free storage
                         </p>
                       </div>
                       <div className="text-right">

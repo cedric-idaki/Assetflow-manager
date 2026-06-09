@@ -48,6 +48,7 @@ const AssetClientManagement = () => {
   const [lastSynced, setLastSynced] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const [syncError, setSyncError] = useState(false);
+  const [portalCredentials, setPortalCredentials] = useState(null);
 
   // ── Get current admin ID and company profile ───────────────────────────────
   useEffect(() => {
@@ -234,6 +235,7 @@ const AssetClientManagement = () => {
             chassis_number: assetData.chassisNumber,
             property_type: assetData.propertyType,
             property_size: assetData.propertySize,
+            images: assetData.images || [],
             metadata: {
               propertyTitle: assetData.propertyTitle,
               propertyBedsath: assetData.propertyBedsath,
@@ -290,6 +292,7 @@ const AssetClientManagement = () => {
             chassis_number: assetData.chassisNumber,
             property_type: assetData.propertyType,
             property_size: assetData.propertySize,
+            images: assetData.images || [],
             metadata: {
               propertyTitle: assetData.propertyTitle,
               propertyBedsath: assetData.propertyBedsath,
@@ -339,33 +342,81 @@ const AssetClientManagement = () => {
   };
 
   // ── Save client with admin_id ──────────────────────────────────────────────
-  // ── Provision client portal account via Edge Function ─────────────────────
-  const provisionClientAccount = async ({ clientId, email, fullName, phone, accountNumber }) => {
+  // ── Provision client portal login WITHOUT email (no rate limit) ───────────
+  // Creates the auth account directly with a temporary password via the
+  // create-staff-user Edge Function (admin.createUser, email auto-confirmed) so
+  // there's no dependency on Supabase's email rate limit. Returns the generated
+  // password so the admin can share it with the client.
+  const provisionClientAccount = async ({ email, fullName, phone }) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
-      if (!token) throw new Error('No active session — cannot provision account.');
+      if (!token) throw new Error('No active session — cannot create login.');
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
         ? import.meta.env.VITE_SUPABASE_URL.startsWith('http')
           ? import.meta.env.VITE_SUPABASE_URL
           : `https://${import.meta.env.VITE_SUPABASE_URL}.supabase.co`
         : '';
+      const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-      const res = await fetch(`${supabaseUrl}/functions/v1/provision-client`, {
+      // Strong temporary password: >= 8 chars, one of each class, no ambiguous chars.
+      const pick = (s) => s[Math.floor(Math.random() * s.length)];
+      const U = 'ABCDEFGHJKLMNPQRSTUVWXYZ', L = 'abcdefghijkmnpqrstuvwxyz', D = '23456789', SY = '@#$%';
+      let password = pick(U) + pick(L) + pick(D) + pick(SY);
+      for (let i = 0; i < 8; i++) password += pick(U + L + D + SY);
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/create-staff-user`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
+          'apikey': supabaseAnon,
         },
-        body: JSON.stringify({ clientId, email, fullName, phone, accountNumber }),
+        body: JSON.stringify({
+          email, password, full_name: fullName, role: 'client',
+          phone: phone || '', admin_id: adminId,
+        }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || 'Provisioning failed');
-      return { success: true, authUserId: json.authUserId, message: json.message };
+      if (!res.ok) throw new Error(json?.error || json?.message || 'Login creation failed');
+      return { success: true, password };
     } catch (err) {
-      // Non-fatal: the client record was saved; just surface a warning
+      // Non-fatal: the client record was saved; just surface a warning.
+      return { success: false, error: err?.message };
+    }
+  };
+
+  // ── Email the login credentials to the client (via Resend, no rate limit) ──
+  const sendCredentialsEmail = async ({ email, fullName, password, accountNumber }) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+        ? import.meta.env.VITE_SUPABASE_URL.startsWith('http')
+          ? import.meta.env.VITE_SUPABASE_URL
+          : `https://${import.meta.env.VITE_SUPABASE_URL}.supabase.co`
+        : '';
+      const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/send-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'apikey': supabaseAnon,
+        },
+        body: JSON.stringify({
+          type: 'client_welcome',
+          to: email,
+          data: { fullName, email, password, accountNumber, portalUrl: `${window.location.origin}/login` },
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || 'Email failed');
+      return { success: true };
+    } catch (err) {
       return { success: false, error: err?.message };
     }
   };
@@ -459,16 +510,27 @@ const AssetClientManagement = () => {
           });
 
           if (provisionResult.success) {
-            // Show a success toast noting the invite email was sent
-            setError(''); // clear any prior error
-            // Use a transient info state if your app has one; otherwise just log
-            console.info(`[AssetFlow] Portal invite sent to ${clientData.email}`);
+            // Email the credentials to the client automatically, and also show
+            // them to the admin as a fallback in case email delivery fails.
+            setError('');
+            const creds = {
+              fullName:      name,
+              email:         clientData.email,
+              password:      provisionResult.password,
+              accountNumber: insertedClient.account_number || safePayload.account_number,
+            };
+            setPortalCredentials({ ...creds, emailStatus: 'sending' });
+            const emailRes = await sendCredentialsEmail(creds);
+            setPortalCredentials({
+              ...creds,
+              emailStatus: emailRes.success ? 'sent' : 'failed',
+              emailError:  emailRes.error,
+            });
           } else {
-            // Client record saved successfully — portal provisioning can be retried
+            // Client record saved successfully — login can be retried later.
             console.warn('[AssetFlow] Portal provisioning warning:', provisionResult.error);
             setError(
-              `Client saved, but portal invite could not be sent: ${provisionResult.error}. ` +
-              `You can re-send from the client details panel.`
+              `Client saved, but the portal login could not be created: ${provisionResult.error}.`
             );
           }
         }
@@ -758,6 +820,84 @@ const AssetClientManagement = () => {
         )}
         {showClientDetails && selectedClient && (
           <ClientDetailsModal client={selectedClient} onClose={() => setShowClientDetails(false)} />
+        )}
+
+        {/* Client portal login created — show credentials to share */}
+        {portalCredentials && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+              <div className="bg-emerald-600 px-6 py-5 text-center">
+                <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <h2 className="text-lg font-bold text-white">Client Portal Login Created</h2>
+                <p className="text-xs text-emerald-100 mt-1">
+                  {portalCredentials.emailStatus === 'sent'
+                    ? `Login details emailed to ${portalCredentials.email}`
+                    : 'Share these credentials with the client'}
+                </p>
+              </div>
+
+              <div className="px-6 py-5 space-y-3">
+                {portalCredentials.emailStatus === 'sending' && (
+                  <div className="rounded-lg px-3 py-2 text-xs bg-blue-50 border border-blue-200 text-blue-700">
+                    Sending login details to the client by email…
+                  </div>
+                )}
+                {portalCredentials.emailStatus === 'sent' && (
+                  <div className="rounded-lg px-3 py-2 text-xs bg-emerald-50 border border-emerald-200 text-emerald-700">
+                    ✅ Login details were emailed to {portalCredentials.email}.
+                  </div>
+                )}
+                {portalCredentials.emailStatus === 'failed' && (
+                  <div className="rounded-lg px-3 py-2 text-xs bg-amber-50 border border-amber-200 text-amber-800">
+                    ⚠️ Couldn't email the client automatically{portalCredentials.emailError ? ` (${portalCredentials.emailError})` : ''}. Share the details below manually.
+                  </div>
+                )}
+                {[
+                  { label: 'Name',          value: portalCredentials.fullName },
+                  { label: 'Login Email',   value: portalCredentials.email },
+                  { label: 'Temp Password', value: portalCredentials.password, mono: true },
+                  { label: 'Account No.',   value: portalCredentials.accountNumber },
+                ].filter(r => r.value).map(r => (
+                  <div key={r.label} className="flex items-center justify-between gap-3 bg-muted/40 rounded-lg px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{r.label}</p>
+                      <p className={`text-sm font-semibold text-foreground truncate ${r.mono ? 'font-mono' : ''}`}>{r.value}</p>
+                    </div>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(String(r.value))}
+                      className="text-xs px-2 py-1 rounded-md border border-border text-muted-foreground hover:bg-muted flex-shrink-0"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                ))}
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                  ⚠️ This password is shown only once and cannot be retrieved later. The client signs in at the portal and can change it.
+                </div>
+              </div>
+
+              <div className="px-6 pb-5 flex gap-3">
+                <button
+                  onClick={() => navigator.clipboard?.writeText(
+                    `AssetFlow Client Portal Login\nName: ${portalCredentials.fullName}\nEmail: ${portalCredentials.email}\nPassword: ${portalCredentials.password}\nAccount: ${portalCredentials.accountNumber || ''}`
+                  )}
+                  className="px-4 py-2.5 border border-border text-muted-foreground text-sm font-medium rounded-xl hover:bg-muted"
+                >
+                  Copy all
+                </button>
+                <button
+                  onClick={() => setPortalCredentials(null)}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </MainLayout>

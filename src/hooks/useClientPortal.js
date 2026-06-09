@@ -15,16 +15,29 @@ export const useClientPortal = () => {
   const fetchClientProfile = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return null;
+      if (!user?.email) return null;
 
-      const { data } = await supabase
-        .from('clients')
-        .select('*, admin:user_profiles!admin_id(full_name, email, phone)')
-        .eq('email', user.email)
-        .maybeSingle();
+      let profile = null;
 
-      setClientProfile(data);
-      return data;
+      // Primary: SECURITY DEFINER RPC — bypasses RLS and matches email
+      // case-insensitively, so the client always resolves to their row.
+      const rpcRes = await supabase.rpc('get_my_client_profile');
+      if (!rpcRes.error && Array.isArray(rpcRes.data) && rpcRes.data.length) {
+        profile = rpcRes.data[0];
+      }
+
+      // Fallback: direct select (works once the self-read RLS policy exists).
+      if (!profile) {
+        const res = await supabase
+          .from('clients')
+          .select('*')
+          .eq('email', user.email)
+          .maybeSingle();
+        profile = res.data || null;
+      }
+
+      setClientProfile(profile);
+      return profile;
     } catch (err) {
       console.error('[ClientPortal] Profile error:', err);
       return null;
