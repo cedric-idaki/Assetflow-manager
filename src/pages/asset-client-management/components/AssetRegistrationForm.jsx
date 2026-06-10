@@ -415,6 +415,14 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
 
   const handleSubmit = () => {
     if (!validate()) return;
+    // Capture every type-specific field (engine, fuel, mileage, etc.) so the
+    // marketplace card and details gallery can display real specs.
+    const cfgFields = (ASSET_CONFIGS[formData.assetType] && ASSET_CONFIGS[formData.assetType].fields) || [];
+    const details = {};
+    cfgFields.forEach(f => {
+      const val = formData[f.key];
+      if (val !== undefined && val !== '') details[f.key] = val;
+    });
     onSubmit({
       // Asset details
       type:            formData.assetType,
@@ -453,6 +461,7 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
       images:            images.map(img => img.url
         ? { name: img.name, url: img.url }
         : { name: img.name, preview: img.preview }),
+      details,
     });
   };
 

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
+import AssetDetailsModal from '../../asset-client-management/components/AssetDetailsModal';
+import AssetCoverCarousel from '../../asset-client-management/components/AssetCoverCarousel';
 
 const ASSET_TYPE_META = {
   property:             { label: 'Property',             icon: 'Building2', color: '#1A56DB', bg: 'bg-blue-100' },
@@ -9,6 +11,60 @@ const ASSET_TYPE_META = {
   furnitures:           { label: 'Furniture',            icon: 'Sofa',      color: '#db2777', bg: 'bg-pink-100' },
   heavy_equipment:      { label: 'Heavy Equipment',      icon: 'Truck',     color: '#ea580c', bg: 'bg-orange-100' },
   other:                { label: 'Other',                icon: 'Package',   color: '#6b7280', bg: 'bg-gray-100' },
+};
+
+const STATUS = {
+  available: { label: 'IN STOCK', dot: '#10b981', cls: 'text-emerald-700' },
+  reserved:  { label: 'RESERVED', dot: '#f59e0b', cls: 'text-amber-700' },
+  sold:      { label: 'SOLD',     dot: '#9ca3af', cls: 'text-gray-600' },
+};
+
+const imgSrc = (im) => (im ? (im.url || im.preview) : null);
+
+// Raw DB row → the shape AssetDetailsModal / the card helpers expect.
+const normalize = (a) => ({
+  id: a.asset_code,
+  _id: a.id,
+  type: a.asset_type,
+  description: a.description,
+  sellingPrice: parseFloat(a.selling_price || 0),
+  status: a.asset_status,
+  location: a.location,
+  specifications: a.specifications || '',
+  metadata: a.metadata || {},
+  propertyDetails: a.asset_type === 'property'
+    ? { type: a.property_type, size: a.property_size, location: a.location }
+    : null,
+  vehicleDetails: a.asset_type === 'vehicle'
+    ? { make: a.make, model: a.model, year: a.year, color: a.color, plate: a.plate_number, chassis: a.chassis_number }
+    : null,
+  images: a.images || [],
+  linkedClient: null,
+});
+
+const titleOf = (n) => {
+  if (n.type === 'vehicle') {
+    const v = n.vehicleDetails || {};
+    return [v.make, v.model].filter(Boolean).join(' ') || n.description || 'Asset';
+  }
+  return n.description || 'Asset';
+};
+
+const chipsOf = (n) => {
+  const m = n.metadata || {};
+  switch (n.type) {
+    case 'vehicle':
+      return [
+        m.vehicleMileage && `${Number(m.vehicleMileage).toLocaleString()} km`,
+        m.vehicleGearbox, m.vehicleEngine && `${m.vehicleEngine}cc`, m.vehicleFuel,
+      ];
+    case 'property':       return [n.propertyDetails?.type, n.propertyDetails?.size, m.propertyBedsath];
+    case 'electronics':    return [m.elecBrand, m.elecCondition, m.elecWarranty];
+    case 'furnitures':     return [m.furnCategory, m.furnMaterial, m.furnCondition];
+    case 'construction_dealers': return [m.constCategory, m.constQty && `${m.constQty} ${m.constUnit || ''}`.trim(), m.constGrade];
+    case 'heavy_equipment': return [m.heavyBrand, m.heavyModel, m.heavyHours && `${m.heavyHours} hrs`];
+    default:               return [n.specifications];
+  }
 };
 
 const EnquiryModal = ({ asset, onClose, onSend, existingEnquiry }) => {
@@ -138,6 +194,7 @@ const EnquiryModal = ({ asset, onClose, onSend, existingEnquiry }) => {
 
 const BrowseAssetsTab = ({ assets, enquiries, onEnquire }) => {
   const [selected, setSelected] = useState(null);
+  const [details, setDetails]   = useState(null);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('all');
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -216,73 +273,72 @@ const BrowseAssetsTab = ({ assets, enquiries, onEnquire }) => {
           <p className="text-xs mt-1">Check back later for new listings</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(asset => {
-            const meta = ASSET_TYPE_META[asset.asset_type] || ASSET_TYPE_META.other;
+            const n       = normalize(asset);
             const enquiry = hasEnquiry(asset.id);
+            const st      = STATUS[n.status] || STATUS.available;
+            const chips   = chipsOf(n).filter(Boolean);
+            const year    = n.vehicleDetails?.year || n.metadata?.heavyYear;
+
             return (
-              <div key={asset.id} className="bg-card border border-border rounded-xl overflow-hidden hover:shadow-md transition-all">
-                {/* Asset Header */}
-                <div className="p-4 border-b border-border">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${meta.bg}`}>
-                        <Icon name={meta.icon} size={20} color={meta.color} />
-                      </div>
-                      <div>
-                        <p className="font-semibold text-foreground text-sm line-clamp-2">{asset.description}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{asset.asset_code}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Asset Details */}
-                <div className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Price</span>
-                    <span className="text-base font-bold text-foreground">{fmt(asset.selling_price)}</span>
-                  </div>
-
-                  {asset.location && (
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Icon name="MapPin" size={12} color="currentColor" />
-                      {asset.location}
-                    </div>
+              <div key={asset.id} className="bg-card border border-border rounded-2xl overflow-hidden hover:shadow-lg transition-all flex flex-col">
+                {/* Cover carousel */}
+                <AssetCoverCarousel images={n.images} alt={titleOf(n)} fallbackIcon={(ASSET_TYPE_META[n.type] || ASSET_TYPE_META.other).icon}>
+                  {year && (
+                    <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-white/95 text-gray-900 text-xs font-bold shadow">{year}</span>
                   )}
-
-                  {asset.asset_type === 'vehicle' && asset.make && (
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Icon name="Car" size={12} color="currentColor" />
-                      {asset.make} {asset.model} {asset.year && `(${asset.year})`}
-                    </div>
-                  )}
-
-                  <span className={`inline-flex text-xs px-2 py-0.5 rounded-full font-medium capitalize ${meta.bg}`}
-                    style={{ color: meta.color }}>
-                    {meta.label}
+                  <span className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-white/95 text-xs font-bold shadow flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full" style={{ background: st.dot }} />
+                    <span className={st.cls}>{st.label}</span>
                   </span>
-                </div>
+                  {n.location && (
+                    <span className="absolute top-12 left-3 max-w-[60%] px-2.5 py-1 rounded-full bg-black/55 text-white text-xs font-medium flex items-center gap-1 truncate">
+                      <Icon name="MapPin" size={11} color="white" />
+                      <span className="truncate">{n.location}</span>
+                    </span>
+                  )}
+                </AssetCoverCarousel>
 
-                {/* Action */}
-                <div className="px-4 pb-4">
-                  {enquiry ? (
-                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
-                      <Icon name="CheckCircle" size={14} color="#059669" />
-                      <span className="text-xs font-medium text-emerald-700">
-                        Enquiry sent · {enquiry.status}
-                      </span>
+                {/* Body */}
+                <div className="p-4 flex-1 flex flex-col">
+                  <p className="text-xs text-muted-foreground">Stock ID: {n.id}</p>
+                  <h3 className="font-bold text-foreground text-base mt-0.5 line-clamp-1 uppercase">{titleOf(n)}</h3>
+
+                  {chips.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {chips.slice(0, 4).map((c, i) => (
+                        <span key={i} className="px-2 py-0.5 rounded-md bg-muted text-xs font-medium text-foreground capitalize">{c}</span>
+                      ))}
                     </div>
-                  ) : (
+                  )}
+
+                  <p className="text-lg font-bold text-foreground mt-3">{fmt(n.sellingPrice)}</p>
+
+                  {/* Actions */}
+                  <div className="mt-3 space-y-2">
                     <button
-                      onClick={() => setSelected(asset)}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
+                      onClick={() => setDetails(n)}
+                      className="w-full py-2.5 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90"
                       style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
                     >
-                      <Icon name="Heart" size={14} color="currentColor" />
-                      I'm Interested
+                      <Icon name="Eye" size={15} color="white" /> View Details →
                     </button>
-                  )}
+                    {enquiry ? (
+                      <div className="flex items-center justify-center gap-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                        <Icon name="CheckCircle" size={14} color="#059669" />
+                        <span className="text-xs font-medium text-emerald-700 capitalize">Enquiry sent · {enquiry.status}</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setSelected(asset)}
+                        className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-semibold border border-primary text-primary hover:bg-primary/5 transition-all"
+                      >
+                        <Icon name="Heart" size={14} color="currentColor" />
+                        I'm Interested
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -297,6 +353,10 @@ const BrowseAssetsTab = ({ assets, enquiries, onEnquire }) => {
           onSend={onEnquire}
           existingEnquiry={hasEnquiry(selected.id)}
         />
+      )}
+
+      {details && (
+        <AssetDetailsModal asset={details} onClose={() => setDetails(null)} />
       )}
     </div>
   );
