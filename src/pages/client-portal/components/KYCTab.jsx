@@ -8,7 +8,6 @@ const KYC_DOCUMENTS = [
   { type: 'passport_photo',        label: 'Passport Photo',        required: true },
   { type: 'kra_pin',               label: 'KRA PIN Certificate',   required: true },
   { type: 'proof_of_residence',    label: 'Proof of Residence',    required: true },
-  { type: 'business_registration', label: 'Business Registration', required: false },
 ];
 
 const STATUS_META = {
@@ -18,7 +17,7 @@ const STATUS_META = {
   rejected: { label: 'Rejected',       className: 'bg-red-100 text-red-700' },
 };
 
-const KYCTab = ({ clientProfile }) => {
+const KYCTab = ({ clientProfile, onUploaded }) => {
   const [documents, setDocuments] = useState([]);
   const [uploading, setUploading] = useState({});
   const [loading, setLoading] = useState(true);
@@ -125,6 +124,9 @@ const KYCTab = ({ clientProfile }) => {
       var docLabel = KYC_DOCUMENTS.find(function(d) { return d.type === docType; });
       showToast((docLabel ? docLabel.label : docType) + ' uploaded successfully!');
       await fetchDocuments();
+      // Refresh the portal so clientProfile.kyc_status updates (and the global
+      // "KYC verification required" banner disappears once auto-verified).
+      if (onUploaded) onUploaded();
     } catch (err) {
       showToast(err.message || 'Upload failed. Please try again.', 'error');
     } finally {
@@ -139,7 +141,17 @@ const KYCTab = ({ clientProfile }) => {
   var totalUploaded = KYC_DOCUMENTS.filter(function(d) { return getDocStatus(d.type); }).length;
   var totalRequired = KYC_DOCUMENTS.filter(function(d) { return d.required; }).length;
   var progress = Math.round((totalUploaded / totalRequired) * 100);
-  var status = (clientProfile && clientProfile.kyc_status) ? clientProfile.kyc_status : 'unverified';
+
+  // Reflect the auto-approval immediately: once every required document is in
+  // (and approved by the DB trigger), show the client as verified.
+  var requiredTypes = KYC_DOCUMENTS.filter(function(d) { return d.required; }).map(function(d) { return d.type; });
+  var allRequiredApproved = requiredTypes.length > 0 && requiredTypes.every(function(t) {
+    var d = getDocStatus(t);
+    return d && d.status === 'approved';
+  });
+  var status = allRequiredApproved
+    ? 'verified'
+    : ((clientProfile && clientProfile.kyc_status) ? clientProfile.kyc_status : 'unverified');
 
   var bannerBg = 'bg-yellow-50 border-yellow-200';
   if (status === 'verified') bannerBg = 'bg-emerald-50 border-emerald-200';

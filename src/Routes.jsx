@@ -190,10 +190,10 @@ const Routes = () => {
             </ProtectedRoute>
           } />
 
-          {/* ── HR Management — HR role + CEO (admin) only ─────────────── */}
+          {/* ── HR Management — HR role + CEO (admin) + super admin ────── */}
           <Route path="/hr-management" element={
             <ProtectedRoute>
-              <RoleGuard allowedRoles={['hr', 'admin']}>
+              <RoleGuard allowedRoles={['hr', 'admin', 'super_admin']}>
                 <HRPage />
               </RoleGuard>
             </ProtectedRoute>

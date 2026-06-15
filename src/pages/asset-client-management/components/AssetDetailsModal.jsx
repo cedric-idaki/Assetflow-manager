@@ -171,9 +171,21 @@ const AssetDetailsModal = ({ asset, onClose }) => {
                 </div>
               )}
 
-              {asset?.specifications && (
+              {/* Description — the typed description text. Hidden when it just
+                  repeats the title (true for non-vehicle assets). */}
+              {asset?.description && asset.description.trim() !== titleOf(asset).trim() && (
                 <div>
                   <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Description</h4>
+                  <p className="text-sm text-foreground bg-muted/40 rounded-lg px-3 py-2 whitespace-pre-wrap">{asset.description}</p>
+                </div>
+              )}
+
+              {/* Additional specifications text, where the type collects it. */}
+              {asset?.specifications && (
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                    {asset?.type === 'vehicle' ? 'Additional Notes' : 'Specifications'}
+                  </h4>
                   <p className="text-sm text-foreground bg-muted/40 rounded-lg px-3 py-2 whitespace-pre-wrap">{asset.specifications}</p>
                 </div>
               )}

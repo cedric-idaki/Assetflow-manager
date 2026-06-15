@@ -130,19 +130,44 @@ to authenticated
 using      (client_id = public.get_client_id_for_user())
 with check (client_id = public.get_client_id_for_user());
 
--- ── 3. Auto-advance the client's KYC status when they upload ────────────────────
+-- ── 3. Auto-advance / auto-approve the client's KYC status on upload ─────────────
 -- Runs as SECURITY DEFINER so the client never needs UPDATE rights on clients.
+-- Once every REQUIRED document type has been shared, the client is auto-verified
+-- and the documents are marked approved — no admin action required. Until then
+-- the status moves to under_review so it surfaces in the admin KYC screen.
 create or replace function public.kyc_doc_mark_under_review()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  required_types text[] := array['national_id_front','national_id_back','passport_photo','kra_pin','proof_of_residence'];
+  have_count int;
 begin
-  update public.clients
-     set kyc_status = 'under_review'
-   where id = NEW.client_id
-     and coalesce(kyc_status, '') not in ('verified', 'approved');
+  select count(distinct document_type) into have_count
+  from public.kyc_documents
+  where client_id = NEW.client_id
+    and document_type = any(required_types);
+
+  if have_count >= array_length(required_types, 1) then
+    -- All required KYC details shared → approve everything automatically.
+    update public.kyc_documents
+       set status = 'approved'
+     where client_id = NEW.client_id
+       and coalesce(status, '') <> 'approved';
+
+    update public.clients
+       set kyc_status = 'verified', kyc_rejection_reason = null
+     where id = NEW.client_id
+       and coalesce(kyc_status, '') <> 'verified';
+  else
+    update public.clients
+       set kyc_status = 'under_review'
+     where id = NEW.client_id
+       and coalesce(kyc_status, '') not in ('verified', 'approved');
+  end if;
+
   return NEW;
 end;
 $$;

@@ -265,7 +265,50 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
   const [activeTab, setActiveTab] = useState('details');
 
   // ── Asset details state ───────────────────────────────────────────────────
-  const initial = editData || {
+  // editData arrives in the normalized shape (type, vehicleDetails, metadata…),
+  // so map it back to the flat field names the form inputs use. Type-specific
+  // fields live in metadata (keyed by field key); vehicle/property core fields
+  // also have dedicated columns we fall back to for older records.
+  const _meta = editData?.metadata || {};
+  const _vd   = editData?.vehicleDetails || {};
+  const _pd   = editData?.propertyDetails || {};
+  const initial = editData ? {
+    assetType:   editData.type || editData.asset_type || '',
+    description: editData.description || '',
+    status:      editData.status || editData.asset_status || 'available',
+    // property
+    propertyType:     _meta.propertyType     || _pd.type || '',
+    propertySize:     _meta.propertySize     || _pd.size || '',
+    propertyLocation: _meta.propertyLocation || _pd.location || editData.location || '',
+    propertyTitle:    _meta.propertyTitle    || '',
+    propertyBedsath:  _meta.propertyBedsath  || '',
+    propertyLandRef:  _meta.propertyLandRef  || '',
+    // vehicle
+    vehicleMake:    _meta.vehicleMake    || _vd.make    || '',
+    vehicleModel:   _meta.vehicleModel   || _vd.model   || '',
+    vehicleYear:    _meta.vehicleYear    || _vd.year    || '',
+    vehiclePlate:   _meta.vehiclePlate   || _vd.plate   || '',
+    vehicleChassis: _meta.vehicleChassis || _vd.chassis || '',
+    vehicleColor:   _meta.vehicleColor   || _vd.color   || '',
+    vehicleEngine:  _meta.vehicleEngine  || '',
+    vehicleFuel:    _meta.vehicleFuel    || '',
+    vehicleMileage: _meta.vehicleMileage || '',
+    vehicleGearbox: _meta.vehicleGearbox || '',
+    // construction
+    constCategory: _meta.constCategory || '', constBrand: _meta.constBrand || '', constUnit: _meta.constUnit || '',
+    constQty: _meta.constQty || '', constGrade: _meta.constGrade || '', constWarehouse: _meta.constWarehouse || '',
+    // electronics
+    elecBrand: _meta.elecBrand || '', elecModel: _meta.elecModel || '', elecSerial: _meta.elecSerial || '',
+    elecCondition: _meta.elecCondition || '', elecWarranty: _meta.elecWarranty || '', elecColor: _meta.elecColor || '',
+    // furniture
+    furnCategory: _meta.furnCategory || '', furnMaterial: _meta.furnMaterial || '', furnBrand: _meta.furnBrand || '',
+    furnColor: _meta.furnColor || '', furnDimension: _meta.furnDimension || '', furnCondition: _meta.furnCondition || '',
+    // heavy equipment
+    heavyBrand: _meta.heavyBrand || '', heavyModel: _meta.heavyModel || '', heavySerial: _meta.heavySerial || '',
+    heavyYear: _meta.heavyYear || '', heavyHours: _meta.heavyHours || '', heavyLocation: _meta.heavyLocation || '',
+    // generic
+    category: _meta.category || '', specifications: editData.specifications || _meta.specifications || '',
+  } : {
     assetType: '', description: '', status: 'available',
     // property
     propertySize: '', propertyLocation: '', propertyType: '', propertyTitle: '', propertyBedsath: '', propertyLandRef: '',

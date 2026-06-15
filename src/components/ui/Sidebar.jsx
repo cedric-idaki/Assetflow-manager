@@ -67,6 +67,7 @@ var Sidebar = function(props) {
     { label: 'KYC Management', path: '/kyc-management-screen',         icon: 'ShieldCheck' },
     { label: 'KYC Renewals',   path: '/kyc-renewal-management-screen', icon: 'RefreshCw' },
     { label: 'Reports',        path: '/reports-analytics-center',      icon: 'BarChart3' },
+    { label: 'HR Management',  path: '/hr-management',                 icon: 'Users' },
     { label: 'Administration', path: '/system-administration',         icon: 'Settings', badge: pendingCount || null },
   ];
 

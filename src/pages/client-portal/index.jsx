@@ -83,7 +83,7 @@ const ClientPortal = () => {
               <PaymentsTab payments={payments} installmentPlans={installmentPlans}
                 clientProfile={clientProfile} onPay={initiateMpesaPayment} onExport={exportPayments} />
             )}
-            {activeTab === 'kyc' && <KYCTab clientProfile={clientProfile} />}
+            {activeTab === 'kyc' && <KYCTab clientProfile={clientProfile} onUploaded={refetch} />}
             {activeTab === 'documents' && <DocumentCentreTab clientProfile={clientProfile} />}
             {activeTab === 'schedule' && <InstallmentScheduleTab installmentPlans={installmentPlans} />}
             {activeTab === 'settlement' && (

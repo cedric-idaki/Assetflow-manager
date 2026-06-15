@@ -292,6 +292,15 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
               <label className={S.label}>SHA Number</label>
               <input className={S.input} value={form.sha_number} onChange={e => set('sha_number', e.target.value)} />
             </div>
+            <div>
+              <label className={S.label}>Housing Levy (AHL 1.5%)</label>
+              <input
+                className={`${S.input} bg-muted/40`}
+                readOnly
+                value={fmt((parseFloat(form.basic_salary || 0) + parseFloat(form.housing_allowance || 0) + parseFloat(form.transport_allowance || 0)) * 0.015)}
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">1.5% of gross · auto-deducted in payroll</p>
+            </div>
 
             <Section title="Bank Details" />
             <div>
@@ -432,9 +441,9 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onClose }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // RUN PAYROLL MODAL
 // ─────────────────────────────────────────────────────────────────────────────
-const RunPayrollModal = ({ employees, adminId, onClose, onSaved }) => {
+const RunPayrollModal = ({ employees, adminId, onClose, onSaved, initialMonth }) => {
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const [payMonth,  setPayMonth]  = useState(currentMonth);
+  const [payMonth,  setPayMonth]  = useState(initialMonth || currentMonth);
   const [saving,    setSaving]    = useState(false);
   const [error,     setError]     = useState('');
   const [success,   setSuccess]   = useState('');
@@ -489,11 +498,15 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved }) => {
     if (employees.length === 0) { setError('No employees to process.'); return; }
     setSaving(true); setError(''); setSuccess('');
     try {
-      const records = employees.filter(e => e.is_active).map(emp => {
+      const eligible = employees.filter(e => e.is_active);
+      const records = eligible.map(emp => {
         const r = computeRow(emp);
         return {
           employee_id:  emp.id,
-          admin_id:     adminId,
+          // Tag each record to the employee's owning account so a super admin
+          // running payroll system-wide doesn't reassign records away from the
+          // admin that owns the employee. Falls back to the runner's id.
+          admin_id:     emp.admin_id || adminId,
           pay_month:    payMonth,
           gross_salary: r.grossAdditions,
           basic_salary: r.basic,
@@ -511,12 +524,23 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved }) => {
           status:      'pending',
           created_at:  new Date().toISOString(),
         };
-      });
+      }).filter(rec => parseFloat(rec.gross_salary) > 0); // skip employees with no salary set
 
-      const { error: err } = await supabase.from('payroll_records').insert(records);
+      const skipped = eligible.length - records.length;
+      if (records.length === 0) {
+        setError('No active employee has a gross salary set. Add a basic salary or allowance before running payroll.');
+        setSaving(false);
+        return;
+      }
+
+      // Upsert so re-running payroll for a month recomputes existing records
+      // instead of failing on the (employee_id, pay_month) unique constraint.
+      const { error: err } = await supabase
+        .from('payroll_records')
+        .upsert(records, { onConflict: 'employee_id,pay_month' });
       if (err) throw err;
 
-      setSuccess(`Payroll for ${payMonth} processed successfully for ${records.length} employee(s).`);
+      setSuccess(`Payroll for ${payMonth} processed for ${records.length} employee(s)${skipped ? `, ${skipped} skipped (no salary set)` : ''}.`);
       setTimeout(() => { onSaved(); onClose(); }, 1500);
     } catch (err) {
       setError(err.message);
@@ -708,7 +732,13 @@ const HRPage = () => {
   const [search,         setSearch]         = useState('');
   const [deptFilter,     setDeptFilter]     = useState('all');
   const [activeTab,      setActiveTab]      = useState('employees');
-  const [payrollFilter,  setPayrollFilter]  = useState('');
+  const [payrollFilter,  setPayrollFilter]  = useState('');   // single month (YYYY-MM)
+  const [payrollStatus,  setPayrollStatus]  = useState('all'); // status filter
+  const [payrollDept,    setPayrollDept]    = useState('all'); // department filter
+  const [payrollRole,    setPayrollRole]    = useState('all'); // role filter (e.g. sales_agent)
+  const [payrollSearch,  setPayrollSearch]  = useState('');    // name / email / ID
+  const [payrollFrom,    setPayrollFrom]    = useState('');    // date range start (YYYY-MM)
+  const [payrollTo,      setPayrollTo]      = useState('');    // date range end (YYYY-MM)
   const adminIdRef = useRef(null);
   const hasLoaded  = useRef(false);
 
@@ -718,45 +748,58 @@ const HRPage = () => {
   const selected     = modals.hrEmployeeDetail;
   const showPayroll  = !!modals.hrPayroll;
 
-  const resolveAdminId = useCallback(async () => {
+  // Resolves the viewer's payroll scope:
+  //  • id      — the admin_id used to tag records this viewer creates.
+  //  • isSuper — super admins oversee the whole organisation, so their HR view is
+  //              NOT scoped to a single admin_id (see fetchAll). They see every
+  //              employee and payroll record in the system, regardless of which
+  //              admin created them.
+  const resolveScope = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    if (!user) return { id: null, isSuper: false };
     const { data: profile } = await supabase.from('user_profiles').select('id, role, admin_id').eq('id', user.id).maybeSingle();
+    const isSuper = profile?.role === 'super_admin';
     // admin & super_admin own the records they create (scope by their own id).
     // Other staff inherit their parent admin's scope via admin_id.
-    return (profile?.role === 'admin' || profile?.role === 'super_admin')
-      ? user.id
-      : (profile?.admin_id || user.id);
+    const id = (profile?.role === 'admin' || isSuper) ? user.id : (profile?.admin_id || user.id);
+    return { id, isSuper };
   }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const aId = await resolveAdminId();
+    const { id: aId, isSuper } = await resolveScope();
     setAdminId(aId);
     adminIdRef.current = aId;
     if (!aId) { setLoading(false); return; }
 
-    const [empRes, payRes] = await Promise.all([
-      supabase.from('user_profiles')
-        .select('id, full_name, email, role, department, phone, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, nssf_number, sha_number, national_id, bank_name, bank_account, bank_branch')
-        // Scoped to the viewer's account: an admin sees all staff under their account;
-        // a super admin sees only the staff they created. Account-holder roles
-        // (client / admin / super_admin) are never listed as "employees".
-        .eq('admin_id', aId)
-        .not('role', 'in', '("client","super_admin","admin")')
-        .order('full_name'),
-      supabase.from('payroll_records')
-        .select('id, employee_id, pay_month, gross_salary, net_salary, paye, nssf, shif, status, meal_allowance, bonus, gift, loan_deduction, advance_deduction')
-        .eq('admin_id', aId)
-        .order('pay_month', { ascending: false })
-        .limit(200),
-    ]);
+    // Account-holder roles (client / admin / super_admin) are never listed as
+    // "employees". An admin sees only the staff under their own account, but a
+    // super admin oversees the whole system — so we drop the admin_id scope for
+    // them and list every employee (and payroll record) regardless of which admin
+    // created them. Without this, anyone created under a different admin never
+    // showed up in the super admin's HR / payroll filters.
+    let empQuery = supabase.from('user_profiles')
+      .select('id, admin_id, full_name, email, role, department, phone, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, nssf_number, sha_number, national_id, bank_name, bank_account, bank_branch')
+      .not('role', 'in', '("client","super_admin","admin")')
+      .order('full_name');
+
+    let payQuery = supabase.from('payroll_records')
+      .select('id, employee_id, admin_id, pay_month, gross_salary, net_salary, paye, nssf, shif, status, meal_allowance, bonus, gift, loan_deduction, advance_deduction')
+      .order('pay_month', { ascending: false })
+      .limit(200);
+
+    if (!isSuper) {
+      empQuery = empQuery.eq('admin_id', aId);
+      payQuery = payQuery.eq('admin_id', aId);
+    }
+
+    const [empRes, payRes] = await Promise.all([empQuery, payQuery]);
 
     setEmployees(empRes.data || []);
     setPayrollRecords(payRes.data || []);
     hasLoaded.current = true;
     setLoading(false);
-  }, [resolveAdminId]);
+  }, [resolveScope]);
 
   // Run once on mount — hasLoaded guard prevents re-fetch on tab-switch remount
   useEffect(() => {
@@ -774,13 +817,55 @@ const HRPage = () => {
   const depts = [...new Set(employees.map(e => e.department).filter(Boolean))];
   const empPayroll = (empId) => payrollRecords.filter(p => p.employee_id === empId);
 
-  // Payroll tab filter by month
-  const filteredPayroll = payrollFilter
-    ? payrollRecords.filter(p => p.pay_month === payrollFilter)
-    : payrollRecords;
+  // ── Payroll filters: month, status, department, search, date range ──────────
+  const empById = (id) => employees.find(e => e.id === id);
+  const filteredPayroll = payrollRecords.filter(p => {
+    const emp = empById(p.employee_id);
+    // Single month
+    if (payrollFilter && p.pay_month !== payrollFilter) return false;
+    // Status
+    if (payrollStatus !== 'all' && (p.status || 'pending') !== payrollStatus) return false;
+    // Department
+    if (payrollDept !== 'all' && (emp?.department || '') !== payrollDept) return false;
+    // Role
+    if (payrollRole !== 'all' && (emp?.role || '') !== payrollRole) return false;
+    // Date range (pay_month is YYYY-MM, so string compare is chronological)
+    if (payrollFrom && p.pay_month < payrollFrom) return false;
+    if (payrollTo && p.pay_month > payrollTo) return false;
+    // Search by name / email / national ID
+    if (payrollSearch) {
+      const q = payrollSearch.toLowerCase();
+      const hay = [emp?.full_name, emp?.email, emp?.national_id].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const hasPayrollFilters = !!(payrollFilter || payrollStatus !== 'all' || payrollDept !== 'all' || payrollRole !== 'all' || payrollSearch || payrollFrom || payrollTo);
+  const clearPayrollFilters = () => {
+    setPayrollFilter(''); setPayrollStatus('all'); setPayrollDept('all'); setPayrollRole('all');
+    setPayrollSearch(''); setPayrollFrom(''); setPayrollTo('');
+  };
 
   // Unique months for filter dropdown
   const payMonths = [...new Set(payrollRecords.map(p => p.pay_month))].sort().reverse();
+  // Status options — the standard set plus any actually present
+  const payStatuses = [...new Set(['pending', 'paid', 'draft', 'rejected', ...payrollRecords.map(p => p.status).filter(Boolean)])];
+
+  // Employees that Run Payroll should process — honours the role / department /
+  // search filters so e.g. filtering to Sales Agents only runs them.
+  const payrollEmployees = employees.filter(e => {
+    if (payrollDept !== 'all' && (e.department || '') !== payrollDept) return false;
+    if (payrollRole !== 'all' && e.role !== payrollRole) return false;
+    if (payrollSearch) {
+      const q = payrollSearch.toLowerCase();
+      const hay = [e.full_name, e.email, e.national_id].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  // Month to run for: the selected month filter, else the range start, else current.
+  const payrollRunMonth = payrollFilter || payrollFrom || new Date().toISOString().slice(0, 7);
 
   // KPI totals
   const totalPayroll = employees.reduce((s, e) => s + parseFloat(e.basic_salary || 0) + parseFloat(e.housing_allowance || 0) + parseFloat(e.transport_allowance || 0), 0);
@@ -955,36 +1040,83 @@ const HRPage = () => {
           <div className="space-y-4">
 
             {/* Payroll toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <select
-                  className={`${S.select} w-48`}
-                  value={payrollFilter}
-                  onChange={e => setPayrollFilter(e.target.value)}
-                >
-                  <option value="">All months</option>
-                  {payMonths.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-                <span className="text-xs text-muted-foreground">
-                  {filteredPayroll.length} record(s)
-                </span>
+            <div className="space-y-3">
+              {/* Row 1: search + actions */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="relative flex-1 min-w-[200px] max-w-md">
+                  <Icon name="Search" size={14} color="var(--muted-foreground)" className="absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    className={`${S.input} pl-9`}
+                    placeholder="Search by name, email or ID number…"
+                    value={payrollSearch}
+                    onChange={e => setPayrollSearch(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={exportPayrollCSV}
+                    disabled={filteredPayroll.length === 0}
+                    className={S.btnSec + ' disabled:opacity-50'}
+                  >
+                    <Icon name="Download" size={14} color="currentColor" />
+                    Export CSV
+                  </button>
+                  <button
+                    onClick={() => openModal('hrPayroll', true)}
+                    className={S.btnPri}
+                  >
+                    <Icon name="Play" size={14} color="currentColor" />
+                    Run Payroll
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={exportPayrollCSV}
-                  disabled={filteredPayroll.length === 0}
-                  className={S.btnSec + ' disabled:opacity-50'}
-                >
-                  <Icon name="Download" size={14} color="currentColor" />
-                  Export CSV
-                </button>
-                <button
-                  onClick={() => openModal('hrPayroll', true)}
-                  className={S.btnPri}
-                >
-                  <Icon name="Play" size={14} color="currentColor" />
-                  Run Payroll
-                </button>
+
+              {/* Row 2: filters */}
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className={S.label}>Month</label>
+                  <select className={`${S.select} w-40`} value={payrollFilter} onChange={e => setPayrollFilter(e.target.value)}>
+                    <option value="">All months</option>
+                    {payMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={S.label}>Status</label>
+                  <select className={`${S.select} w-36`} value={payrollStatus} onChange={e => setPayrollStatus(e.target.value)}>
+                    <option value="all">All statuses</option>
+                    {payStatuses.map(s => <option key={s} value={s} className="capitalize">{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={S.label}>Department</label>
+                  <select className={`${S.select} w-40`} value={payrollDept} onChange={e => setPayrollDept(e.target.value)}>
+                    <option value="all">All departments</option>
+                    {depts.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={S.label}>Role</label>
+                  <select className={`${S.select} w-40`} value={payrollRole} onChange={e => setPayrollRole(e.target.value)}>
+                    <option value="all">All roles</option>
+                    {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={S.label}>From</label>
+                  <input type="month" className={`${S.input} w-36`} value={payrollFrom} onChange={e => setPayrollFrom(e.target.value)} />
+                </div>
+                <div>
+                  <label className={S.label}>To</label>
+                  <input type="month" className={`${S.input} w-36`} value={payrollTo} onChange={e => setPayrollTo(e.target.value)} />
+                </div>
+                <div className="flex items-center gap-3 pb-0.5">
+                  <span className="text-xs text-muted-foreground">{filteredPayroll.length} record(s)</span>
+                  {hasPayrollFilters && (
+                    <button onClick={clearPayrollFilters} className="text-xs font-medium text-primary hover:underline flex items-center gap-1">
+                      <Icon name="X" size={12} color="currentColor" /> Clear
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1087,10 +1219,11 @@ const HRPage = () => {
       {/* Run Payroll modal */}
       {showPayroll && (
         <RunPayrollModal
-          employees={employees}
-          adminId={adminIdRef.current || adminId}
+          employees={payrollEmployees}
+          initialMonth={payrollRunMonth}
           onClose={() => closeModal('hrPayroll')}
           onSaved={fetchAll}
+          adminId={adminIdRef.current || adminId}
         />
       )}
     </MainLayout>
