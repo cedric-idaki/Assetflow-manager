@@ -90,6 +90,9 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const {
       email, password, full_name, role = 'client', phone, department, admin_id,
+      // When provisioning a client login, the caller passes the clients.id so we
+      // can hard-link the auth user to the exact client row.
+      client_id,
       // Company fields (only used when role === 'admin')
       company_name, business_reg_number, business_type, location, city, asset_types, plan,
     } = body;
@@ -150,6 +153,40 @@ Deno.serve(async (req) => {
 
     if (profileInsertErr) {
       console.error('Profile upsert error (non-fatal):', profileInsertErr.message);
+    }
+
+    // ── 6b. For client logins, hard-link the clients row to this auth user ──
+    // This is what lets the portal resolve the correct client even when several
+    // clients share an email. Non-fatal: the account still works via the email
+    // fallback if the link can't be set.
+    if (role === 'client') {
+      try {
+        if (client_id) {
+          await adminClient
+            .from('clients')
+            .update({ client_auth_id: newUserId })
+            .eq('id', client_id);
+        } else {
+          // No explicit id — match the unlinked client by email + name.
+          const { data: match } = await adminClient
+            .from('clients')
+            .select('id')
+            .ilike('email', cleanEmail)
+            .ilike('full_name', full_name)
+            .is('client_auth_id', null)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (match?.id) {
+            await adminClient
+              .from('clients')
+              .update({ client_auth_id: newUserId })
+              .eq('id', match.id);
+          }
+        }
+      } catch (linkErr) {
+        console.error('client_auth_id link error (non-fatal):', (linkErr as Error).message);
+      }
     }
 
     // ── 7. For admin/company accounts, provision the company profile +

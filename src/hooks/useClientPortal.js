@@ -19,19 +19,31 @@ export const useClientPortal = () => {
 
       let profile = null;
 
-      // Primary: SECURITY DEFINER RPC — bypasses RLS and matches email
-      // case-insensitively, so the client always resolves to their row.
+      // Primary: SECURITY DEFINER RPC — bypasses RLS and resolves the client by
+      // their auth link first (email only as a fallback), so a shared email can
+      // never surface the wrong client's row.
       const rpcRes = await supabase.rpc('get_my_client_profile');
       if (!rpcRes.error && Array.isArray(rpcRes.data) && rpcRes.data.length) {
         profile = rpcRes.data[0];
       }
 
       // Fallback: direct select (works once the self-read RLS policy exists).
+      // Prefer the hard auth link; only fall back to email when it's unset.
+      if (!profile) {
+        const byAuth = await supabase
+          .from('clients')
+          .select('*')
+          .eq('client_auth_id', user.id)
+          .maybeSingle();
+        profile = byAuth.data || null;
+      }
       if (!profile) {
         const res = await supabase
           .from('clients')
           .select('*')
           .eq('email', user.email)
+          .order('created_at', { ascending: true })
+          .limit(1)
           .maybeSingle();
         profile = res.data || null;
       }
@@ -116,15 +128,32 @@ export const useClientPortal = () => {
     }
   }, []);
 
+  // ── Resolve the current user's client row (link first, email fallback) ──────
+  const resolveClient = useCallback(async (columns = 'id, admin_id') => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    const byAuth = await supabase
+      .from('clients')
+      .select(columns)
+      .eq('client_auth_id', user.id)
+      .maybeSingle();
+    if (byAuth.data) return byAuth.data;
+
+    const byEmail = await supabase
+      .from('clients')
+      .select(columns)
+      .eq('email', user.email)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    return byEmail.data || null;
+  }, []);
+
   // ── Send asset enquiry ─────────────────────────────────────────────────────
   const sendEnquiry = useCallback(async (assetId, message) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: client } = await supabase
-        .from('clients')
-        .select('id, admin_id')
-        .eq('email', user.email)
-        .maybeSingle();
+      const client = await resolveClient('id, admin_id');
 
       if (!client) throw new Error('Client profile not found');
 
@@ -146,17 +175,13 @@ export const useClientPortal = () => {
     } catch (err) {
       throw err;
     }
-  }, [fetchEnquiries]);
+  }, [fetchEnquiries, resolveClient]);
 
   // ── Initiate Mpesa payment ─────────────────────────────────────────────────
   const initiateMpesaPayment = useCallback(async (amount, phone, assetId) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: client } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('email', user.email)
-        .maybeSingle();
+      const client = await resolveClient('id');
+      if (!client) throw new Error('Client profile not found');
 
       const { data: payment, error } = await supabase
         .from('payments')
@@ -178,7 +203,7 @@ export const useClientPortal = () => {
     } catch (err) {
       throw err;
     }
-  }, []);
+  }, [resolveClient]);
 
   // ── Export payment history as CSV ─────────────────────────────────────────
   const exportPayments = useCallback(() => {

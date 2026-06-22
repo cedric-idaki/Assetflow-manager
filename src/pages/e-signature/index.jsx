@@ -2,6 +2,57 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "../../lib/supabase";
 import MainLayout from "../../layouts/MainLayout";
 import Icon from "../../components/AppIcon";
+import SignatureCanvas from "../../components/esign/SignatureCanvas";
+import { applySignatureToPDF } from "../../utils/applySignatureToPDF";
+import { sendSigningOtp, sendSignatureAlert } from "../../services/emailService";
+
+// ── Audit event display mapping ─────────────────────────────────────────────────
+const AUDIT_ACTION_LABEL = {
+  created: "Document Created & Uploaded",
+  sent: "Sent for Signature",
+  viewed: "Document Viewed",
+  signed: "Document Signed",
+  completed: "Document Completed & Sealed",
+  security: "Security Event",
+  revoked: "Signing Request Revoked",
+  reminder: "Reminder Sent",
+};
+const AUDIT_STATUS_MAP = {
+  created: "complete", sent: "complete", viewed: "view",
+  signed: "signed", completed: "final", security: "view",
+  revoked: "complete", reminder: "complete",
+};
+// Map an esign_audit_events row → the shape the timeline UI renders.
+const mapAuditRow = (r) => ({
+  id: r.id,
+  action: AUDIT_ACTION_LABEL[r.event_type] || r.event_type,
+  actor: r.actor || "—",
+  time: r.created_at ? fmtDateTime(r.created_at) : "—",
+  ip: r.ip || "—",
+  device: r.device || "—",
+  detail: r.detail || "",
+  hash: r.hash || "—",
+  status: AUDIT_STATUS_MAP[r.event_type] || "complete",
+});
+
+// Insert an audit event; failures are non-fatal (logged only).
+async function recordAudit(adminId, { contractId, documentLabel, eventType, actor, actorEmail, ip, device, detail, hash }) {
+  try {
+    await supabase.from("esign_audit_events").insert({
+      admin_id: adminId, contract_id: contractId || null, document_label: documentLabel,
+      event_type: eventType, actor, actor_email: actorEmail, ip, device, detail, hash,
+    });
+  } catch (err) { console.error("recordAudit:", err.message); }
+}
+
+// Insert an in-app notification; failures are non-fatal.
+async function pushNotification(adminId, { userId, type, title, detail, contractId }) {
+  try {
+    await supabase.from("esign_notifications").insert({
+      admin_id: adminId, user_id: userId || null, type, title, detail, contract_id: contractId || null,
+    });
+  } catch (err) { console.error("pushNotification:", err.message); }
+}
 
 const fmt = (n) => `KES ${(parseFloat(n) || 0).toLocaleString("en-KE", { maximumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
@@ -18,23 +69,6 @@ const MOCK_DOCS = [
   { id: "SFP-20260405-0088", name: "Lease Agreement — Office Space", type: "PDF", pages: 20, status: "expired", signers: [{ name: "Landlord", initials: "LM", signed: false }], sent: "2026-04-05", due: "2026-04-15", external: true },
   { id: "SFP-DRAFT-0099", name: "Purchase Order #4821", type: "DOCX", pages: 2, status: "draft", signers: [], sent: null, due: null, external: false },
   { id: "SFP-20260426-0101", name: "IT Policy Update v3", type: "PDF", pages: 2, status: "pending", signers: [{ name: "IT Admin", initials: "IT", signed: true }, { name: "Eric Nganga", initials: "EN", signed: false }], sent: "2026-04-26", due: "2026-05-10", external: false },
-];
-
-const AUDIT_EVENTS = [
-  { id: 1, action: "Document Created & Uploaded", actor: "Eric Nganga", time: "Apr 20, 2026, 09:14 AM EAT", ip: "197.232.xx.xx", device: "MacBook Pro (Chrome 124)", detail: "Uploaded original XLSX, converted to PDF for signing", hash: "3a7f9e2b…d41c8e4f", status: "complete" },
-  { id: 2, action: "Sent for Signature", actor: "Eric Nganga → Finance Dept., MD Office", time: "Apr 20, 2026, 09:22 AM EAT", ip: "197.232.xx.xx", device: "MacBook Pro (Chrome 124)", detail: "Sequential order set. Expiry: Apr 22, 2026", hash: "b82c5d1a…9f3e7b2c", status: "complete" },
-  { id: 3, action: "Document Viewed", actor: "Janet Kamau (Finance)", time: "Apr 21, 2026, 10:05 AM EAT", ip: "154.123.xx.xx", device: "Windows 11 (Edge 123)", detail: "12 minutes viewing time", hash: "7d4e1b9c…2a6f8d3e", status: "view" },
-  { id: 4, action: "Signed — Finance Department", actor: "Janet Kamau", time: "Apr 21, 2026, 10:18 AM EAT", ip: "154.123.xx.xx", device: "Windows 11 (Edge 123)", detail: "Auth: PIN + OTP (SMS to +254 7xx xxx x78)", hash: "e9a1c4f2…71d3b9e8", status: "signed" },
-  { id: 5, action: "Signed — Managing Director", actor: "M. Ochieng (MD)", time: "Apr 22, 2026, 02:45 PM EAT", ip: "41.90.xx.xx", device: "iOS 18 (Safari)", detail: "Auth: PIN + OTP + Biometric (Face ID). All pages notarized.", hash: "c3b7a2f9…5e1d4c8b", status: "signed" },
-  { id: 6, action: "Document Completed & Sealed", actor: "System", time: "Apr 22, 2026, 02:46 PM EAT", ip: "—", device: "—", detail: "All signatures verified. Company seal applied. PDF/A archived. Notifications sent to all parties.", hash: "a1b2c3d4…z9y8x7w6", status: "final" },
-];
-
-const NOTIFICATIONS = [
-  { id: 1, type: "warning", title: "Security: Signature used on Board Resolution", detail: "IP: 41.107.xx.xx · Device: iPhone 15 · Apr 25, 2026", time: "5 min ago", read: false },
-  { id: 2, type: "success", title: "James Mwangi completed signing Employment Contract", detail: "All required signatures collected · Ready to download", time: "1 hr ago", read: false },
-  { id: 3, type: "info", title: "Vendor Agreement expires in 7 days", detail: "Janet Kamau hasn't signed yet · Send reminder?", time: "2 hrs ago", read: false },
-  { id: 4, type: "info", title: "Invited to co-sign Partnership MOU", detail: "Requested by: ceo@partner.co.ke · Due: May 15", time: "Yesterday", read: true },
-  { id: 5, type: "neutral", title: "NDA audit log exported by Finance", detail: "Exported as PDF · 6 events recorded", time: "Apr 24", read: true },
 ];
 
 const PLAN_LIMITS = { Bronze: { external: 15, addon: 1200 }, Silver: { external: 38, addon: 2200 }, Gold: { external: 56, addon: 3200 } };
@@ -76,14 +110,35 @@ function FileTypeBadge({ type }) {
 }
 
 // ── OTP Modal ──────────────────────────────────────────────────────────────────
-function OTPModal({ signer, onVerified, onClose }) {
+function OTPModal({ signer, documentName, onVerified, onClose }) {
   const [step, setStep] = useState("enter_otp");
   const [otp, setOtp] = useState(["","","","","",""]);
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [generatedOtp] = useState(() => String(Math.floor(100000 + Math.random() * 900000)));
+  const [generatedOtp, setGeneratedOtp] = useState(() => String(Math.floor(100000 + Math.random() * 900000)));
+  const [delivery, setDelivery] = useState("sending"); // sending | sent | failed
   const refs = [useRef(),useRef(),useRef(),useRef(),useRef(),useRef()];
+
+  // Email the code to the signer on open (and on resend).
+  const dispatchOtp = useCallback(async (code) => {
+    if (!signer?.email) { setDelivery("failed"); return; }
+    setDelivery("sending");
+    try {
+      await sendSigningOtp(signer.email, { signerName: signer.name, code, documentName, expiresMinutes: 10 });
+      setDelivery("sent");
+    } catch (err) {
+      console.error("sendSigningOtp:", err.message);
+      setDelivery("failed");
+    }
+  }, [signer?.email, signer?.name, documentName]);
+
+  useEffect(() => { dispatchOtp(generatedOtp); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const resend = () => {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    setGeneratedOtp(code); setOtp(["","","","","",""]); setError("");
+    dispatchOtp(code);
+  };
 
   const handleOtpChange = (i, val) => {
     if (!/^\d*$/.test(val)) return;
@@ -94,11 +149,9 @@ function OTPModal({ signer, onVerified, onClose }) {
   const handleVerify = async () => {
     const entered = otp.join("");
     if (entered.length !== 6) { setError("Please enter the complete 6-digit OTP"); return; }
-    if (!password.trim()) { setError("Please enter your signing password"); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 600));
     if (entered !== generatedOtp) { setError("Invalid OTP."); setLoading(false); return; }
-    if (password.trim().length < 4) { setError("Invalid password."); setLoading(false); return; }
     setStep("verified"); setLoading(false);
     setTimeout(() => onVerified({ otp: entered, verifiedAt: new Date().toISOString(), ip: "197.232.xx.xx", device: navigator.userAgent.slice(0,50) }), 800);
   };
@@ -122,11 +175,26 @@ function OTPModal({ signer, onVerified, onClose }) {
           </div>
         ) : (
           <div className="p-5 space-y-4">
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-              <p className="text-xs font-semibold text-emerald-700">Demo OTP: <strong>{generatedOtp}</strong></p>
+            {/* Verification code — shown here so signing works without relying on
+                email delivery; it is also emailed to the signer when configured. */}
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-amber-700 flex items-center gap-2">
+                  <Icon name="Mail" size={13} color="#d97706" /> Your verification code
+                </p>
+                <button onClick={resend} className="text-xs text-primary font-semibold hover:underline whitespace-nowrap">New code</button>
+              </div>
+              <p className="font-mono text-2xl font-bold text-amber-800 tracking-[0.3em] text-center my-1">{generatedOtp}</p>
+              <p className="text-[11px] text-amber-700">
+                {delivery === "sending"
+                  ? "Emailing a copy…"
+                  : delivery === "sent"
+                  ? `Also emailed to ${signer?.email}.`
+                  : "Shown here for now — email delivery isn't configured yet."}
+              </p>
             </div>
             <div>
-              <p className="text-xs font-semibold text-foreground mb-2">Enter 6-Digit OTP</p>
+              <p className="text-xs font-semibold text-foreground mb-2">Enter the 6-Digit Code</p>
               <div className="flex gap-2 justify-center">
                 {otp.map((digit, i) => (
                   <input key={i} ref={refs[i]} type="text" inputMode="numeric" maxLength={1} value={digit}
@@ -134,11 +202,6 @@ function OTPModal({ signer, onVerified, onClose }) {
                     className={`w-11 h-13 text-center text-xl font-bold border-2 rounded-xl outline-none bg-background text-foreground transition-colors ${digit ? "border-primary bg-primary/5" : "border-border"}`} />
                 ))}
               </div>
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-foreground mb-1.5">Signing Password</p>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your signing password"
-                className="w-full px-3 py-2.5 text-sm border border-border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
             </div>
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-600 flex items-center gap-2">
@@ -154,88 +217,6 @@ function OTPModal({ signer, onVerified, onClose }) {
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ── Signature Canvas ───────────────────────────────────────────────────────────
-function SignatureCanvas({ onCapture }) {
-  const canvasRef = useRef();
-  const drawing = useRef(false);
-  const [hasSign, setHasSign] = useState(false);
-  const [mode, setMode] = useState("draw");
-  const [typedSig, setTypedSig] = useState("");
-  const FONTS = ["Dancing Script","Pacifico","Satisfy","Caveat"];
-  const [font, setFont] = useState(FONTS[0]);
-
-  useEffect(() => {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = "https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Pacifico&family=Satisfy&family=Caveat:wght@700&display=swap";
-    document.head.appendChild(link);
-  }, []);
-
-  const getPos = (e, canvas) => { const r = canvas.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: t.clientX-r.left, y: t.clientY-r.top }; };
-  const start = (e) => { e.preventDefault(); drawing.current=true; const canvas=canvasRef.current; const ctx=canvas.getContext("2d"); const {x,y}=getPos(e,canvas); ctx.beginPath(); ctx.moveTo(x,y); };
-  const draw = (e) => { e.preventDefault(); if(!drawing.current) return; const canvas=canvasRef.current; const ctx=canvas.getContext("2d"); ctx.strokeStyle="var(--color-foreground)"; ctx.lineWidth=2.5; ctx.lineCap="round"; ctx.lineJoin="round"; const {x,y}=getPos(e,canvas); ctx.lineTo(x,y); ctx.stroke(); setHasSign(true); };
-  const stop = () => { drawing.current=false; };
-  const clear = () => { const canvas=canvasRef.current; canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height); setHasSign(false); };
-  const capture = () => {
-    if (mode==="draw") { if(!hasSign) return; onCapture({ type:"drawn", data:canvasRef.current.toDataURL() }); }
-    else { if(!typedSig.trim()) return; onCapture({ type:"typed", data:typedSig, font }); }
-  };
-
-  return (
-    <div className="bg-muted/30 border border-border rounded-xl overflow-hidden">
-      <div className="flex border-b border-border">
-        {[{id:"draw",label:"Draw"},{id:"type",label:"Type"},{id:"upload",label:"Upload"}].map(m => (
-          <button key={m.id} onClick={() => setMode(m.id)}
-            className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${mode===m.id ? "bg-card text-foreground border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"}`}>
-            {m.label}
-          </button>
-        ))}
-      </div>
-      {mode==="draw" && (
-        <>
-          <canvas ref={canvasRef} width={420} height={150}
-            className="block w-full bg-card cursor-crosshair touch-none"
-            onMouseDown={start} onMouseMove={draw} onMouseUp={stop} onMouseLeave={stop}
-            onTouchStart={start} onTouchMove={draw} onTouchEnd={stop} />
-          <div className="px-3 py-2 flex justify-between items-center bg-muted/20">
-            <span className="text-xs text-muted-foreground">Draw your signature above</span>
-            <button onClick={clear} className="text-xs text-red-500 font-semibold hover:text-red-600">Clear</button>
-          </div>
-        </>
-      )}
-      {mode==="type" && (
-        <div className="p-4 bg-card space-y-3">
-          <input type="text" value={typedSig} onChange={e => setTypedSig(e.target.value)} placeholder="Type your full name"
-            className="w-full px-3 py-2 border border-border rounded-xl text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
-          <div className="h-20 flex items-center justify-center bg-muted/30 rounded-xl border border-dashed border-border">
-            <span style={{ fontFamily: font, fontSize: 32, color: "var(--color-foreground)" }}>{typedSig || "Your Signature"}</span>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {FONTS.map(f => (
-              <button key={f} onClick={() => setFont(f)}
-                className={`px-3 py-1 rounded-full text-xs border transition-colors ${font===f ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}
-                style={{ fontFamily: f }}>
-                {f.split(" ")[0]}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      {mode==="upload" && (
-        <div className="p-8 text-center text-muted-foreground text-sm bg-card">
-          Click to upload signature image (PNG/SVG)
-        </div>
-      )}
-      <div className="p-3 border-t border-border">
-        <button onClick={capture}
-          className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:bg-primary/90 transition-colors">
-          Apply Signature
-        </button>
       </div>
     </div>
   );
@@ -357,12 +338,27 @@ function Dashboard({ docs, setActive, setSelectedDoc }) {
   );
 }
 
+// Load persisted audit events for a document from esign_audit_events.
+async function loadAuditEvents(adminId, doc) {
+  if (!adminId || !doc) return [];
+  try {
+    let q = supabase.from("esign_audit_events").select("*").eq("admin_id", adminId).order("created_at", { ascending: true });
+    const refId = doc._dbId || doc._companyId || doc._esignId;
+    if (refId) q = q.eq("contract_id", refId);
+    else q = q.eq("document_label", doc.id);
+    const { data } = await q;
+    return (data || []).map(mapAuditRow);
+  } catch (err) { console.error("loadAuditEvents:", err.message); return []; }
+}
+
 // ── Documents ──────────────────────────────────────────────────────────────────
-function Documents({ docs, setDocs, setActive }) {
+function Documents({ docs, setDocs, setActive, adminId }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
   const [showAudit, setShowAudit] = useState(false);
+  const [auditEvents, setAuditEvents] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   const filtered = docs.filter(d => {
     const matchFilter = filter === "all" || d.status === filter;
@@ -370,13 +366,17 @@ function Documents({ docs, setDocs, setActive }) {
     return matchFilter && matchSearch;
   });
 
-  function handleAction(doc, action) {
-    if (action === "audit") { setSelected(doc); setShowAudit(true); }
+  async function handleAction(doc, action) {
+    if (action === "audit") {
+      setSelected(doc); setShowAudit(true); setAuditLoading(true); setAuditEvents([]);
+      const ev = await loadAuditEvents(adminId, doc);
+      setAuditEvents(ev); setAuditLoading(false);
+    }
     else if (action === "sign") { setActive("sign"); }
     else if (action === "resend") { setDocs(prev => prev.map(d => d.id === doc.id ? { ...d, status: "pending" } : d)); }
   }
 
-  if (showAudit && selected) return <AuditModal doc={selected} onClose={() => setShowAudit(false)} />;
+  if (showAudit && selected) return <AuditModal doc={selected} events={auditEvents} loading={auditLoading} onClose={() => setShowAudit(false)} />;
 
   return (
     <div className="space-y-5">
@@ -429,7 +429,7 @@ function Documents({ docs, setDocs, setActive }) {
               {doc.status === "pending" && <button onClick={() => handleAction(doc,"sign")} className="px-2.5 py-1 bg-primary text-primary-foreground rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors">Sign</button>}
               {(doc.status === "completed" || doc.status === "signed") && <button onClick={() => handleAction(doc,"audit")} className="px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-200 transition-colors">Audit</button>}
               {doc.status === "expired" && <button onClick={() => handleAction(doc,"resend")} className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-semibold hover:bg-amber-200 transition-colors">Resend</button>}
-              {["in_review","draft"].includes(doc.status) && <button className="px-2.5 py-1 bg-muted text-muted-foreground rounded-lg text-xs font-semibold hover:bg-muted/80 transition-colors">View</button>}
+              {doc.file_url && <button onClick={() => window.open(doc.file_url, "_blank")} className="px-2.5 py-1 bg-muted text-muted-foreground rounded-lg text-xs font-semibold hover:bg-muted/80 transition-colors">View</button>}
             </div>
           </div>
         ))}
@@ -440,8 +440,7 @@ function Documents({ docs, setDocs, setActive }) {
 }
 
 // ── Audit Modal ────────────────────────────────────────────────────────────────
-function AuditModal({ doc, onClose }) {
-  const events = doc.id === "SFP-20260420-9821" ? AUDIT_EVENTS : AUDIT_EVENTS.slice(0,3);
+function AuditModal({ doc, events = [], loading = false, onClose }) {
   const statusConfig = {
     complete: { color: "bg-blue-500", icon: "Circle" },
     view:     { color: "bg-violet-500", icon: "Eye" },
@@ -463,6 +462,17 @@ function AuditModal({ doc, onClose }) {
           <Icon name="Download" size={13} color="currentColor" /> Export PDF
         </button>
       </div>
+      {loading ? (
+        <div className="py-12 text-center text-sm text-muted-foreground">Loading audit trail…</div>
+      ) : events.length === 0 ? (
+        <div className="bg-card border border-border rounded-xl py-12 text-center">
+          <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center mx-auto mb-3">
+            <Icon name="FileSearch" size={22} color="var(--color-muted-foreground)" />
+          </div>
+          <p className="text-sm font-semibold text-foreground">No recorded events yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Audit events appear here once the document is opened, signed, or completed.</p>
+        </div>
+      ) : (
       <div className="relative">
         <div className="absolute left-5 top-0 bottom-0 w-0.5 bg-border" />
         {events.map(ev => {
@@ -485,6 +495,7 @@ function AuditModal({ doc, onClose }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
@@ -525,12 +536,14 @@ function SignDocument({ docs, onStartSigning }) {
 }
 
 // ── Upload ─────────────────────────────────────────────────────────────────────
-function Upload({ setDocs, setActive }) {
+function Upload({ setActive, adminId, onUploaded }) {
   const [dragOver, setDragOver] = useState(false);
   const [file, setFile] = useState(null);
   const [signers, setSigners] = useState([{ email: "", role: "Signer" }]);
   const [order, setOrder] = useState("sequential");
   const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   function handleDrop(e) {
     e.preventDefault(); setDragOver(false);
@@ -538,21 +551,71 @@ function Upload({ setDocs, setActive }) {
     if (f) setFile(f);
   }
 
-  function handleSend() {
-    if (!file) return;
-    const newDoc = {
-      id: `SFP-${Date.now()}`,
-      name: file.name.replace(/\.[^.]+$/, ""),
-      type: file.name.split(".").pop().toUpperCase(),
-      pages: Math.floor(Math.random() * 10) + 1,
-      status: "pending",
-      signers: signers.filter(s => s.email).map(s => ({ name: s.email.split("@")[0], initials: s.email.slice(0,2).toUpperCase(), signed: false, role: s.role })),
-      sent: new Date().toISOString().split("T")[0],
-      due: new Date(Date.now() + 7*864e5).toISOString().split("T")[0],
-      external: true,
-    };
-    setDocs(prev => [newDoc, ...prev]);
-    setSent(true);
+  async function handleSend() {
+    if (!file || !adminId || busy) return;
+    setBusy(true); setError("");
+    try {
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      const baseName = file.name.replace(/\.[^.]+$/, "");
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `${adminId}/${Date.now()}-${safe}`;
+
+      const { error: upErr } = await supabase.storage
+        .from("esign-documents")
+        .upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (upErr) throw new Error(upErr.message);
+
+      const { data: pub } = supabase.storage.from("esign-documents").getPublicUrl(path);
+      const cleanSigners = signers.filter(s => s.email.trim());
+
+      const { data: docRow, error: docErr } = await supabase
+        .from("esign_documents")
+        .insert({
+          admin_id: adminId,
+          name: baseName,
+          file_url: pub?.publicUrl,
+          file_type: ext.toUpperCase(),
+          status: cleanSigners.length ? "pending" : "draft",
+          signing_order: order,
+        })
+        .select("id")
+        .single();
+      if (docErr) throw new Error(docErr.message);
+
+      if (cleanSigners.length) {
+        await supabase.from("esign_signers").insert(cleanSigners.map((s, i) => ({
+          admin_id: adminId,
+          esign_document_id: docRow.id,
+          name: s.email.split("@")[0],
+          email: s.email.trim(),
+          role: s.role,
+          signing_order: order === "sequential" ? i : 0,
+          status: "pending",
+        })));
+      }
+
+      await recordAudit(adminId, {
+        documentLabel: baseName, eventType: "created", actor: "You",
+        detail: `Uploaded ${ext.toUpperCase()} for signature`, hash: btoa(path).slice(0, 16) + "…",
+      });
+      if (cleanSigners.length) {
+        await recordAudit(adminId, {
+          documentLabel: baseName, eventType: "sent", actor: "You",
+          detail: `${order} order · ${cleanSigners.length} signer(s)`,
+        });
+        await pushNotification(adminId, {
+          type: "info", title: "Document sent for signature",
+          detail: `${baseName} · ${cleanSigners.length} signer(s) invited`,
+        });
+      }
+
+      if (onUploaded) await onUploaded();
+      setSent(true);
+    } catch (err) {
+      setError(err.message || "Upload failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (sent) return (
@@ -665,9 +728,14 @@ function Upload({ setDocs, setActive }) {
             ))}
           </div>
 
-          <button onClick={handleSend} disabled={!file}
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-600 flex items-center gap-2">
+              <Icon name="AlertCircle" size={13} color="currentColor" /> {error}
+            </div>
+          )}
+          <button onClick={handleSend} disabled={!file || busy}
             className="w-full py-3 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-            Send for Signature
+            {busy ? "Uploading…" : "Send for Signature"}
           </button>
         </div>
       </div>
@@ -752,22 +820,37 @@ function Workflow() {
 }
 
 // ── Notifications ──────────────────────────────────────────────────────────────
-function NotificationsPage({ notifs, setNotifs }) {
+function NotificationsPage({ notifs, setNotifs, onMarkRead }) {
   const iconMap = { warning: "AlertTriangle", success: "CheckCircle", info: "Info", neutral: "FileText" };
   const colorMap = { warning: "text-amber-600 bg-amber-100", success: "text-emerald-600 bg-emerald-100", info: "text-blue-600 bg-blue-100", neutral: "text-muted-foreground bg-muted" };
+
+  const markAll = () => {
+    const ids = notifs.filter(n => !n.read).map(n => n.id);
+    setNotifs(p => p.map(n => ({ ...n, read: true })));
+    if (onMarkRead) onMarkRead(ids);
+  };
+  const markOne = (id) => {
+    setNotifs(p => p.map(x => x.id === id ? { ...x, read: true } : x));
+    if (onMarkRead) onMarkRead([id]);
+  };
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-foreground">Notifications</h1>
-        <button onClick={() => setNotifs(p => p.map(n => ({ ...n, read: true })))}
+        <button onClick={markAll}
           className="text-xs text-primary font-medium hover:underline">
           Mark all read
         </button>
       </div>
+      {notifs.length === 0 && (
+        <div className="bg-card border border-border rounded-xl py-12 text-center text-sm text-muted-foreground">
+          No notifications yet
+        </div>
+      )}
       <div className="space-y-2">
         {notifs.map(n => (
-          <div key={n.id} onClick={() => setNotifs(p => p.map(x => x.id===n.id ? {...x,read:true} : x))}
+          <div key={n.id} onClick={() => markOne(n.id)}
             className={`flex gap-4 p-4 rounded-xl border cursor-pointer transition-all ${n.read ? "bg-card border-border" : "bg-primary/5 border-primary/20"}`}>
             <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${colorMap[n.type]}`}>
               <Icon name={iconMap[n.type]} size={15} color="currentColor" />
@@ -788,7 +871,8 @@ function NotificationsPage({ notifs, setNotifs }) {
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────────
-function Settings() {
+function Settings({ currentUser }) {
+  const user = currentUser || MOCK_USER;
   const [pinEnabled, setPinEnabled] = useState(true);
   const [otpEnabled, setOtpEnabled] = useState(true);
   const [sigAlert, setSigAlert] = useState(true);
@@ -807,9 +891,9 @@ function Settings() {
       ctxRef.current = ctx;
       ctx.font = "italic 28px Georgia, serif";
       ctx.fillStyle = "var(--color-foreground)";
-      ctx.fillText("Eric Nganga", 20, 55);
+      ctx.fillText(user.name || "Signature", 20, 55);
     }
-  }, []);
+  }, [user.name]);
 
   function Toggle({ value, onChange }) {
     return (
@@ -850,13 +934,13 @@ function Settings() {
         <div className="bg-card border border-border rounded-xl p-5 space-y-4">
           <h3 className="text-base font-semibold text-foreground">Profile</h3>
           <div className="flex items-center gap-3">
-            <Avatar initials="EN" size={48} />
+            <Avatar initials={user.initials || "U"} size={48} />
             <div>
-              <p className="font-semibold text-foreground">{MOCK_USER.name}</p>
-              <p className="text-xs text-muted-foreground">{MOCK_USER.role} · {MOCK_USER.email}</p>
+              <p className="font-semibold text-foreground">{user.name}</p>
+              <p className="text-xs text-muted-foreground">{user.role} · {user.email}</p>
             </div>
           </div>
-          {[["Full Name", MOCK_USER.name], ["Email", MOCK_USER.email], ["Organization", "AssetFlow Ltd"]].map(([label, val]) => (
+          {[["Full Name", user.name], ["Email", user.email], ["Organization", "AssetFlow Ltd"]].map(([label, val]) => (
             <div key={label}>
               <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
               <input defaultValue={val} className="w-full px-3 py-2 text-sm border border-border rounded-xl bg-muted/30 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
@@ -895,9 +979,23 @@ function Settings() {
 }
 
 // ── Audit Trail Page ───────────────────────────────────────────────────────────
-function AuditPage({ docs }) {
-  const [selectedId, setSelectedId] = useState("SFP-20260420-9821");
-  const doc = docs.find(d => d.id === selectedId) || docs.find(d => d.status === "completed");
+function AuditPage({ docs, adminId }) {
+  const selectable = docs.filter(d => ["completed","pending","signed","in_review","expired"].includes(d.status));
+  const [selectedId, setSelectedId] = useState(selectable[0]?.id || "");
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const doc = docs.find(d => d.id === selectedId) || selectable[0];
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!doc) return;
+      setLoading(true);
+      const ev = await loadAuditEvents(adminId, doc);
+      if (!cancelled) { setEvents(ev); setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedId, adminId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-5">
@@ -909,12 +1007,13 @@ function AuditPage({ docs }) {
         <label className="block text-xs font-semibold text-muted-foreground mb-1.5">Select Document</label>
         <select value={selectedId} onChange={e => setSelectedId(e.target.value)}
           className="px-3 py-2 text-sm border border-border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[320px]">
-          {docs.filter(d => d.status === "completed" || d.status === "pending" || d.status === "signed").map(d => (
+          {selectable.length === 0 && <option value="">No documents</option>}
+          {selectable.map(d => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
         </select>
       </div>
-      {doc && <AuditModal doc={doc} onClose={() => {}} />}
+      {doc && <AuditModal doc={doc} events={events} loading={loading} onClose={() => {}} />}
     </div>
   );
 }
@@ -1009,21 +1108,22 @@ export default function ESignaturePage() {
   const [active, setActive]           = useState("dashboard");
   const [adminId, setAdminId]         = useState(null);
   const [dbContracts, setDbContracts] = useState([]);
+  const [companyContracts, setCompanyContracts] = useState([]);
   const [localDocs, setLocalDocs]     = useState([]);
   const [loading, setLoading]         = useState(true);
   const [selectedContract, setSelected] = useState(null);
   const [showOTP, setShowOTP]         = useState(false);
   const [signature, setSignature]     = useState(null);
   const [signingStep, setSigningStep] = useState(1);
-  const [auditEvents, setAuditEvents] = useState([]);
-  const [notifs, setNotifs]           = useState([
-    { id: 1, type: "info", title: "E-Signature module loaded", detail: "Contracts synced from database", time: "Just now", read: false },
-  ]);
+  const [notifs, setNotifs]           = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [esignDocs, setEsignDocs]     = useState([]);
   const [selectedDoc, setSelectedDoc] = useState(null);
 
   const dbDocs = dbContracts.map(c => ({
     id: c.invoice_number || c.id,
     _dbId: c.id,
+    _source: "generated",
     name: (c.pricing_model === "installment" ? "Hire Purchase Agreement" : "Sale Agreement") + " — " + (c.client_name || "Client"),
     type: "PDF", pages: 4,
     status: c.esign_status || "pending",
@@ -1031,10 +1131,50 @@ export default function ESignaturePage() {
       { name: c.client_name || "Client", initials: (c.client_name || "CL").slice(0,2).toUpperCase(), signed: ["signed","completed","settled"].includes(c.esign_status), role: "Buyer" },
       { name: "Authorized Officer", initials: "AO", signed: ["signed","completed","settled"].includes(c.esign_status), role: "Vendor" },
     ],
-    sent: c.generated_at, due: null, external: false, _raw: c,
+    sent: c.generated_at, due: null, external: false, file_url: c.file_url, _raw: c,
   }));
 
-  const docs = [...dbDocs, ...localDocs.length > 0 ? localDocs : MOCK_DOCS];
+  // Uploaded contracts (company_contracts, non-template) → doc shape. These are
+  // contracts added via the Contracts tab's "Upload Contract" action.
+  const companyDocs = companyContracts.map(c => ({
+    id: c.id,
+    _companyId: c.id,
+    _source: "company",
+    name: c.contract_name || "Contract",
+    type: "PDF", pages: 1,
+    status: c.esign_status || "pending",
+    signers: (c.esign_signers && c.esign_signers.length)
+      ? c.esign_signers.map(s => ({
+          name: s.name || (s.email || "").split("@")[0],
+          initials: (s.name || s.email || "S").slice(0, 2).toUpperCase(),
+          signed: s.status === "signed",
+          role: s.role,
+        }))
+      : [{ name: c.client?.full_name || "Client", initials: (c.client?.full_name || "CL").slice(0,2).toUpperCase(), signed: ["signed","completed"].includes(c.esign_status), role: "Signer" }],
+    sent: c.created_at, due: c.expires_at, external: false, file_url: c.file_url, _raw: c,
+  }));
+
+  // Uploaded-for-signature documents (esign_documents) → doc shape.
+  const uploadedDocs = esignDocs.map(d => ({
+    id: d.id,
+    _esignId: d.id,
+    _source: "esign_doc",
+    name: d.name,
+    type: d.file_type || "PDF",
+    pages: d.pages || 1,
+    status: d.status || "draft",
+    signers: (d.esign_signers || []).map(s => ({
+      name: s.name || (s.email || "").split("@")[0],
+      initials: (s.name || s.email || "S").slice(0, 2).toUpperCase(),
+      signed: s.status === "signed",
+      role: s.role,
+    })),
+    sent: d.created_at, due: d.expires_at, external: true, file_url: d.file_url,
+  }));
+
+  // Real data wins; mock docs only seed an empty workspace.
+  const realDocs = [...dbDocs, ...companyDocs, ...uploadedDocs];
+  const docs = realDocs.length > 0 ? realDocs : MOCK_DOCS;
   const unread = notifs.filter(n => !n.read).length;
 
   useEffect(() => {
@@ -1042,10 +1182,18 @@ export default function ESignaturePage() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
-        const { data: profile } = await supabase.from("user_profiles").select("role, admin_id").eq("id", user.id).single();
+        const { data: profile } = await supabase.from("user_profiles").select("role, admin_id, full_name").eq("id", user.id).single();
         const aId = profile?.role === "admin" ? user.id : (profile?.admin_id || user.id);
+        const fullName = profile?.full_name || user.email || "User";
+        setCurrentUser({
+          id: user.id,
+          name: fullName,
+          email: user.email,
+          role: profile?.role || "user",
+          initials: fullName.trim().split(/\s+/).map(s => s[0]).join("").slice(0, 2).toUpperCase() || "U",
+        });
         setAdminId(aId);
-        await fetchContracts(aId);
+        await Promise.all([fetchContracts(aId), fetchCompanyContracts(aId), fetchEsignDocs(aId), loadNotifications(aId)]);
       } catch (err) { console.error(err); }
       finally { setLoading(false); }
     };
@@ -1057,11 +1205,77 @@ export default function ESignaturePage() {
     try {
       const { data } = await supabase
         .from("generated_contracts")
-        .select("id, invoice_number, client_name, pricing_model, generated_at, esign_status, signed_at, admin_id, sale:sales(total_amount, sale_date), client:clients(full_name, phone, email)")
+        .select("id, invoice_number, client_name, pricing_model, generated_at, esign_status, signed_at, file_url, admin_id, sale:sales(total_amount, sale_date), client:clients(full_name, phone, email)")
         .eq("admin_id", aId)
         .order("generated_at", { ascending: false });
       setDbContracts(data || []);
     } catch (err) { console.error("fetchContracts:", err.message); }
+  };
+
+  // Uploaded contracts from the Contracts tab (company_contracts, non-template).
+  const fetchCompanyContracts = async (aId) => {
+    if (!aId) return;
+    try {
+      const { data } = await supabase
+        .from("company_contracts")
+        .select("*, client:clients(full_name, phone, email)")
+        .eq("admin_id", aId)
+        .eq("is_template", false)
+        .order("created_at", { ascending: false });
+      const rows = data || [];
+
+      // esign_signers has no FK to company_contracts (it links via the loose
+      // contract_id + source_type='company'), so attach signers manually.
+      const ids = rows.map(r => r.id);
+      const byContract = {};
+      if (ids.length) {
+        const { data: signers } = await supabase
+          .from("esign_signers")
+          .select("*")
+          .eq("admin_id", aId)
+          .eq("source_type", "company")
+          .in("contract_id", ids);
+        (signers || []).forEach(s => {
+          if (!byContract[s.contract_id]) byContract[s.contract_id] = [];
+          byContract[s.contract_id].push(s);
+        });
+      }
+      setCompanyContracts(rows.map(r => ({ ...r, esign_signers: byContract[r.id] || [] })));
+    } catch (err) { console.error("fetchCompanyContracts:", err.message); }
+  };
+
+  const fetchEsignDocs = async (aId) => {
+    if (!aId) return;
+    try {
+      const { data } = await supabase
+        .from("esign_documents")
+        .select("*, esign_signers(*)")
+        .eq("admin_id", aId)
+        .order("created_at", { ascending: false });
+      setEsignDocs(data || []);
+    } catch (err) { console.error("fetchEsignDocs:", err.message); }
+  };
+
+  const loadNotifications = async (aId) => {
+    if (!aId) return;
+    try {
+      const { data } = await supabase
+        .from("esign_notifications")
+        .select("*")
+        .eq("admin_id", aId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      setNotifs((data || []).map(n => ({
+        id: n.id, type: n.type, title: n.title, detail: n.detail,
+        time: n.created_at ? fmtDateTime(n.created_at) : "", read: n.read,
+      })));
+    } catch (err) { console.error("loadNotifications:", err.message); }
+  };
+
+  const markNotificationsRead = async (ids) => {
+    if (!ids || ids.length === 0) return;
+    try { await supabase.from("esign_notifications").update({ read: true }).in("id", ids); }
+    catch (err) { console.error("markNotificationsRead:", err.message); }
   };
 
   const updateStatus = async (docId, newStatus) => {
@@ -1072,24 +1286,112 @@ export default function ESignaturePage() {
   };
 
   const startSigning = (doc) => {
-    setSelected(doc._raw || doc);
+    const refId = doc._dbId || doc._companyId || doc._esignId;
+    setSelected({
+      ...(doc._raw || doc),
+      _dbId: doc._dbId, _companyId: doc._companyId, _esignId: doc._esignId,
+      _source: doc._source || "generated", _label: doc.id, _name: doc.name,
+      file_url: doc.file_url,
+    });
     setSigningStep(2);
     setSignature(null);
-    setAuditEvents([{ type: "view", action: "Contract Opened for Signing", actor: "Admin", time: new Date().toISOString(), ip: "197.232.xx.xx", hash: btoa(doc.id || "x").slice(0,16) + "…" }]);
     setActive("sign");
+    // Persist the "viewed/opened" event to the real audit trail.
+    recordAudit(adminId, {
+      contractId: refId, documentLabel: doc.id,
+      eventType: "viewed", actor: currentUser?.name || "User", actorEmail: currentUser?.email,
+      ip: "197.232.xx.xx", device: navigator.userAgent.slice(0, 60),
+      detail: "Contract opened for signing", hash: btoa(doc.id || "x").slice(0, 16) + "…",
+    });
   };
 
   const handleOTPVerified = async (otpData) => {
     setShowOTP(false);
     if (!signature || !selectedContract) return;
-    const hashInput = (selectedContract.invoice_number || selectedContract.id) + otpData.verifiedAt + (signature.data || "");
-    const hash = btoa(hashInput).slice(0,16) + "…" + btoa(hashInput).slice(-8);
-    setAuditEvents(prev => [...prev, { type: "signed", action: "Document Signed — OTP Verified", actor: "Authorized Officer", time: new Date().toISOString(), ip: otpData.ip, hash }]);
+    const source      = selectedContract._source || "generated";
+    // The parent record to update + the loose id used for audit/notifications.
+    const contractId  = source === "company"   ? selectedContract._companyId
+                      : source === "esign_doc" ? selectedContract._esignId
+                      : (selectedContract._dbId || selectedContract.id);
+    const label       = selectedContract.invoice_number || selectedContract._label || selectedContract.id;
+    const docName     = selectedContract._name || label;
+    const signedAt    = new Date().toISOString();
+    const hashInput   = label + otpData.verifiedAt + (signature.data || "");
+    const hash        = btoa(hashInput).slice(0, 16) + "…" + btoa(hashInput).slice(-8);
+    const actor       = currentUser?.name || "Authorized Officer";
+
+    // Update the correct source table for this document.
     try {
-      await supabase.from("generated_contracts").update({ esign_status: "signed", signed_at: new Date().toISOString(), signature_hash: hash, signature_type: signature.type }).eq("id", selectedContract.id);
+      if (source === "company") {
+        await supabase.from("company_contracts")
+          .update({ esign_status: "signed", signed_at: signedAt, signature_hash: hash, signature_type: signature.type, signature_data: signature.data })
+          .eq("id", contractId);
+      } else if (source === "esign_doc") {
+        // esign_documents has no signature columns; the signature lives on the
+        // signer row. Mark the document completed.
+        await supabase.from("esign_documents")
+          .update({ status: "completed", updated_at: signedAt })
+          .eq("id", contractId);
+      } else {
+        await supabase.from("generated_contracts")
+          .update({ esign_status: "signed", signed_at: signedAt, signature_hash: hash, signature_type: signature.type, signature_data: signature.data })
+          .eq("id", contractId);
+      }
     } catch (err) { console.error(err); }
+
+    // Stamp the signature into the actual PDF so the signed document *contains*
+    // the signature (+ a certificate page), then point the record at the signed
+    // file. Best-effort — a failure here never blocks the signing itself.
+    if (selectedContract.file_url && /\.pdf(\?|$)/i.test(selectedContract.file_url)) {
+      try {
+        const blob = await applySignatureToPDF(selectedContract.file_url, {
+          signatureType: signature.type, signatureData: signature.data, font: signature.font,
+          signerName: actor, role: "Authorized Officer", documentName: docName,
+          signedAt: fmtDateTime(signedAt), hash, ip: otpData.ip, device: otpData.device,
+        });
+        const bucket = source === "esign_doc" ? "esign-documents" : "contracts";
+        const path   = `${adminId}/signed_${contractId}.pdf`;
+        const { error: upErr } = await supabase.storage.from(bucket).upload(path, blob, { upsert: true, contentType: "application/pdf" });
+        if (!upErr) {
+          const url = supabase.storage.from(bucket).getPublicUrl(path).data?.publicUrl;
+          const tbl = source === "company" ? "company_contracts" : source === "esign_doc" ? "esign_documents" : "generated_contracts";
+          if (url) await supabase.from(tbl).update({ file_url: url }).eq("id", contractId);
+        }
+      } catch (e) { console.warn("applySignatureToPDF:", e.message); }
+    }
+
+    // Real audit trail: signed → completed (internal single-officer flow).
+    await recordAudit(adminId, {
+      contractId, documentLabel: label, eventType: "signed", actor, actorEmail: currentUser?.email,
+      ip: otpData.ip, device: otpData.device, detail: "Signature applied — OTP verified by email", hash,
+    });
+    await recordAudit(adminId, {
+      contractId, documentLabel: label, eventType: "completed", actor: "System",
+      detail: "All signatures verified. Document sealed.", hash,
+    });
+
+    // In-app notifications: completion + mandatory security alert on signature use.
+    await pushNotification(adminId, {
+      userId: currentUser?.id, type: "success", title: `${docName} signed`,
+      detail: "Signature applied and document sealed.", contractId,
+    });
+    await pushNotification(adminId, {
+      userId: currentUser?.id, type: "warning", title: "Security: your signature was used",
+      detail: `${docName} · ${fmtDateTime(signedAt)} · ${otpData.ip}`, contractId,
+    });
+
+    // Email the signature-used security alert (best-effort).
+    if (currentUser?.email) {
+      try {
+        await sendSignatureAlert(currentUser.email, {
+          ownerName: actor, documentName: docName, actor,
+          time: fmtDateTime(signedAt), ip: otpData.ip, device: otpData.device,
+        });
+      } catch (err) { console.error("sendSignatureAlert:", err.message); }
+    }
+
     setSigningStep(3);
-    if (adminId) await fetchContracts(adminId);
+    if (adminId) await Promise.all([fetchContracts(adminId), fetchCompanyContracts(adminId), fetchEsignDocs(adminId), loadNotifications(adminId)]);
   };
 
   const NAV_ITEMS = [
@@ -1155,19 +1457,50 @@ export default function ESignaturePage() {
         {/* Tab content */}
         <div>
           {active === "dashboard" && <Dashboard docs={docs} setActive={setActive} setSelectedDoc={(d) => { setSelectedDoc(d); setActive("documents"); }} />}
-          {active === "documents" && <Documents docs={docs} setDocs={setLocalDocs} setActive={setActive} extra={{ updateStatus }} />}
+          {active === "documents" && <Documents docs={docs} setDocs={setLocalDocs} setActive={setActive} adminId={adminId} />}
           {active === "sign" && (
             <>
               {signingStep === 1 && <SignDocument docs={docs} onStartSigning={startSigning} />}
               {signingStep === 2 && selectedContract && (
-                <div className="space-y-5 max-w-2xl mx-auto">
+                <div className="space-y-5 max-w-3xl mx-auto">
                   <button onClick={() => setSigningStep(1)} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline">
                     <Icon name="ArrowLeft" size={12} color="currentColor" /> Back
                   </button>
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Sign Contract</h2>
-                    <p className="text-sm text-muted-foreground mt-0.5">{selectedContract.invoice_number} — {selectedContract.client_name}</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      {selectedContract._name || selectedContract.invoice_number || "Document"}
+                      {selectedContract.client_name ? ` — ${selectedContract.client_name}` : ""}
+                    </p>
                   </div>
+
+                  {/* Document viewer — review before signing */}
+                  <div className="bg-card border border-border rounded-xl overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+                      <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                        <Icon name="FileText" size={15} color="currentColor" /> Review Document
+                      </h3>
+                      {selectedContract.file_url && (
+                        <a href={selectedContract.file_url} target="_blank" rel="noopener noreferrer"
+                          className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
+                          <Icon name="ExternalLink" size={12} color="currentColor" /> Open in new tab
+                        </a>
+                      )}
+                    </div>
+                    {selectedContract.file_url ? (
+                      <iframe title="Contract document" src={selectedContract.file_url}
+                        className="w-full h-[420px] bg-muted/20" />
+                    ) : (
+                      <div className="px-5 py-10 text-center">
+                        <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center mx-auto mb-3">
+                          <Icon name="FileText" size={20} color="var(--color-muted-foreground)" />
+                        </div>
+                        <p className="text-sm font-semibold text-foreground">No file attached to this document</p>
+                        <p className="text-xs text-muted-foreground mt-1">You can still apply your signature below. Re-generate the contract to attach a viewable PDF.</p>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="bg-card border border-border rounded-xl p-5">
                     <h3 className="text-base font-semibold text-foreground mb-4">Your Signature</h3>
                     <SignatureCanvas onCapture={(sig) => { setSignature(sig); setShowOTP(true); }} />
@@ -1191,18 +1524,19 @@ export default function ESignaturePage() {
               )}
             </>
           )}
-          {active === "upload"        && <Upload setDocs={(newDoc) => setLocalDocs(p => [newDoc, ...p])} setActive={setActive} />}
+          {active === "upload"        && <Upload setActive={setActive} adminId={adminId} onUploaded={() => fetchEsignDocs(adminId)} />}
           {active === "workflow"      && <Workflow />}
           {active === "cosign"        && <CoSign docs={docs} />}
-          {active === "audit"         && <AuditPage docs={docs} />}
-          {active === "notifications" && <NotificationsPage notifs={notifs} setNotifs={setNotifs} />}
-          {active === "settings"      && <Settings />}
+          {active === "audit"         && <AuditPage docs={docs} adminId={adminId} />}
+          {active === "notifications" && <NotificationsPage notifs={notifs} setNotifs={setNotifs} onMarkRead={markNotificationsRead} />}
+          {active === "settings"      && <Settings currentUser={currentUser} />}
         </div>
       </div>
 
       {showOTP && (
         <OTPModal
-          signer={{ name: "Authorized Officer", phone: "+254 7XX XXX XXX" }}
+          signer={{ name: currentUser?.name || "Authorized Officer", email: currentUser?.email }}
+          documentName={selectedContract?._name || selectedContract?.invoice_number}
           onVerified={handleOTPVerified}
           onClose={() => { setShowOTP(false); setSignature(null); }}
         />

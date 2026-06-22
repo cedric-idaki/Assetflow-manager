@@ -25,6 +25,7 @@ import FinanceHub from './pages/finance-hub';
 import HRPage from './pages/hr-management';
 import POSModule from './pages/pos-module';
 import ESignaturePage from './pages/e-signature';
+import ExternalSignPage from './pages/external-sign';
 import ResetPassword from './pages/reset-password';
 import ClientPortal from './pages/client-portal';
 import SubscriptionBilling from './pages/subscription-billing';
@@ -47,6 +48,8 @@ const Routes = () => {
           <Route path="/reset-password"           element={<ResetPassword />} />
           <Route path="/user-registration-screen" element={<UserRegistrationScreen />} />
           <Route path="/admin-registration"       element={<AdminRegistration />} />
+          {/* External signer one-time link (no auth — token-scoped via edge function) */}
+          <Route path="/sign/:token"              element={<ExternalSignPage />} />
 
           {/* ── Super Admin only ───────────────────────────────────────── */}
           <Route path="/super-admin-dashboard" element={

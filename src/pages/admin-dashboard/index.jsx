@@ -190,7 +190,7 @@ const AdminDashboard = () => {
         </div>
 
         {/* Tab content */}
-        {loading ? (
+        {loading && activeTab !== 'contracts' ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[1,2,3,4,5,6].map(i => (
@@ -242,15 +242,6 @@ const AdminDashboard = () => {
               />
             )}
 
-            {activeTab === 'contracts' && (
-              <ContractsTab
-                contracts={contracts}
-                clients={clients}
-                onUpload={uploadContract}
-                onExport={exportCSV}
-              />
-            )}
-
             {activeTab === 'kyc' && (
               <KYCReviewTab adminId={userProfile?.id} />
             )}
@@ -272,6 +263,17 @@ const AdminDashboard = () => {
               />
             )}
           </>
+        )}
+
+        {/* CONTRACTS TAB — render directly (no loading swap) so the upload modal
+            and its selected-file state aren't torn down by a background refetch */}
+        {activeTab === 'contracts' && (
+          <ContractsTab
+            contracts={contracts}
+            clients={clients}
+            onUpload={uploadContract}
+            onExport={exportCSV}
+          />
         )}
       </div>
     </MainLayout>

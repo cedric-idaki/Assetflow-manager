@@ -157,13 +157,28 @@ const SaleContractRow = ({ sale, companyProfile }) => {
         .eq('sale_id', sale.id)
         .order('installment_no');
 
-      await generateContractPDF({
+      const { blob } = await generateContractPDF({
         sale:     fullSale,
         client:   fullSale.client,
         asset:    fullSale.asset,
         company:  companyProfile,
         schedule: schedule || [],
       });
+
+      const adminId = (await supabase.auth.getUser()).data.user?.id;
+
+      // Persist the generated PDF to storage so the e-signature module has an
+      // actual document to display and sign (non-fatal — the local download
+      // already happened in generateContractPDF).
+      let fileUrl = null;
+      try {
+        const safeInv = (sale.invoice_number || 'DRAFT').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const path    = `${adminId}/contract_${safeInv}.pdf`;
+        const { error: upErr } = await supabase.storage
+          .from('contracts')
+          .upload(path, blob, { upsert: true, contentType: 'application/pdf' });
+        if (!upErr) fileUrl = supabase.storage.from('contracts').getPublicUrl(path).data?.publicUrl || null;
+      } catch (e) { console.warn('contract PDF upload skipped:', e.message); }
 
       // Mark contract as generated — upsert so re-generation doesn't duplicate
       const now = new Date().toISOString();
@@ -172,10 +187,11 @@ const SaleContractRow = ({ sale, companyProfile }) => {
         invoice_number: sale.invoice_number,
         client_id:      fullSale.client?.id,
         asset_id:       fullSale.asset?.id,
-        admin_id:       (await supabase.auth.getUser()).data.user?.id,
+        admin_id:       adminId,
         generated_at:   now,
         pricing_model:  sale.pricing_model,
         client_name:    fullSale.client?.full_name,
+        ...(fileUrl ? { file_url: fileUrl } : {}),
       }, { onConflict: 'sale_id' });
 
       // Also audit log
@@ -183,7 +199,7 @@ const SaleContractRow = ({ sale, companyProfile }) => {
         action:      'create',
         table_name:  'generated_contracts',
         description: `Contract generated for sale ${sale.invoice_number} — ${fullSale.client?.full_name}`,
-        user_id:     (await supabase.auth.getUser()).data.user?.id,
+        user_id:     adminId,
         new_values:  { invoice_number: sale.invoice_number, client: fullSale.client?.full_name },
       }).catch(() => {});
 

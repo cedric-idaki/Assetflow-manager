@@ -285,7 +285,7 @@ const AssetClientManagement = () => {
   // create-staff-user Edge Function (admin.createUser, email auto-confirmed) so
   // there's no dependency on Supabase's email rate limit. Returns the generated
   // password so the admin can share it with the client.
-  const provisionClientAccount = async ({ email, fullName, phone }) => {
+  const provisionClientAccount = async ({ clientId, email, fullName, phone }) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -313,7 +313,7 @@ const AssetClientManagement = () => {
         },
         body: JSON.stringify({
           email, password, full_name: fullName, role: 'client',
-          phone: phone || '', admin_id: adminId,
+          phone: phone || '', admin_id: adminId, client_id: clientId,
         }),
       });
 

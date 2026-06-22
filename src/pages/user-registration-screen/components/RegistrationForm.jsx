@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 import Icon from '../../../components/AppIcon';
+import TermsModal from '../../../components/TermsModal';
 import PasswordStrengthMeter from './PasswordStrengthMeter';
 
 const RegistrationForm = () => {
@@ -18,6 +19,7 @@ const RegistrationForm = () => {
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
 
   const validateEmail = (email) => {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -105,6 +107,7 @@ const RegistrationForm = () => {
     formData?.password !== formData?.confirmPassword;
 
   return (
+    <>
     <form onSubmit={handleSubmit} className="space-y-5" noValidate>
       {/* Server Error */}
       {serverError && (
@@ -259,9 +262,13 @@ const RegistrationForm = () => {
           </div>
           <span className="text-sm text-slate-400 leading-tight">
             I agree to the{' '}
-            <a href="#" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Terms of Service</a>
-            {' '}and{' '}
-            <a href="#" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Privacy Policy</a>
+            <button
+              type="button"
+              onClick={() => setShowTerms(true)}
+              className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+            >
+              Terms &amp; Privacy Policy
+            </button>
           </span>
         </label>
         {errors?.agreeTerms && (
@@ -287,6 +294,8 @@ const RegistrationForm = () => {
         )}
       </button>
     </form>
+    <TermsModal open={showTerms} onClose={() => setShowTerms(false)} />
+    </>
   );
 };
 

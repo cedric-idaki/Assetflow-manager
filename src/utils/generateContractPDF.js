@@ -505,7 +505,9 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
   const safeName = (client?.full_name || 'Client').replace(/\s+/g, '_');
   const filename  = `Contract_${sale?.invoice_number || 'DRAFT'}_${safeName}.pdf`;
   doc.save(filename);
-  return filename;
+  // Return the blob too, so callers can persist the PDF (e.g. to storage for
+  // e-signature) instead of only triggering a browser download.
+  return { filename, blob: doc.output('blob') };
 };
 
 export default generateContractPDF;

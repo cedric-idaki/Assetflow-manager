@@ -1,5 +1,41 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, getAccessToken } from '../lib/supabase';
+
+// Upload a file to a Supabase Storage bucket with progress reporting via XHR,
+// falling back to the JS client (no progress) if the direct upload fails so
+// correctness is never sacrificed for the progress bar.
+const uploadWithProgress = async (bucket, path, file, onProgress) => {
+  const rawUrl = import.meta.env?.VITE_SUPABASE_URL || '';
+  const anon   = import.meta.env?.VITE_SUPABASE_ANON_KEY || '';
+  const base   = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}.supabase.co`;
+  const token  = (await getAccessToken()) || anon;
+  try {
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${base}/storage/v1/object/${bucket}/${encodeURI(path)}`);
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('apikey', anon);
+      xhr.setRequestHeader('x-upsert', 'true');
+      xhr.setRequestHeader('cache-control', '3600');
+      if (file.type) xhr.setRequestHeader('Content-Type', file.type);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload  = () => (xhr.status >= 200 && xhr.status < 300)
+        ? resolve()
+        : reject(new Error(`Upload failed (${xhr.status})`));
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(file);
+    });
+  } catch (err) {
+    // Fallback: JS client upload (no progress) so the upload still completes.
+    const { error } = await supabase.storage.from(bucket).upload(path, file, {
+      upsert: true, cacheControl: '3600', contentType: file.type || 'application/pdf',
+    });
+    if (error) throw error;
+    if (onProgress) onProgress(100);
+  }
+};
 
 export const useAdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -150,7 +186,7 @@ export const useAdminDashboard = () => {
     const adminId = await getAdminId();
     const { data } = await supabase
       .from('company_contracts')
-      .select('*, client:clients(full_name, account_number)')
+      .select('*, client:clients(full_name, account_number, email)')
       .eq('admin_id', adminId);
     setContracts(data || []);
   }, []);
@@ -349,18 +385,12 @@ export const useAdminDashboard = () => {
   }, [fetchStaff]);
 
   // ── Action: upload contract ──────────────────────────────────────────────────
-const uploadContract = useCallback(async (formData, file) => {
+const uploadContract = useCallback(async (formData, file, onProgress) => {
   const adminId   = await getAdminId();
   const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath  = `${adminId}/${Date.now()}_${cleanName}`;
 
-  const { error: uploadError } = await supabase.storage
-    .from('contracts').upload(filePath, file, {
-      cacheControl: '3600',
-      upsert: true,
-      contentType: file.type || 'application/pdf',
-    });
-  if (uploadError) throw uploadError;
+  await uploadWithProgress('contracts', filePath, file, onProgress);
 
   const { data: { publicUrl } } = supabase.storage.from('contracts').getPublicUrl(filePath);
 

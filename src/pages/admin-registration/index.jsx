@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
 
 // Flat KES 360 / month per plan. The plan sets how many staff portal accounts
@@ -81,6 +82,8 @@ const AdminRegistration = () => {
   const [account, setAccount] = useState({
     fullName: '', email: '', phone: '', password: '', confirmPassword: '',
   });
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
 
   // Step 2 - Company
   const [company, setCompany] = useState({
@@ -115,6 +118,7 @@ const AdminRegistration = () => {
       if (!account.phone) return setError('Phone number is required.') || false;
       if (!account.password || account.password.length < 6) return setError('Password must be at least 6 characters.') || false;
       if (account.password !== account.confirmPassword) return setError('Passwords do not match.') || false;
+      if (!termsAccepted) return setError('You must accept the Terms & Privacy Policy to continue.') || false;
     }
     if (currentStep === 1) {
       if (!company.companyName) return setError('Company name is required.') || false;
@@ -418,6 +422,37 @@ const AdminRegistration = () => {
                   />
                 </div>
               ))}
+
+              {/* Terms & Privacy acceptance */}
+              <label className="flex items-start gap-3 cursor-pointer pt-1">
+                <span
+                  className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 mt-0.5 transition-all"
+                  style={{
+                    background: termsAccepted ? C.primary : 'transparent',
+                    border: `1.5px solid ${termsAccepted ? C.primary : C.border}`,
+                  }}
+                >
+                  {termsAccepted && <Icon name="Check" size={12} color="white" />}
+                  <input
+                    type="checkbox"
+                    checked={termsAccepted}
+                    onChange={e => setTermsAccepted(e.target.checked)}
+                    className="sr-only"
+                  />
+                </span>
+                <span className="text-sm leading-snug" style={{ color: C.textMuted }}>
+                  I have read and agree to the{' '}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); setShowTerms(true); }}
+                    className="font-semibold underline underline-offset-2"
+                    style={{ color: C.primary }}
+                  >
+                    Terms &amp; Privacy Policy
+                  </button>
+                  .
+                </span>
+              </label>
             </div>
           )}
 
@@ -700,6 +735,8 @@ const AdminRegistration = () => {
           )}
         </div>
       </div>
+
+      <TermsModal open={showTerms} onClose={() => setShowTerms(false)} />
     </div>
   );
 };

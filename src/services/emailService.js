@@ -48,3 +48,30 @@ export const sendStatementEmail = async (toEmail, { client, assets, payments, pe
 export const sendPaymentReminder = async (toEmail, { client, payment, asset, daysUntilDue, isOverdue }) => {
   return callEmailFunction('payment_reminder', toEmail, { client, payment, asset, daysUntilDue, isOverdue });
 };
+
+/**
+ * Send a one-time signing OTP code to a signer's email.
+ * @param {string} toEmail - Recipient email
+ * @param {{ signerName, code, documentName, expiresMinutes }} data
+ */
+export const sendSigningOtp = async (toEmail, { signerName, code, documentName, expiresMinutes }) => {
+  return callEmailFunction('signing_otp', toEmail, { signerName, code, documentName, expiresMinutes });
+};
+
+/**
+ * Send a security alert when a saved signature is applied to a document.
+ * @param {string} toEmail - Recipient email
+ * @param {{ ownerName, documentName, actor, time, ip, device }} data
+ */
+export const sendSignatureAlert = async (toEmail, { ownerName, documentName, actor, time, ip, device }) => {
+  return callEmailFunction('esign_security_alert', toEmail, { ownerName, documentName, actor, time, ip, device });
+};
+
+/**
+ * Invite an external signer with their secure one-time signing link.
+ * @param {string} toEmail - Recipient email
+ * @param {{ signerName, documentName, link, message, expiresAt }} data
+ */
+export const sendSigningInvite = async (toEmail, { signerName, documentName, link, message, expiresAt }) => {
+  return callEmailFunction('signing_invite', toEmail, { signerName, documentName, link, message, expiresAt });
+};

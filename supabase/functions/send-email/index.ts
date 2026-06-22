@@ -339,6 +339,108 @@ const buildCredentialsEmail = (data: any) => {
 </body></html>`;
 };
 
+const buildSigningOtpEmail = (data: any) => {
+  const { signerName, code, documentName, expiresMinutes } = data;
+  const digits = String(code || "").split("").map((d: string) =>
+    `<span style="display:inline-block;min-width:40px;padding:12px 0;margin:0 4px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;font-size:24px;font-weight:700;color:#111827;font-family:monospace">${d}</span>`
+  ).join("");
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🔐</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Signature Verification Code</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Confirm your identity to sign</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${signerName || "there"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      Enter the one-time code below to apply your signature${documentName ? ` to <strong>${documentName}</strong>` : ""}.
+    </p>
+    <div style="text-align:center;margin:0 0 24px">${digits}</div>
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#92400e">This code expires in ${expiresMinutes || 10} minutes. Never share it. If you didn't request to sign a document, contact your administrator immediately.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
+const buildSignatureAlertEmail = (data: any) => {
+  const { ownerName, documentName, actor, time, ip, device } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🛡️</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Your signature was used</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Security notification</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${ownerName || "there"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      Your saved signature was just applied to a document. If this was you, no action is needed.
+    </p>
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">
+      <table style="width:100%;border-collapse:collapse">
+        ${documentName ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Document</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:600;text-align:right">${documentName}</td></tr>` : ""}
+        ${actor ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Signed by</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:600;text-align:right">${actor}</td></tr>` : ""}
+        ${time ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">When</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:600;text-align:right">${time}</td></tr>` : ""}
+        ${ip ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">IP Address</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:600;text-align:right">${ip}</td></tr>` : ""}
+        ${device ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Device</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${device}</td></tr>` : ""}
+      </table>
+    </div>
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#991b1b">If you did NOT authorize this, change your password and notify your administrator right away.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
+const buildSigningInviteEmail = (data: any) => {
+  const { signerName, documentName, link, message, expiresAt } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">✍️</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">You've been asked to sign</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Secure document signing request</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${signerName || "there"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      You have been requested to review and sign${documentName ? ` <strong>${documentName}</strong>` : " a document"}.
+      Click the secure button below to open it. You'll confirm your identity with a one-time code before signing.
+    </p>
+    ${message ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:20px"><p style="margin:0;font-size:13px;color:#374151;font-style:italic">"${message}"</p></div>` : ""}
+    <div style="text-align:center;margin-bottom:24px">
+      <a href="${link}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Review &amp; Sign Document</a>
+    </div>
+    <p style="margin:0 0 20px;font-size:12px;color:#9ca3af;text-align:center;word-break:break-all">
+      Or paste this link into your browser:<br>${link}
+    </p>
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#92400e">This is a one-time link${expiresAt ? ` and expires on ${formatDate(expiresAt)}` : ""}. It cannot be reused or shared once the document is signed.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -384,6 +486,18 @@ serve(async (req) => {
       case "client_welcome":
         subject = "Your AssetFlow client portal login";
         html = buildCredentialsEmail(data);
+        break;
+      case "signing_otp":
+        subject = `Your signing code: ${data?.code || ""}`;
+        html = buildSigningOtpEmail(data);
+        break;
+      case "esign_security_alert":
+        subject = `🛡️ Your signature was used${data?.documentName ? ` on ${data.documentName}` : ""}`;
+        html = buildSignatureAlertEmail(data);
+        break;
+      case "signing_invite":
+        subject = `Signature requested${data?.documentName ? `: ${data.documentName}` : ""}`;
+        html = buildSigningInviteEmail(data);
         break;
       default:
         throw new Error(`Unknown email type: ${type}`);
