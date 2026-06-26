@@ -243,6 +243,7 @@ export const useSuperAdminDashboard = () => {
         admin_id: adminId,
         commission_rate: agentData.commissionRate || 5,
         target_amount: agentData.targetAmount || 0,
+        agent_plan: agentData.plan || 'bronze',
       })
       .select()
       .maybeSingle();

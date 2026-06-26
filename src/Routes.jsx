@@ -29,10 +29,14 @@ import ExternalSignPage from './pages/external-sign';
 import ResetPassword from './pages/reset-password';
 import ClientPortal from './pages/client-portal';
 import SubscriptionBilling from './pages/subscription-billing';
+import ProfilePage from './pages/profile';
 
 const ADMIN_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
 const FINANCE_ROLES = ['super_admin', 'admin', 'accountant', 'finance', 'director', 'manager'];
 const STAFF_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
+// KYC Renewals is removed from the admin portal — only the super admin (and other
+// internal staff roles) may access the renewal management screen.
+const KYC_RENEWAL_ROLES = STAFF_ROLES.filter((r) => r !== 'admin');
 const ALL_INTERNAL  = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations', 'sales_agent', 'sales'];
 
 const Routes = () => {
@@ -142,7 +146,7 @@ const Routes = () => {
           } />
           <Route path="/kyc-renewal-management-screen" element={
             <ProtectedRoute>
-              <RoleGuard allowedRoles={STAFF_ROLES}>
+              <RoleGuard allowedRoles={KYC_RENEWAL_ROLES}>
                 <KYCRenewalManagementScreen />
               </RoleGuard>
             </ProtectedRoute>
@@ -199,6 +203,13 @@ const Routes = () => {
               <RoleGuard allowedRoles={['hr', 'admin', 'super_admin']}>
                 <HRPage />
               </RoleGuard>
+            </ProtectedRoute>
+          } />
+
+          {/* ── My Profile — any authenticated user ────────────────────── */}
+          <Route path="/profile" element={
+            <ProtectedRoute>
+              <ProfilePage />
             </ProtectedRoute>
           } />
 

@@ -78,7 +78,6 @@ var Sidebar = function(props) {
     { label: 'E-Signature',       path: '/e-signature',                   icon: 'PenTool' },
     { label: 'Payments',         path: '/payment-collections-hub',       icon: 'CreditCard' },
     { label: 'KYC Management',   path: '/kyc-management-screen',         icon: 'ShieldCheck' },
-    { label: 'KYC Renewals',     path: '/kyc-renewal-management-screen', icon: 'RefreshCw' },
     { label: 'Reports',          path: '/reports-analytics-center',      icon: 'BarChart3' },
     { label: 'HR Management',     path: '/hr-management',                 icon: 'Users' },
     { label: 'Staff & System',   path: '/system-administration',         icon: 'Settings', badge: pendingCount || null },

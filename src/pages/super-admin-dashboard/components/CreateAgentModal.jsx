@@ -2,10 +2,16 @@ import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 
+// Agent tiers — the plan sets the commission earned per admin/company the agent registers.
+const AGENT_PLANS = [
+  { id: 'bronze', name: 'Bronze', fee: 500,  blurb: 'Registers admin accounts and uses the sales agent portal.' },
+  { id: 'gold',   name: 'Gold',   fee: 1500, blurb: 'Registers admins and onboards/trains them on the system.' },
+];
+
 const CreateAgentModal = ({ onClose, onCreate }) => {
   const [form, setForm] = useState({
     fullName: '', email: '', phone: '', password: '',
-    region: '', commissionRate: 5, targetAmount: '',
+    region: '', commissionRate: 5, targetAmount: '', plan: 'bronze',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -86,6 +92,25 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
               placeholder="e.g. 500000"
               className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground"
             />
+          </div>
+
+          {/* Agent plan — sets the commission earned per admin/company registered */}
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">Agent Plan *</label>
+            <select
+              value={form.plan}
+              onChange={e => set('plan', e.target.value)}
+              className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+            >
+              {AGENT_PLANS.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — KES {p.fee.toLocaleString()} per admin
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {AGENT_PLANS.find(p => p.id === form.plan)?.blurb}
+            </p>
           </div>
         </div>
 

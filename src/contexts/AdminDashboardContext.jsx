@@ -32,6 +32,7 @@ export const AdminDashboardProvider = ({ children }) => {
     // HR management modals
     hrEmployee: null,       // null = closed, object = employee being edited (or true = new)
     hrEmployeeDetail: null, // null = closed, object = employee being viewed
+    hrEmployeeDelete: null, // null = closed, object = employee pending permanent deletion
     hrPayroll: false,       // run payroll modal
   }));
 
@@ -67,6 +68,7 @@ export const AdminDashboardProvider = ({ children }) => {
         settlementLetter: null,
         hrEmployee: null,
         hrEmployeeDetail: null,
+        hrEmployeeDelete: null,
         hrPayroll: false,
       });
     }

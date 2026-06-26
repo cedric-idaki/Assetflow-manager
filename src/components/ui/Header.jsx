@@ -500,7 +500,6 @@ const Header = function (props) {
               {/* Menu items */}
               {[
                 { icon: 'User',     label: 'My Profile',   action: () => { setShowUserMenu(false); navigate('/profile'); } },
-                { icon: 'Settings', label: 'Settings',     action: () => { setShowUserMenu(false); navigate('/settings'); } },
               ].map(item => (
                 <button
                   key={item.label}

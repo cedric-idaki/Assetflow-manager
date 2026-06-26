@@ -89,7 +89,7 @@ Deno.serve(async (req) => {
     // ── 3. Parse and validate the request body ────────────────────────────
     const body = await req.json();
     const {
-      email, password, full_name, role = 'client', phone, department, admin_id,
+      email, password, full_name, role = 'client', phone, gender, department, admin_id,
       // When provisioning a client login, the caller passes the clients.id so we
       // can hard-link the auth user to the exact client row.
       client_id,
@@ -145,6 +145,7 @@ Deno.serve(async (req) => {
         full_name,
         email:      cleanEmail,
         phone:      phone || null,
+        gender:     gender || null, // 'male' | 'female' (constrained in DB)
         role,
         department: department || null,
         admin_id:   admin_id || null,

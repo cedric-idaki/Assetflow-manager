@@ -4,48 +4,14 @@ import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
+import { COMPANY_PLANS as PLANS, planForUsers, INSTALLATION_FEE } from '../../config/companyPlans';
 
-// Flat KES 360 / month per plan. The plan sets how many staff portal accounts
-// the company may create; extra users beyond the tier cost KES 360 each (upgrade).
-const PLANS = [
-  {
-    id: 'bronze',
-    name: 'Bronze',
-    price: 360,
-    maxUsers: 5,
-    storageGb: 5,
-    userRange: '1–5 users',
-    color: '#CD7F32',
-    bg: 'bg-amber-50',
-    border: 'border-amber-300',
-    features: ['1–5 users', '5 GB free storage', 'Asset management', 'Client portal', 'Basic reporting'],
-  },
-  {
-    id: 'silver',
-    name: 'Silver',
-    price: 360,
-    maxUsers: 16,
-    storageGb: 10,
-    userRange: '6–16 users',
-    color: '#C0C0C0',
-    bg: 'bg-slate-50',
-    border: 'border-slate-300',
-    features: ['6–16 users', '10 GB free storage', 'Asset management', 'Client portal', 'Sales agent portal', 'KYC management', 'Advanced reporting'],
-    popular: true,
-  },
-  {
-    id: 'gold',
-    name: 'Gold',
-    price: 360,
-    maxUsers: null,
-    storageGb: 15,
-    userRange: '17+ users',
-    color: '#C9A84C',
-    bg: 'bg-yellow-50',
-    border: 'border-yellow-300',
-    features: ['17+ users', '15 GB free storage', 'Asset management', 'Client portal', 'Sales agent portal', 'KYC management', 'Full reporting', 'Priority support', 'Custom contracts'],
-  },
-];
+// Pricing is per user, per tier (KES / user / month). The number of users the
+// admin needs automatically selects the plan tier (which sets the free storage
+// quota). On first-time registration a one-time installation fee is also charged.
+// Total payable today = (users × tier price per user) + installation fee.
+// Plan catalog + tier selection live in src/config/companyPlans.js (shared with
+// the admin profile so pricing stays in sync).
 
 const ASSET_TYPES = [
   'Vehicles', 'Property/Land', 'Construction Dealers',
@@ -80,7 +46,7 @@ const AdminRegistration = () => {
 
   // Step 1 - Account
   const [account, setAccount] = useState({
-    fullName: '', email: '', phone: '', password: '', confirmPassword: '',
+    fullName: '', email: '', phone: '', gender: '', password: '', confirmPassword: '',
   });
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -91,8 +57,15 @@ const AdminRegistration = () => {
     location: '', city: '', assetTypes: [],
   });
 
-  // Step 3 - Plan
-  const [selectedPlan, setSelectedPlan] = useState(null);
+  // Step 3 - Plan (number of users drives the tier + price)
+  const [numberOfUsers, setNumberOfUsers] = useState('');
+  const userCount = parseInt(numberOfUsers, 10) || 0;
+  const activePlan = planForUsers(userCount);
+  // Registration is always a first-time signup, so the one-time installation
+  // fee always applies here. Renewals (handled elsewhere) must NOT re-charge it.
+  const subscriptionPrice = activePlan ? userCount * activePlan.pricePerUser : 0;
+  const installationFee = activePlan ? INSTALLATION_FEE : 0;
+  const totalPrice = subscriptionPrice + installationFee;
 
   // Step 4 - Payment
   const [mpesaPhone, setMpesaPhone] = useState('');
@@ -116,6 +89,7 @@ const AdminRegistration = () => {
       if (!account.fullName) return setError('Full name is required.') || false;
       if (!account.email) return setError('Email is required.') || false;
       if (!account.phone) return setError('Phone number is required.') || false;
+      if (!account.gender) return setError('Please select your gender.') || false;
       if (!account.password || account.password.length < 6) return setError('Password must be at least 6 characters.') || false;
       if (account.password !== account.confirmPassword) return setError('Passwords do not match.') || false;
       if (!termsAccepted) return setError('You must accept the Terms & Privacy Policy to continue.') || false;
@@ -126,7 +100,8 @@ const AdminRegistration = () => {
       if (company.assetTypes.length === 0) return setError('Select at least one asset type.') || false;
     }
     if (currentStep === 2) {
-      if (!selectedPlan) return setError('Please select a plan.') || false;
+      if (!userCount || userCount < 1) return setError('Enter the number of users you need (minimum 1).') || false;
+      if (!activePlan) return setError('Could not determine a plan for that number of users.') || false;
     }
     if (currentStep === 3) {
       if (!mpesaPhone || mpesaPhone.length < 10) return setError('Enter a valid Mpesa phone number.') || false;
@@ -157,6 +132,7 @@ const AdminRegistration = () => {
         email: account.email,
         full_name: account.fullName,
         phone: account.phone,
+        gender: account.gender, // 'male' | 'female'
         role: 'admin',
         is_active: false, // inactive until payment confirmed
       });
@@ -176,20 +152,19 @@ const AdminRegistration = () => {
       });
 
       // 4. Create pending subscription
-      const plan = PLANS.find(p => p.id === selectedPlan);
       const { data: planData } = await supabase
         .from('subscription_plans')
         .select('id')
-        .eq('name', selectedPlan)
+        .eq('name', activePlan.id)
         .single();
 
       await supabase.from('company_subscriptions').insert({
         admin_id: userId,
         plan_id: planData?.id,
-        plan_name: selectedPlan,
+        plan_name: activePlan.id,
         status: 'pending',
-        price_paid: plan.price,
-        max_users: plan.maxUsers,
+        price_paid: totalPrice,
+        max_users: userCount, // seats the admin paid for
         start_date: new Date().toISOString(),
         end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       });
@@ -205,14 +180,13 @@ const AdminRegistration = () => {
   // ── Trigger Mpesa STK Push ─────────────────────────────────────────────────
   const triggerMpesaPayment = async (adminId) => {
     setPaymentStatus('processing');
-    const plan = PLANS.find(p => p.id === selectedPlan);
 
     try {
       // Save payment record as pending
       await supabase.from('mpesa_subscription_payments').insert({
         admin_id: adminId,
         phone_number: mpesaPhone,
-        amount: plan.price,
+        amount: totalPrice,
         status: 'pending',
       });
 
@@ -395,31 +369,61 @@ const AdminRegistration = () => {
                 { label: 'Full Name *', key: 'fullName', type: 'text', placeholder: 'John Kamau' },
                 { label: 'Email Address *', key: 'email', type: 'email', placeholder: 'john@company.com' },
                 { label: 'Phone Number *', key: 'phone', type: 'tel', placeholder: '+254 7XX XXX XXX' },
+                { label: 'Gender *', key: 'gender', type: 'select', options: [
+                  { value: 'male', label: 'Male' },
+                  { value: 'female', label: 'Female' },
+                ] },
                 { label: 'Password *', key: 'password', type: 'password', placeholder: 'Min. 6 characters' },
                 { label: 'Confirm Password *', key: 'confirmPassword', type: 'password', placeholder: 'Repeat password' },
               ].map(field => (
                 <div key={field.key}>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>{field.label}</label>
-                  <input
-                    type={field.type}
-                    value={account[field.key]}
-                    onChange={e => setAcc(field.key, field.key === 'phone' ? formatKEPhone(e.target.value) : e.target.value)}
-                    placeholder={field.placeholder}
-                    className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
-                    style={{
-                      border: `1.5px solid ${C.border}`,
-                      color: C.text,
-                      background: C.inputBg,
-                    }}
-                    onFocus={(e) => {
-                      e.target.style.borderColor = C.primary;
-                      e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
-                    }}
-                    onBlur={(e) => {
-                      e.target.style.borderColor = C.border;
-                      e.target.style.boxShadow = 'none';
-                    }}
-                  />
+                  {field.type === 'select' ? (
+                    <select
+                      value={account[field.key]}
+                      onChange={e => setAcc(field.key, e.target.value)}
+                      className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                      style={{
+                        border: `1.5px solid ${C.border}`,
+                        color: account[field.key] ? C.text : C.textMuted,
+                        background: C.inputBg,
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = C.primary;
+                        e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = C.border;
+                        e.target.style.boxShadow = 'none';
+                      }}
+                    >
+                      <option value="" disabled>Select gender</option>
+                      {field.options.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type}
+                      value={account[field.key]}
+                      onChange={e => setAcc(field.key, field.key === 'phone' ? formatKEPhone(e.target.value) : e.target.value)}
+                      placeholder={field.placeholder}
+                      className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                      style={{
+                        border: `1.5px solid ${C.border}`,
+                        color: C.text,
+                        background: C.inputBg,
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = C.primary;
+                        e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = C.border;
+                        e.target.style.boxShadow = 'none';
+                      }}
+                    />
+                  )}
                 </div>
               ))}
 
@@ -526,57 +530,134 @@ const AdminRegistration = () => {
             </div>
           )}
 
-          {/* ── STEP 2: Plan ── */}
+          {/* ── STEP 2: Plan (auto-selected from number of users) ── */}
           {currentStep === 2 && (
-            <div className="space-y-3">
-              {PLANS.map(plan => (
-                <button
-                  key={plan.id}
-                  type="button"
-                  onClick={() => setSelectedPlan(plan.id)}
-                  className="w-full p-4 rounded-xl border-2 text-left transition-all relative"
-                  style={{
-                    borderColor: selectedPlan === plan.id ? C.primary : C.border,
-                    background: selectedPlan === plan.id ? 'rgba(52,193,221,0.05)' : C.card,
-                  }}
-                >
+            <div className="space-y-4">
+              {/* Number of users */}
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>
+                  Number of Users *
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Icon name="Users" size={15} color={C.textMuted} />
+                  </div>
+                  <input
+                    type="number"
+                    min="1"
+                    inputMode="numeric"
+                    value={numberOfUsers}
+                    onChange={e => setNumberOfUsers(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="e.g. 8"
+                    className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                    style={{ border: `1.5px solid ${C.border}`, color: C.text, background: C.inputBg }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = C.primary;
+                      e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = C.border;
+                      e.target.style.boxShadow = 'none';
+                    }}
+                  />
+                </div>
+                <p className="text-xs mt-1" style={{ color: C.textMuted }}>
+                  How many staff login accounts you need. Your plan is chosen automatically.
+                </p>
+              </div>
+
+              {/* Auto-selected plan + total */}
+              {activePlan ? (
+                <div className="p-4 rounded-xl" style={{ background: 'rgba(52,193,221,0.06)', border: `1.5px solid ${C.primary}` }}>
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm"
-                      style={{ background: plan.color, color: '#fff' }}>
-                      {plan.name[0]}
+                      style={{ background: activePlan.color, color: '#fff' }}>
+                      {activePlan.name[0]}
                     </div>
                     <div>
-                      <p className="font-bold" style={{ color: C.navy }}>{plan.name}</p>
+                      <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: C.primary }}>
+                        Your Plan
+                      </p>
+                      <p className="font-bold" style={{ color: C.navy }}>{activePlan.name}</p>
                       <p className="text-xs" style={{ color: C.textMuted }}>
-                        {plan.userRange} · {plan.storageGb} GB free
+                        {activePlan.userRange} · {activePlan.storageGb} GB free
                       </p>
-                    </div>
-                    <div className="ml-auto text-right">
-                      <p className="text-lg font-bold" style={{ color: C.navy }}>
-                        KES {plan.price.toLocaleString()}
-                      </p>
-                      <p className="text-xs" style={{ color: C.textMuted }}>per month</p>
                     </div>
                   </div>
-                  {selectedPlan === plan.id && (
-                    <div className="absolute top-3 left-3">
-                      <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: C.primary }}>
-                        <Icon name="Check" size={11} color="white" />
-                      </div>
-                    </div>
-                  )}
-                </button>
-              ))}
 
-              <div className="flex items-start gap-2 p-3 rounded-xl text-xs"
-                style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: '#075985' }}>
-                <Icon name="Info" size={14} color="#0284c7" />
-                <span>
-                  Every plan is a flat <span className="font-semibold">KES 360 / month</span>. Your plan sets how many
-                  staff portal accounts you can create. Once you reach your user limit you must upgrade to add more —
-                  extra users are <span className="font-semibold">KES 360 each</span>. Employees without a login portal
-                  are unlimited.
-                </span>
+                  {/* Price breakdown */}
+                  <div className="mt-4 pt-3 space-y-2" style={{ borderTop: `1px solid ${C.border}` }}>
+                    <div className="flex items-center justify-between text-sm">
+                      <span style={{ color: C.textMuted }}>
+                        Monthly subscription · {userCount} × KES {activePlan.pricePerUser}
+                      </span>
+                      <span className="font-semibold" style={{ color: C.navy }}>
+                        KES {subscriptionPrice.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span style={{ color: C.textMuted }}>
+                        Installation fee · one-time
+                      </span>
+                      <span className="font-semibold" style={{ color: C.navy }}>
+                        KES {installationFee.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
+                      <span className="text-sm font-bold" style={{ color: C.navy }}>Total due today</span>
+                      <span className="text-2xl font-bold" style={{ color: C.navy }}>
+                        KES {totalPrice.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl text-sm text-center"
+                  style={{ background: C.bg, border: `1px dashed ${C.border}`, color: C.textMuted }}>
+                  Enter the number of users to see your plan and price.
+                </div>
+              )}
+
+              {/* All tiers for reference (active one highlighted) */}
+              <div className="space-y-2">
+                {PLANS.map(plan => {
+                  const isActive = activePlan?.id === plan.id;
+                  return (
+                    <div
+                      key={plan.id}
+                      className="w-full p-3 rounded-xl border-2 text-left relative transition-all"
+                      style={{
+                        borderColor: isActive ? C.primary : C.border,
+                        background: isActive ? 'rgba(52,193,221,0.05)' : C.card,
+                        opacity: !activePlan || isActive ? 1 : 0.55,
+                      }}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs"
+                          style={{ background: plan.color, color: '#fff' }}>
+                          {plan.name[0]}
+                        </div>
+                        <div>
+                          <p className="font-bold text-sm" style={{ color: C.navy }}>{plan.name}</p>
+                          <p className="text-xs" style={{ color: C.textMuted }}>
+                            {plan.userRange} · {plan.storageGb} GB free
+                          </p>
+                        </div>
+                        <div className="ml-auto text-right">
+                          <p className="text-sm font-bold" style={{ color: C.navy }}>KES {plan.pricePerUser}</p>
+                          <p className="text-xs" style={{ color: C.textMuted }}>per user / month</p>
+                        </div>
+                      </div>
+                      {isActive && (
+                        <div className="absolute top-2 right-2">
+                          <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: C.primary }}>
+                            <Icon name="Check" size={11} color="white" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -585,28 +666,41 @@ const AdminRegistration = () => {
           {currentStep === 3 && (
             <div className="space-y-4">
               {/* Plan summary */}
-              {selectedPlan && (() => {
-                const plan = PLANS.find(p => p.id === selectedPlan);
-                return (
-                  <div className="p-4 rounded-xl" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs" style={{ color: C.textMuted }}>Selected Plan</p>
-                        <p className="font-bold" style={{ color: C.navy }}>{plan.name} Plan</p>
-                        <p className="text-xs" style={{ color: C.textMuted }}>
-                          {plan.userRange} · {plan.storageGb} GB free storage
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-2xl font-bold" style={{ color: C.navy }}>
-                          KES {plan.price.toLocaleString()}
-                        </p>
-                        <p className="text-xs" style={{ color: C.textMuted }}>per month</p>
-                      </div>
+              {activePlan && (
+                <div className="p-4 rounded-xl" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
+                  <div>
+                    <p className="text-xs" style={{ color: C.textMuted }}>Selected Plan</p>
+                    <p className="font-bold" style={{ color: C.navy }}>{activePlan.name} Plan</p>
+                    <p className="text-xs" style={{ color: C.textMuted }}>
+                      {userCount} users · {activePlan.storageGb} GB free storage
+                    </p>
+                  </div>
+
+                  {/* Price breakdown */}
+                  <div className="mt-3 pt-3 space-y-2" style={{ borderTop: `1px solid ${C.border}` }}>
+                    <div className="flex items-center justify-between text-sm">
+                      <span style={{ color: C.textMuted }}>
+                        Monthly subscription · {userCount} × KES {activePlan.pricePerUser}
+                      </span>
+                      <span className="font-semibold" style={{ color: C.navy }}>
+                        KES {subscriptionPrice.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span style={{ color: C.textMuted }}>Installation fee · one-time</span>
+                      <span className="font-semibold" style={{ color: C.navy }}>
+                        KES {installationFee.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
+                      <span className="text-sm font-bold" style={{ color: C.navy }}>Total due today</span>
+                      <span className="text-2xl font-bold" style={{ color: C.navy }}>
+                        KES {totalPrice.toLocaleString()}
+                      </span>
                     </div>
                   </div>
-                );
-              })()}
+                </div>
+              )}
 
               {paymentStatus === 'idle' && (
                 <div>
@@ -659,7 +753,7 @@ const AdminRegistration = () => {
                     <p className="text-sm mt-2" style={{ color: C.textMuted }}>
                       Enter your Mpesa PIN to complete the payment of{' '}
                       <span className="font-bold" style={{ color: C.navy }}>
-                        KES {PLANS.find(p => p.id === selectedPlan)?.price.toLocaleString()}
+                        KES {totalPrice.toLocaleString()}
                       </span>
                     </p>
                   </div>

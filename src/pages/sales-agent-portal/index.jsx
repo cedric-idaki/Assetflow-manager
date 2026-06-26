@@ -6,6 +6,8 @@ import CommissionDashboard from './components/CommissionDashboard';
 import ActivityFeed from './components/ActivityFeed';
 import LeadRegistrationModal from './components/LeadRegistrationModal';
 import CreateClientModal from './components/CreateClientModal';
+import CreateCompanyModal from './components/CreateCompanyModal';
+import AssistModal from './components/AssistModal';
 import AgentActivityTrail from './components/AgentActivityTrail';
 import SalesCostTracker from './components/SalesCostTracker';
 import UpcomingAppointments from './components/UpcomingAppointments';
@@ -293,7 +295,7 @@ const KPICard = ({ label, value, icon, colorClass, loading, subtext }) => (
 );
 
 // ── Lead Detail Modal ─────────────────────────────────────────────────────────
-const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient }) => {
+const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isClientMode }) => {
   const [newStage, setNewStage] = useState(lead?.stage || 'new_lead');
   const [saving, setSaving]     = useState(false);
 
@@ -374,13 +376,15 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient }) =>
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
             <p className="text-xs font-semibold text-emerald-800 mb-1">🎯 Ready to convert this lead?</p>
             <p className="text-xs text-emerald-700 mb-2">
-              Register them as a company with an admin portal account. Their details are prefilled.
+              {isClientMode
+                ? 'Convert them into a client with a portal login. Their details are prefilled.'
+                : 'Register them as a company with an admin portal account. Their details are prefilled.'}
             </p>
             <button
               onClick={() => { onClose(); onConvertToClient(lead); }}
               className="w-full py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
             >
-              Register as Company →
+              {isClientMode ? 'Convert to Client →' : 'Register as Company →'}
             </button>
           </div>
         </div>
@@ -414,7 +418,7 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient }) =>
 };
 
 // ── My Clients Section ────────────────────────────────────────────────────────
-const MyClientsSection = ({ leads, onCreateClient }) => {
+const MyClientsSection = ({ leads, onCreateClient, isClientMode }) => {
   const closedLeads = (leads || []).filter(l => l.stage === 'closed');
 
   return (
@@ -429,8 +433,8 @@ const MyClientsSection = ({ leads, onCreateClient }) => {
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white"
           style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
         >
-          <Icon name="Building2" size={13} color="white" />
-          Register Company
+          <Icon name={isClientMode ? 'UserPlus' : 'Building2'} size={13} color="white" />
+          {isClientMode ? 'Create Client' : 'Register Company'}
         </button>
       </div>
 
@@ -489,11 +493,16 @@ const MyClientsSection = ({ leads, onCreateClient }) => {
 // ── Main Component ────────────────────────────────────────────────────────────
 const SalesAgentPortal = () => {
   const {
-    agentProfile, leads, walletTransactions, expenses, followUps,
+    agentProfile, agentMode, goldAgents, leads, walletTransactions, expenses, followUps,
     activityFeed, kpis, loading, connected,
-    registerLead, updateLeadStage, requestWithdrawal, logExpense, refetch,
+    registerLead, updateLeadStage, requestWithdrawal, logExpense, assignAssist, refetch,
     activeView, setActiveView, modals, openModal, closeModal,
   } = useSalesAgentContext();
+
+  // Admin-created agents register clients; super-admin-created agents register companies.
+  const isClientMode = agentMode === 'client';
+  // Only super-admin BRONZE agents can hand an admin to a gold agent for onboarding.
+  const isBronzeCompanyAgent = agentMode === 'company' && (agentProfile?.agent_plan || 'bronze') === 'bronze';
 
   const [toast, setToast] = useState(null);
 
@@ -518,8 +527,18 @@ const SalesAgentPortal = () => {
     openModal('createClient');
   };
 
-  const handleClientCreated = () => {
-    // The CreateClientModal shows its own success popup; just refresh data here.
+  const handleAssign = async ({ goldAgentId, adminName }) => {
+    // The AssistModal shows its own success state; just persist + refresh here.
+    await assignAssist({ goldAgentId, adminName });
+    refetch();
+  };
+
+  const handleClientCreated = async (account) => {
+    // If this client was converted from a lead, close that lead so it moves
+    // into the "My Clients" list. The modal shows its own success popup.
+    if (account?.leadId) {
+      try { await updateLeadStage(account.leadId, 'closed'); } catch (err) {}
+    }
     refetch();
   };
 
@@ -579,15 +598,27 @@ const SalesAgentPortal = () => {
               </button>
             </div>
 
-            {/* Register company / admin account */}
+            {/* Create a client (admin agents) or register a company (super-admin agents) */}
             <button
               onClick={() => { closeModal('prefillLead'); openModal('createClient'); }}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
             >
-              <Icon name="Building2" size={15} color="white" />
-              Register Company
+              <Icon name={isClientMode ? 'UserPlus' : 'Building2'} size={15} color="white" />
+              {isClientMode ? 'Create Client' : 'Register Company'}
             </button>
+
+            {/* Assist — bronze agents hand an admin to a gold agent for onboarding */}
+            {isBronzeCompanyAgent && (
+              <button
+                onClick={() => openModal('assist')}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
+                style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+              >
+                <Icon name="LifeBuoy" size={15} color="white" />
+                Assist
+              </button>
+            )}
 
             {/* Export */}
             <button
@@ -687,7 +718,7 @@ const SalesAgentPortal = () => {
 
             {/* My Clients + Commission */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <MyClientsSection leads={leads} onCreateClient={handleConvertToClient} />
+              <MyClientsSection leads={leads} onCreateClient={handleConvertToClient} isClientMode={isClientMode} />
               <CommissionDashboard
                 kpis={kpis}
                 walletTransactions={walletTransactions}
@@ -754,17 +785,38 @@ const SalesAgentPortal = () => {
           onClose={() => closeModal('leadDetail')}
           onStageChange={updateLeadStage}
           onConvertToClient={handleConvertToClient}
+          isClientMode={isClientMode}
         />
       )}
 
-      {/* ── Register Company / Create Admin Modal ── */}
+      {/* ── Convert / register modal — client or company per agent type ── */}
       {modals.createClient && (
-        <CreateClientModal
-          isOpen={modals.createClient}
-          onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
-          agentProfile={agentProfile}
-          prefillLead={modals.prefillLead}
-          onSuccess={handleClientCreated}
+        isClientMode ? (
+          <CreateClientModal
+            isOpen={modals.createClient}
+            onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
+            agentProfile={agentProfile}
+            prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
+            onSuccess={handleClientCreated}
+          />
+        ) : (
+          <CreateCompanyModal
+            isOpen={modals.createClient}
+            onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
+            agentProfile={agentProfile}
+            prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
+            onSuccess={handleClientCreated}
+          />
+        )
+      )}
+
+      {/* ── Assist modal (bronze agents → gold agent onboarding) ── */}
+      {modals.assist && (
+        <AssistModal
+          isOpen={modals.assist}
+          onClose={() => closeModal('assist')}
+          goldAgents={goldAgents}
+          onAssign={handleAssign}
         />
       )}
 

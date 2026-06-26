@@ -6,7 +6,12 @@ import { auditLogsService } from '../services/supabaseService';
 export const useSalesAgentPortal = () => {
   const { user, userProfile } = useAuth();
   const [agentProfile, setAgentProfile] = useState(null);
+  // What this agent registers, decided by WHO created the agent:
+  //   • created by a super_admin → 'company' (registers companies / admin accounts)
+  //   • created by an admin      → 'client'  (registers clients for that admin)
+  const [agentMode, setAgentMode] = useState('company');
   const [leads, setLeads] = useState([]);
+  const [goldAgents, setGoldAgents] = useState([]);
   const [walletTransactions, setWalletTransactions] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [followUps, setFollowUps] = useState([]);
@@ -124,6 +129,23 @@ export const useSalesAgentPortal = () => {
     }
   }, []);
 
+  // ── Fetch gold agents (assist targets for bronze agents) ──────────────────
+  const fetchGoldAgents = useCallback(async (selfAgentId) => {
+    try {
+      let q = supabase
+        .from('agents')
+        .select('id, full_name, agent_code, region, email')
+        .eq('agent_plan', 'gold');
+      if (selfAgentId) q = q.neq('id', selfAgentId);
+      const { data, error: err } = await q.order('full_name', { ascending: true });
+      if (err) throw err;
+      setGoldAgents(data || []);
+    } catch (err) {
+      console.error('fetchGoldAgents error:', err?.message);
+      setGoldAgents([]);
+    }
+  }, []);
+
   // ── Fetch wallet ──────────────────────────────────────────────────────────
   const fetchWallet = useCallback(async (agentId) => {
     if (!agentId) return;
@@ -219,6 +241,26 @@ export const useSalesAgentPortal = () => {
     setError(null);
     try {
       const agent = await fetchAgentProfile();
+
+      // Resolve what this agent registers from the role of whoever created them.
+      // An admin-created agent (creator role 'admin') registers clients for that
+      // admin; a super-admin-created agent registers companies / admin accounts.
+      try {
+        const creatorId = agent?.admin_id || userProfile?.admin_id;
+        if (creatorId) {
+          const { data: creator } = await supabase
+            .from('user_profiles')
+            .select('role')
+            .eq('id', creatorId)
+            .maybeSingle();
+          setAgentMode(creator?.role === 'admin' ? 'client' : 'company');
+        } else {
+          setAgentMode('company');
+        }
+      } catch {
+        setAgentMode('company');
+      }
+
       // Load all data in parallel — even if agentId is null, each fetch guards itself
       await Promise.allSettled([
         fetchLeads(agent?.id),
@@ -227,6 +269,7 @@ export const useSalesAgentPortal = () => {
         fetchFollowUps(agent?.id),
         fetchActivityFeed(),
         fetchCommissions(agent?.id),
+        fetchGoldAgents(agent?.id),
       ]);
     } catch (err) {
       setError(err?.message);
@@ -314,6 +357,7 @@ export const useSalesAgentPortal = () => {
         phone:                  formData.phone,
         email:                  formData.email,
         asset_interest:         formData.assetInterest,
+        budget_range:           formData.budgetRange            || null,
         priority:               formData.priority || 'medium',
         stage:                  'new_lead',
         source:                 formData.source,
@@ -409,6 +453,35 @@ export const useSalesAgentPortal = () => {
     return data;
   }, [agentProfile?.id, user?.id]);
 
+  // ── Assign a gold agent to assist with an admin (bronze agents) ──────────────
+  // The DB trigger credits the chosen gold agent KES 1000 on insert.
+  const assignAssist = useCallback(async ({ goldAgentId, adminName, adminId }) => {
+    if (!agentProfile?.id) throw new Error('Agent profile not ready. Please refresh the page.');
+    if (!goldAgentId) throw new Error('Please select a gold agent.');
+    const { data, error: err } = await supabase
+      .from('agent_assists')
+      .insert({
+        bronze_agent_id: agentProfile.id,
+        gold_agent_id:   goldAgentId,
+        admin_id:        adminId   || null,
+        admin_name:      adminName || null,
+        amount:          1000,
+        status:          'assigned',
+      })
+      .select()
+      .maybeSingle();
+    if (err) throw err;
+    await auditLogsService.log(
+      'create',
+      'agent_assists',
+      `Agent ${agentProfile?.agent_code || ''} assigned a gold agent to onboard admin ${adminName || ''} (KES 1000 commission)`,
+      data?.id,
+      null,
+      { gold_agent_id: goldAgentId, admin_name: adminName, amount: 1000, bronze_agent_code: agentProfile?.agent_code }
+    );
+    return data;
+  }, [agentProfile?.id]);
+
   // Commission KPIs
   const commissionKpis = {
     totalPending:  commissions.filter(c => c.status === 'pending').reduce((s,c) => s + parseFloat(c.commission_amount || 0), 0),
@@ -420,6 +493,8 @@ export const useSalesAgentPortal = () => {
 
   return {
     agentProfile,
+    agentMode,
+    goldAgents,
     leads,
     walletTransactions,
     expenses,
@@ -435,6 +510,7 @@ export const useSalesAgentPortal = () => {
     updateLeadStage,
     requestWithdrawal,
     logExpense,
+    assignAssist,
     refetch: loadAll,
   };
 };

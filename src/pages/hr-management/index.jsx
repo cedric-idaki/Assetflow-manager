@@ -25,6 +25,75 @@ const ROLES = [
 ];
 const DEPTS = ['Finance','Sales','Operations','Administration','HR','IT','Management'];
 const EMP_TYPES = ['full_time','part_time','contract','intern'];
+// Licensed Kenyan commercial banks — drives the Bank Name dropdown in the
+// employee form. Kept alphabetical so a name is easy to find.
+const BANKS = [
+  'Absa Bank Kenya',
+  'Access Bank Kenya',
+  'Bank of Africa',
+  'Bank of Baroda',
+  'Bank of India',
+  'Citibank',
+  'Consolidated Bank',
+  'Co-operative Bank',
+  'Credit Bank',
+  'Development Bank of Kenya',
+  'Diamond Trust Bank (DTB)',
+  'Ecobank',
+  'Equity Bank',
+  'Family Bank',
+  'First Community Bank',
+  'Guaranty Trust Bank (GTBank)',
+  'Gulf African Bank',
+  'Housing Finance (HFC)',
+  'I&M Bank',
+  'KCB Bank',
+  'Kingdom Bank',
+  'Middle East Bank',
+  'NCBA Bank',
+  'National Bank of Kenya',
+  'Paramount Bank',
+  'Prime Bank',
+  'SBM Bank Kenya',
+  'Sidian Bank',
+  'Stanbic Bank',
+  'Standard Chartered Bank',
+  'UBA Kenya',
+  'Victoria Commercial Bank',
+];
+
+// Every field in the Add / Edit Employee form is mandatory. This drives both the
+// red-border highlighting and the "missing fields" message on save. The auto-
+// calculated Housing Levy and the Active toggle are intentionally excluded — they
+// are derived / always have a value, so there is nothing to "fill in".
+const REQUIRED_FIELDS = [
+  ['full_name',                      'Full Name'],
+  ['email',                          'Email'],
+  ['phone',                          'Phone'],
+  ['national_id',                    'National ID'],
+  ['gender',                         'Gender'],
+  ['date_of_birth',                  'Date of Birth'],
+  ['next_of_kin_name',               'Next of Kin Name'],
+  ['next_of_kin_relationship',       'Next of Kin Relationship'],
+  ['next_of_kin_phone',              'Next of Kin Phone'],
+  ['secondary_contact_name',         'Secondary Contact Name'],
+  ['secondary_contact_relationship', 'Secondary Contact Relationship'],
+  ['secondary_contact_phone',        'Secondary Contact Phone'],
+  ['role',                           'Role'],
+  ['department',                     'Department'],
+  ['employment_type',                'Employment Type'],
+  ['date_joined',                    'Date Joined'],
+  ['leave_balance',                  'Leave Balance'],
+  // Compensation (basic_salary / housing_allowance / transport_allowance) is
+  // intentionally optional — it can be set later, and payroll defaults blanks to 0.
+  ['kra_pin',                        'KRA PIN'],
+  ['nssf_number',                    'NSSF Number'],
+  ['sha_number',                     'SHA Number'],
+  ['bank_name',                      'Bank Name'],
+  ['bank_account',                   'Account Number'],
+  ['bank_branch',                    'Branch'],
+];
+const isEmpty = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
 
 // Display label for a stored role value (e.g. 'staff' → 'Employee'). Falls back to a
 // title-cased version of the raw value for any role not in the ROLES list.
@@ -64,6 +133,27 @@ const Badge = ({ status }) => {
   );
 };
 
+// "Not uploaded" placeholder shared by the Documents tab cells.
+const NoDoc = () => (
+  <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+    <Icon name="Minus" size={12} color="currentColor" /> Not uploaded
+  </span>
+);
+
+// A compact link to an uploaded employee document (ID/passport, CV).
+const DocLink = ({ url, label }) => url ? (
+  <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">
+    <Icon name="FileText" size={13} color="currentColor" /> {label}
+  </a>
+) : <NoDoc />;
+
+// Thumbnail preview for an uploaded employee photo (links to the full image).
+const DocThumb = ({ url }) => url ? (
+  <a href={url} target="_blank" rel="noopener noreferrer" className="inline-block">
+    <img src={url} alt="Employee" loading="lazy" className="w-10 h-10 rounded-lg object-cover border border-border hover:ring-2 hover:ring-primary/40 transition-all" />
+  </a>
+) : <NoDoc />;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EMPLOYEE FORM MODAL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,10 +161,23 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
   const isEdit = !!employee;
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState('');
+  const [invalid, setInvalid] = useState(new Set());
+  // Newly-picked document files, keyed by column. null = keep whatever URL the
+  // record already has (stored in form.*_url). Uploaded to the
+  // `employee-documents` bucket on save once the employee id is known.
+  const [docFiles, setDocFiles] = useState({ id_document_url: null, cv_url: null, photo_url: null });
   const [form, setForm] = useState({
     full_name:           employee?.full_name           || '',
     email:               employee?.email               || '',
     phone:               employee?.phone               || '',
+    gender:              employee?.gender              || '',
+    date_of_birth:       employee?.date_of_birth       || '',
+    next_of_kin_name:               employee?.next_of_kin_name               || '',
+    next_of_kin_relationship:       employee?.next_of_kin_relationship       || '',
+    next_of_kin_phone:              employee?.next_of_kin_phone              || '',
+    secondary_contact_name:         employee?.secondary_contact_name         || '',
+    secondary_contact_relationship: employee?.secondary_contact_relationship || '',
+    secondary_contact_phone:        employee?.secondary_contact_phone        || '',
     role:                employee?.role                || 'staff',
     department:          employee?.department          || '',
     employment_type:     employee?.employment_type     || 'full_time',
@@ -91,17 +194,69 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     bank_branch:         employee?.bank_branch         || '',
     leave_balance:       employee?.leave_balance       ?? 21,
     is_active:           employee?.is_active           ?? true,
+    id_document_url:     employee?.id_document_url     || '',
+    cv_url:              employee?.cv_url              || '',
+    photo_url:           employee?.photo_url           || '',
   });
 
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const set = (k, v) => {
+    setForm(p => ({ ...p, [k]: v }));
+    // Clear the red highlight as soon as the user starts fixing the field.
+    setInvalid(prev => {
+      if (!prev.has(k)) return prev;
+      const next = new Set(prev);
+      next.delete(k);
+      return next;
+    });
+  };
+
+  // Appended to a field's className when it failed required-field validation.
+  const inv = (k) => invalid.has(k) ? ' !border-red-400 focus:!ring-red-300' : '';
+
+  // Upload a picked document to the employee-documents bucket and return its
+  // public URL. Files are namespaced under the employee id so each person's
+  // documents stay grouped. `field` doubles as the document-type prefix.
+  const uploadDoc = async (empId, field, file) => {
+    const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path = `${empId}/${field}_${Date.now()}_${cleanName}`;
+    const { error: upErr } = await supabase.storage
+      .from('employee-documents')
+      .upload(path, file, { cacheControl: '3600', upsert: true, contentType: file.type || undefined });
+    if (upErr) throw upErr;
+    return supabase.storage.from('employee-documents').getPublicUrl(path).data.publicUrl;
+  };
+
+  // Resolve the three document URLs for a given employee id: upload any newly
+  // picked file, otherwise keep the URL already on the form.
+  const resolveDocUrls = async (empId) => {
+    const out = { id_document_url: form.id_document_url || null, cv_url: form.cv_url || null, photo_url: form.photo_url || null };
+    for (const field of ['id_document_url', 'cv_url', 'photo_url']) {
+      if (docFiles[field]) out[field] = await uploadDoc(empId, field, docFiles[field]);
+    }
+    return out;
+  };
 
   const handleSave = async () => {
-    if (!form.full_name || !form.email) { setError('Full name and email are required'); return; }
+    const missing = REQUIRED_FIELDS.filter(([k]) => isEmpty(form[k]));
+    if (missing.length) {
+      setInvalid(new Set(missing.map(([k]) => k)));
+      setError(`Please fill in all required fields: ${missing.map(([, label]) => label).join(', ')}.`);
+      return;
+    }
+    setInvalid(new Set());
     setSaving(true); setError('');
     try {
       const payload = {
         full_name:           form.full_name,
         phone:               form.phone               || null,
+        gender:              form.gender              || null,
+        date_of_birth:       form.date_of_birth       || null,
+        next_of_kin_name:               form.next_of_kin_name               || null,
+        next_of_kin_relationship:       form.next_of_kin_relationship       || null,
+        next_of_kin_phone:              form.next_of_kin_phone              || null,
+        secondary_contact_name:         form.secondary_contact_name         || null,
+        secondary_contact_relationship: form.secondary_contact_relationship || null,
+        secondary_contact_phone:        form.secondary_contact_phone        || null,
         role:                form.role,
         department:          form.department          || null,
         employment_type:     form.employment_type,
@@ -125,8 +280,10 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
       };
 
       if (isEdit) {
-        // Edit: safe to update user_profiles directly — auth user already exists
-        const { error: err } = await supabase.from('user_profiles').update(payload).eq('id', employee.id);
+        // Edit: safe to update user_profiles directly — auth user already exists.
+        // Upload any newly-picked documents first so their URLs go in the update.
+        const docs = await resolveDocUrls(employee.id);
+        const { error: err } = await supabase.from('user_profiles').update({ ...payload, ...docs }).eq('id', employee.id);
         if (err) throw err;
       } else {
         // New employee: must go through the Edge Function to satisfy user_profiles_id_fkey.
@@ -160,13 +317,35 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Failed to create employee record.');
 
-        // Patch the profile with the HR-specific fields the Edge Function doesn't set.
-        // Critically, admin_id must be written here — the handle_new_user trigger only
-        // copies id/email/full_name/role, so without this the new employee would have a
-        // NULL admin_id and never appear in the creator's scoped list.
         if (result.id) {
-          await supabase.from('user_profiles').update({
-            admin_id:            payload.admin_id,
+          // Stamp admin_id FIRST, on its own. The handle_new_user trigger only copies
+          // id/email/full_name/role, leaving admin_id NULL. Previously this was bundled
+          // into the full field patch below — so any one bad/missing column failed the
+          // whole update and ORPHANED the record (NULL admin_id ⇒ invisible to the
+          // creator's scoped list). Isolating it guarantees the record is always owned.
+          const { error: adminErr } = await supabase
+            .from('user_profiles')
+            .update({ admin_id: payload.admin_id })
+            .eq('id', result.id);
+          if (adminErr) throw adminErr;
+
+          // Upload any picked documents now that the new employee id exists, so
+          // their URLs are saved alongside the rest of the HR fields below.
+          const docs = await resolveDocUrls(result.id);
+
+          // Then patch the remaining HR fields. Errors are surfaced (they used to be
+          // swallowed); even if this fails, the record still belongs to its admin and
+          // appears in the list, and the details can simply be re-saved.
+          const { error: patchErr } = await supabase.from('user_profiles').update({
+            ...docs,
+            gender:              payload.gender,
+            date_of_birth:       payload.date_of_birth,
+            next_of_kin_name:               payload.next_of_kin_name,
+            next_of_kin_relationship:       payload.next_of_kin_relationship,
+            next_of_kin_phone:              payload.next_of_kin_phone,
+            secondary_contact_name:         payload.secondary_contact_name,
+            secondary_contact_relationship: payload.secondary_contact_relationship,
+            secondary_contact_phone:        payload.secondary_contact_phone,
             department:          payload.department,
             is_active:           payload.is_active,
             employment_type:     payload.employment_type,
@@ -184,6 +363,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             leave_balance:       payload.leave_balance,
             updated_at:          payload.updated_at,
           }).eq('id', result.id);
+          if (patchErr) throw patchErr;
         }
       }
       onSaved();
@@ -201,6 +381,47 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     </div>
   );
 
+  // One document upload slot. Shows the picked file's name, or a link to the
+  // already-stored document, with a button to choose / replace the file.
+  const setDoc = (field, file) => setDocFiles(p => ({ ...p, [field]: file }));
+  const DocField = ({ field, label, accept, hint }) => {
+    const picked   = docFiles[field];
+    const existing = form[field];
+    return (
+      <div>
+        <label className={S.label}>{label}</label>
+        <div className="flex items-center gap-2">
+          <label className={`${S.btnSec} cursor-pointer`}>
+            <Icon name="Upload" size={13} color="currentColor" />
+            {picked || existing ? 'Replace' : 'Upload'}
+            <input
+              type="file"
+              accept={accept}
+              className="hidden"
+              onChange={e => setDoc(field, e.target.files?.[0] || null)}
+            />
+          </label>
+          {picked ? (
+            <span className="flex items-center gap-1.5 text-xs text-foreground min-w-0">
+              <Icon name="Paperclip" size={12} color="var(--muted-foreground)" />
+              <span className="truncate max-w-[160px]">{picked.name}</span>
+              <button type="button" onClick={() => setDoc(field, null)} className="text-muted-foreground hover:text-red-500">
+                <Icon name="X" size={12} color="currentColor" />
+              </button>
+            </span>
+          ) : existing ? (
+            <a href={existing} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-primary hover:underline">
+              <Icon name="ExternalLink" size={12} color="currentColor" /> View current
+            </a>
+          ) : (
+            <span className="text-xs text-muted-foreground">No file uploaded</span>
+          )}
+        </div>
+        {hint && <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>}
+      </div>
+    );
+  };
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
@@ -216,48 +437,88 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             <Section title="Personal Information" />
             <div>
               <label className={S.label}>Full Name *</label>
-              <input className={S.input} value={form.full_name} onChange={e => set('full_name', e.target.value)} />
+              <input className={S.input + inv('full_name')} value={form.full_name} onChange={e => set('full_name', e.target.value)} />
             </div>
             <div>
               <label className={S.label}>Email *</label>
-              <input type="email" className={S.input} value={form.email} onChange={e => set('email', e.target.value)} disabled={isEdit} />
+              <input type="email" className={S.input + inv('email')} value={form.email} onChange={e => set('email', e.target.value)} disabled={isEdit} />
             </div>
             <div>
-              <label className={S.label}>Phone</label>
-              <input className={S.input} placeholder="+254 7XX XXX XXX" value={form.phone} onChange={e => set('phone', e.target.value)} />
+              <label className={S.label}>Phone *</label>
+              <input className={S.input + inv('phone')} placeholder="+254 7XX XXX XXX" value={form.phone} onChange={e => set('phone', e.target.value)} />
             </div>
             <div>
-              <label className={S.label}>National ID</label>
-              <input className={S.input} value={form.national_id} onChange={e => set('national_id', e.target.value)} />
+              <label className={S.label}>National ID *</label>
+              <input className={S.input + inv('national_id')} value={form.national_id} onChange={e => set('national_id', e.target.value)} />
+            </div>
+            <div>
+              <label className={S.label}>Gender *</label>
+              <select className={S.select + inv('gender')} value={form.gender} onChange={e => set('gender', e.target.value)}>
+                <option value="">— Select —</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+            </div>
+            <div>
+              <label className={S.label}>Date of Birth *</label>
+              <input type="date" className={S.input + inv('date_of_birth')} value={form.date_of_birth} onChange={e => set('date_of_birth', e.target.value)} />
+            </div>
+
+            <Section title="Next of Kin" />
+            <div>
+              <label className={S.label}>Full Name *</label>
+              <input className={S.input + inv('next_of_kin_name')} value={form.next_of_kin_name} onChange={e => set('next_of_kin_name', e.target.value)} />
+            </div>
+            <div>
+              <label className={S.label}>Relationship *</label>
+              <input className={S.input + inv('next_of_kin_relationship')} placeholder="e.g. Spouse, Parent, Sibling" value={form.next_of_kin_relationship} onChange={e => set('next_of_kin_relationship', e.target.value)} />
+            </div>
+            <div>
+              <label className={S.label}>Phone *</label>
+              <input className={S.input + inv('next_of_kin_phone')} placeholder="+254 7XX XXX XXX" value={form.next_of_kin_phone} onChange={e => set('next_of_kin_phone', e.target.value)} />
+            </div>
+
+            <Section title="Secondary Contact" />
+            <div>
+              <label className={S.label}>Full Name *</label>
+              <input className={S.input + inv('secondary_contact_name')} value={form.secondary_contact_name} onChange={e => set('secondary_contact_name', e.target.value)} />
+            </div>
+            <div>
+              <label className={S.label}>Relationship *</label>
+              <input className={S.input + inv('secondary_contact_relationship')} placeholder="e.g. Friend, Colleague" value={form.secondary_contact_relationship} onChange={e => set('secondary_contact_relationship', e.target.value)} />
+            </div>
+            <div>
+              <label className={S.label}>Phone *</label>
+              <input className={S.input + inv('secondary_contact_phone')} placeholder="+254 7XX XXX XXX" value={form.secondary_contact_phone} onChange={e => set('secondary_contact_phone', e.target.value)} />
             </div>
 
             <Section title="Employment Details" />
             <div>
-              <label className={S.label}>Role</label>
-              <select className={S.select} value={form.role} onChange={e => set('role', e.target.value)}>
+              <label className={S.label}>Role *</label>
+              <select className={S.select + inv('role')} value={form.role} onChange={e => set('role', e.target.value)}>
                 {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
             </div>
             <div>
-              <label className={S.label}>Department</label>
-              <select className={S.select} value={form.department} onChange={e => set('department', e.target.value)}>
+              <label className={S.label}>Department *</label>
+              <select className={S.select + inv('department')} value={form.department} onChange={e => set('department', e.target.value)}>
                 <option value="">— Select —</option>
                 {DEPTS.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
             </div>
             <div>
-              <label className={S.label}>Employment Type</label>
-              <select className={S.select} value={form.employment_type} onChange={e => set('employment_type', e.target.value)}>
+              <label className={S.label}>Employment Type *</label>
+              <select className={S.select + inv('employment_type')} value={form.employment_type} onChange={e => set('employment_type', e.target.value)}>
                 {EMP_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
               </select>
             </div>
             <div>
-              <label className={S.label}>Date Joined</label>
-              <input type="date" className={S.input} value={form.date_joined} onChange={e => set('date_joined', e.target.value)} />
+              <label className={S.label}>Date Joined *</label>
+              <input type="date" className={S.input + inv('date_joined')} value={form.date_joined} onChange={e => set('date_joined', e.target.value)} />
             </div>
             <div>
-              <label className={S.label}>Leave Balance (days)</label>
-              <input type="number" className={S.input} value={form.leave_balance} onChange={e => set('leave_balance', e.target.value)} />
+              <label className={S.label}>Leave Balance (days) *</label>
+              <input type="number" className={S.input + inv('leave_balance')} value={form.leave_balance} onChange={e => set('leave_balance', e.target.value)} />
             </div>
             <div className="flex items-center gap-3 pt-5">
               <input type="checkbox" id="is_active" checked={form.is_active} onChange={e => set('is_active', e.target.checked)}
@@ -281,16 +542,16 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
 
             <Section title="Statutory Details" />
             <div>
-              <label className={S.label}>KRA PIN</label>
-              <input className={S.input} placeholder="A000000000X" value={form.kra_pin} onChange={e => set('kra_pin', e.target.value)} />
+              <label className={S.label}>KRA PIN *</label>
+              <input className={S.input + inv('kra_pin')} placeholder="A000000000X" value={form.kra_pin} onChange={e => set('kra_pin', e.target.value)} />
             </div>
             <div>
-              <label className={S.label}>NSSF Number</label>
-              <input className={S.input} value={form.nssf_number} onChange={e => set('nssf_number', e.target.value)} />
+              <label className={S.label}>NSSF Number *</label>
+              <input className={S.input + inv('nssf_number')} value={form.nssf_number} onChange={e => set('nssf_number', e.target.value)} />
             </div>
             <div>
-              <label className={S.label}>SHA Number</label>
-              <input className={S.input} value={form.sha_number} onChange={e => set('sha_number', e.target.value)} />
+              <label className={S.label}>SHA Number *</label>
+              <input className={S.input + inv('sha_number')} value={form.sha_number} onChange={e => set('sha_number', e.target.value)} />
             </div>
             <div>
               <label className={S.label}>Housing Levy (AHL 1.5%)</label>
@@ -304,17 +565,44 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
 
             <Section title="Bank Details" />
             <div>
-              <label className={S.label}>Bank Name</label>
-              <input className={S.input} placeholder="e.g. Equity Bank" value={form.bank_name} onChange={e => set('bank_name', e.target.value)} />
+              <label className={S.label}>Bank Name *</label>
+              <select className={S.select + inv('bank_name')} value={form.bank_name} onChange={e => set('bank_name', e.target.value)}>
+                <option value="">— Select —</option>
+                {BANKS.map(b => <option key={b} value={b}>{b}</option>)}
+                {/* Preserve a previously-stored bank that isn't in the current list */}
+                {form.bank_name && !BANKS.includes(form.bank_name) && (
+                  <option value={form.bank_name}>{form.bank_name}</option>
+                )}
+              </select>
             </div>
             <div>
-              <label className={S.label}>Account Number</label>
-              <input className={S.input} value={form.bank_account} onChange={e => set('bank_account', e.target.value)} />
+              <label className={S.label}>Account Number *</label>
+              <input className={S.input + inv('bank_account')} value={form.bank_account} onChange={e => set('bank_account', e.target.value)} />
             </div>
             <div>
-              <label className={S.label}>Branch</label>
-              <input className={S.input} value={form.bank_branch} onChange={e => set('bank_branch', e.target.value)} />
+              <label className={S.label}>Branch *</label>
+              <input className={S.input + inv('bank_branch')} value={form.bank_branch} onChange={e => set('bank_branch', e.target.value)} />
             </div>
+
+            <Section title="Documents" />
+            <DocField
+              field="id_document_url"
+              label="ID / Passport"
+              accept="image/*,application/pdf"
+              hint="National ID or passport scan · image or PDF"
+            />
+            <DocField
+              field="cv_url"
+              label="CV"
+              accept="application/pdf,.doc,.docx,image/*"
+              hint="PDF, Word or image"
+            />
+            <DocField
+              field="photo_url"
+              label="Employee Photo"
+              accept="image/*"
+              hint="Passport-style photo · image only"
+            />
           </div>
 
           {error && (
@@ -336,7 +624,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // EMPLOYEE DETAIL DRAWER
 // ─────────────────────────────────────────────────────────────────────────────
-const EmployeeDetail = ({ employee, payrollHistory, onEdit, onClose }) => {
+const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose }) => {
   const gross = parseFloat(employee.basic_salary || 0) + parseFloat(employee.housing_allowance || 0) + parseFloat(employee.transport_allowance || 0);
 
   const Row = ({ label, value }) => (
@@ -363,6 +651,11 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onClose }) => {
             <button onClick={onEdit} className={S.btnSec + ' text-xs py-1.5'}>
               <Icon name="Edit" size={13} color="currentColor" /> Edit
             </button>
+            {onDelete && (
+              <button onClick={onDelete} className="inline-flex items-center gap-2 bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs font-medium border border-red-200 hover:bg-red-100 transition-colors">
+                <Icon name="Trash2" size={13} color="currentColor" /> Delete
+              </button>
+            )}
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
               <Icon name="X" size={18} color="var(--muted-foreground)" />
             </button>
@@ -400,8 +693,24 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onClose }) => {
             <Row label="Email"         value={employee.email} />
             <Row label="Phone"         value={employee.phone} />
             <Row label="National ID"   value={employee.national_id} />
+            <Row label="Gender"        value={employee.gender ? employee.gender.charAt(0).toUpperCase() + employee.gender.slice(1) : ''} />
+            <Row label="Date of Birth" value={fmtDate(employee.date_of_birth)} />
             <Row label="Date Joined"   value={fmtDate(employee.date_joined)} />
             <Row label="Leave Balance" value={`${employee.leave_balance ?? 21} days`} />
+          </div>
+
+          <div>
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Next of Kin</p>
+            <Row label="Name"         value={employee.next_of_kin_name} />
+            <Row label="Relationship" value={employee.next_of_kin_relationship} />
+            <Row label="Phone"        value={employee.next_of_kin_phone} />
+          </div>
+
+          <div>
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Secondary Contact</p>
+            <Row label="Name"         value={employee.secondary_contact_name} />
+            <Row label="Relationship" value={employee.secondary_contact_relationship} />
+            <Row label="Phone"        value={employee.secondary_contact_phone} />
           </div>
 
           <div>
@@ -418,6 +727,22 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onClose }) => {
             <Row label="Branch"  value={employee.bank_branch} />
           </div>
 
+          <div>
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Documents</p>
+            <div className="flex items-center justify-between py-2.5 border-b border-border">
+              <span className="text-xs text-muted-foreground">ID / Passport</span>
+              <DocLink url={employee.id_document_url} label="View ID" />
+            </div>
+            <div className="flex items-center justify-between py-2.5 border-b border-border">
+              <span className="text-xs text-muted-foreground">CV</span>
+              <DocLink url={employee.cv_url} label="View CV" />
+            </div>
+            <div className="flex items-center justify-between py-2.5 border-b border-border">
+              <span className="text-xs text-muted-foreground">Photo</span>
+              <DocThumb url={employee.photo_url} />
+            </div>
+          </div>
+
           {payrollHistory.length > 0 && (
             <div>
               <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Recent Payroll</p>
@@ -432,6 +757,110 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onClose }) => {
               ))}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE EMPLOYEE CONFIRMATION MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+// Permanent, irreversible deletion of a staff account. Routes through the
+// delete-staff-user edge function (RLS prevents deleting another user's profile
+// from the browser, and only the service role can remove the auth user). The
+// employee's audit trail is always retained — see the edge function header.
+const DeleteEmployeeModal = ({ employee, onClose, onDeleted }) => {
+  const [deleting,    setDeleting]    = useState(false);
+  const [error,       setError]       = useState('');
+  const [confirmText, setConfirmText] = useState('');
+  // Typing the name guards against deleting the wrong record by reflex-clicking.
+  const canConfirm = confirmText.trim() === 'DELETE';
+
+  const handleDelete = async () => {
+    if (!canConfirm) return;
+    setDeleting(true); setError('');
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) throw new Error('Session expired. Please refresh and try again.');
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-staff-user`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ user_id: employee.id }),
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to delete employee.');
+
+      onDeleted();
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-md flex flex-col shadow-2xl">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
+          <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+            <Icon name="AlertTriangle" size={18} color="#dc2626" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-foreground">Permanently delete employee</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">This action cannot be undone</p>
+          </div>
+        </div>
+
+        <div className="px-6 py-5 space-y-4">
+          <p className="text-sm text-foreground">
+            You are about to permanently delete <strong>{employee.full_name}</strong>
+            {employee.email ? <> (<span className="text-muted-foreground">{employee.email}</span>)</> : null}.
+            Their login and employee record will be removed for good.
+          </p>
+
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 flex gap-2">
+            <Icon name="ShieldCheck" size={14} color="#059669" className="flex-shrink-0 mt-0.5" />
+            <span>Their <strong>audit trail is retained</strong>. A snapshot of this record is written to the audit log before deletion, and their activity history is preserved.</span>
+          </div>
+
+          <div>
+            <label className={S.label}>Type <span className="font-mono text-foreground">DELETE</span> to confirm</label>
+            <input
+              autoFocus
+              className={S.input}
+              placeholder="DELETE"
+              value={confirmText}
+              onChange={e => setConfirmText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && canConfirm && !deleting) handleDelete(); }}
+            />
+          </div>
+
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">{error}</div>
+          )}
+        </div>
+
+        <div className="flex gap-3 px-6 py-4 border-t border-border">
+          <button onClick={onClose} disabled={deleting} className={S.btnSec}>Cancel</button>
+          <button
+            onClick={handleDelete}
+            disabled={deleting || !canConfirm}
+            className="inline-flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {deleting
+              ? <><Icon name="Loader" size={14} color="currentColor" className="animate-spin" /> Deleting…</>
+              : <><Icon name="Trash2" size={14} color="currentColor" /> Delete Permanently</>}
+          </button>
         </div>
       </div>
     </div>
@@ -729,6 +1158,7 @@ const HRPage = () => {
   const [payrollRecords, setPayrollRecords] = useState([]);
   const [loading,        setLoading]        = useState(true);
   const [adminId,        setAdminId]        = useState(null);
+  const [viewerRole,     setViewerRole]     = useState(null);
   const [search,         setSearch]         = useState('');
   const [deptFilter,     setDeptFilter]     = useState('all');
   const [activeTab,      setActiveTab]      = useState('employees');
@@ -746,7 +1176,13 @@ const HRPage = () => {
   const showModal    = !!modals.hrEmployee;
   const editEmployee = modals.hrEmployee === true ? null : modals.hrEmployee;
   const selected     = modals.hrEmployeeDetail;
+  const deleteTarget = modals.hrEmployeeDelete;
   const showPayroll  = !!modals.hrPayroll;
+
+  // Permanent staff deletion is confined to account-holder admins (and super
+  // admins who oversee everything). Managers/other staff who can reach this page
+  // see no delete control; the edge function enforces the same rule server-side.
+  const canDelete = viewerRole === 'admin' || viewerRole === 'super_admin';
 
   // Resolves the viewer's payroll scope:
   //  • id      — the admin_id used to tag records this viewer creates.
@@ -762,12 +1198,13 @@ const HRPage = () => {
     // admin & super_admin own the records they create (scope by their own id).
     // Other staff inherit their parent admin's scope via admin_id.
     const id = (profile?.role === 'admin' || isSuper) ? user.id : (profile?.admin_id || user.id);
-    return { id, isSuper };
+    return { id, isSuper, role: profile?.role || null };
   }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const { id: aId, isSuper } = await resolveScope();
+    const { id: aId, isSuper, role } = await resolveScope();
+    setViewerRole(role);
     setAdminId(aId);
     adminIdRef.current = aId;
     if (!aId) { setLoading(false); return; }
@@ -778,22 +1215,40 @@ const HRPage = () => {
     // them and list every employee (and payroll record) regardless of which admin
     // created them. Without this, anyone created under a different admin never
     // showed up in the super admin's HR / payroll filters.
-    let empQuery = supabase.from('user_profiles')
-      .select('id, admin_id, full_name, email, role, department, phone, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, nssf_number, sha_number, national_id, bank_name, bank_account, bank_branch')
-      .not('role', 'in', '("client","super_admin","admin")')
-      .order('full_name');
+    //
+    // Columns added by later migrations (next-of-kin, secondary contact) are kept
+    // separate: if that migration hasn't been applied yet, selecting them makes the
+    // ENTIRE query fail, which silently wiped the whole employee list. We try the
+    // full set first and transparently fall back to the base columns so staff still
+    // load even when a migration is still pending.
+    const BASE_EMP_COLS = 'id, admin_id, full_name, email, role, department, phone, gender, date_of_birth, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, nssf_number, sha_number, national_id, bank_name, bank_account, bank_branch';
+    const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url`;
+
+    const runEmpQuery = (cols) => {
+      let q = supabase.from('user_profiles')
+        .select(cols)
+        .not('role', 'in', '("client","super_admin","admin")')
+        .order('full_name');
+      if (!isSuper) q = q.eq('admin_id', aId);
+      return q;
+    };
 
     let payQuery = supabase.from('payroll_records')
-      .select('id, employee_id, admin_id, pay_month, gross_salary, net_salary, paye, nssf, shif, status, meal_allowance, bonus, gift, loan_deduction, advance_deduction')
+      .select('id, employee_id, admin_id, pay_month, gross_salary, basic_salary, housing_allowance, transport_allowance, net_salary, paye, nssf, shif, status, meal_allowance, bonus, gift, loan_deduction, advance_deduction')
       .order('pay_month', { ascending: false })
       .limit(200);
+    if (!isSuper) payQuery = payQuery.eq('admin_id', aId);
 
-    if (!isSuper) {
-      empQuery = empQuery.eq('admin_id', aId);
-      payQuery = payQuery.eq('admin_id', aId);
+    let [empRes, payRes] = await Promise.all([runEmpQuery(FULL_EMP_COLS), payQuery]);
+
+    // Pending migration → enriched select errors. Fall back to base columns so the
+    // list still loads (the new contact fields just won't populate until migrated).
+    if (empRes.error) {
+      console.warn('HR: enriched employee query failed — falling back to base columns. Apply the latest migrations to enable next-of-kin / secondary-contact fields.', empRes.error.message);
+      empRes = await runEmpQuery(BASE_EMP_COLS);
     }
-
-    const [empRes, payRes] = await Promise.all([empQuery, payQuery]);
+    if (empRes.error)  console.error('HR: employee query failed:', empRes.error.message);
+    if (payRes.error)  console.error('HR: payroll query failed:',  payRes.error.message);
 
     setEmployees(empRes.data || []);
     setPayrollRecords(payRes.data || []);
@@ -815,6 +1270,14 @@ const HRPage = () => {
   });
 
   const depts = [...new Set(employees.map(e => e.department).filter(Boolean))];
+  // Roles that actually exist among the loaded employees — these drive the payroll
+  // Role filter (mirrors `depts`). A hardcoded list silently offered roles nobody is
+  // stored as (e.g. "Employee" → 'staff', which isn't even a valid user_role enum
+  // value) so those options always returned zero records, while real roles like 'hr'
+  // or the default 'operations' were missing. Deriving from data keeps the dropdown
+  // and the stored values in sync, so every option returns its records.
+  const empRoles = [...new Set(employees.map(e => e.role).filter(Boolean))]
+    .sort((a, b) => roleLabel(a).localeCompare(roleLabel(b)));
   const empPayroll = (empId) => payrollRecords.filter(p => p.employee_id === empId);
 
   // ── Payroll filters: month, status, department, search, date range ──────────
@@ -950,6 +1413,7 @@ const HRPage = () => {
         <div className="flex gap-2 border-b border-border pb-1">
           {[
             { id: 'employees', label: 'Employee Records', icon: 'Users'    },
+            { id: 'documents', label: 'Documents',        icon: 'FileText' },
             { id: 'payroll',   label: 'Payroll',          icon: 'Receipt'  },
           ].map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)}
@@ -1021,13 +1485,82 @@ const HRPage = () => {
                           <td className={S.td}>{emp.leave_balance ?? 21} days</td>
                           <td className={S.td}><Badge status={emp.is_active} /></td>
                           <td className={S.td}>
-                            <button className="text-xs text-primary hover:underline" onClick={e => { e.stopPropagation(); openModal('hrEmployee', emp); }}>
-                              Edit
-                            </button>
+                            <div className="flex items-center gap-3">
+                              <button className="text-xs text-primary hover:underline" onClick={e => { e.stopPropagation(); openModal('hrEmployee', emp); }}>
+                                Edit
+                              </button>
+                              {canDelete && (
+                                <button className="text-xs text-red-600 hover:underline" onClick={e => { e.stopPropagation(); openModal('hrEmployeeDelete', emp); }}>
+                                  Delete
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── DOCUMENTS TAB ─────────────────────────────────────────────── */}
+        {activeTab === 'documents' && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-3">
+              <div className="relative flex-1 min-w-48">
+                <Icon name="Search" size={14} color="var(--muted-foreground)" className="absolute left-3 top-1/2 -translate-y-1/2" />
+                <input className={`${S.input} pl-9`} placeholder="Search by name, email, department…" value={search} onChange={e => setSearch(e.target.value)} />
+              </div>
+              <select className={`${S.select} w-auto`} value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+                <option value="all">All Departments</option>
+                {depts.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      {['Employee', 'ID / Passport', 'CV', 'Photo'].map(h => (
+                        <th key={h} className={S.th}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading ? (
+                      Array(5).fill(0).map((_, i) => (
+                        <tr key={i}>{Array(4).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>
+                      ))
+                    ) : filtered.length === 0 ? (
+                      <tr><td colSpan={4}>
+                        <div className="flex flex-col items-center justify-center py-16">
+                          <Icon name="FileText" size={28} color="var(--muted-foreground)" />
+                          <p className="text-sm font-medium text-foreground mt-3">No employees found</p>
+                          <p className="text-xs text-muted-foreground">Upload documents from the employee's Edit form</p>
+                        </div>
+                      </td></tr>
+                    ) : filtered.map(emp => (
+                      <tr key={emp.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => openModal('hrEmployeeDetail', emp)}>
+                        <td className={S.tdF}>
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                              <span className="text-xs font-bold text-primary">{emp.full_name?.charAt(0)}</span>
+                            </div>
+                            <div>
+                              <p className="font-medium text-foreground">{emp.full_name}</p>
+                              <p className="text-xs text-muted-foreground">{emp.department || '—'}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className={S.td} onClick={e => e.stopPropagation()}><DocLink url={emp.id_document_url} label="View ID" /></td>
+                        <td className={S.td} onClick={e => e.stopPropagation()}><DocLink url={emp.cv_url} label="View CV" /></td>
+                        <td className={S.td} onClick={e => e.stopPropagation()}><DocThumb url={emp.photo_url} /></td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -1098,7 +1631,7 @@ const HRPage = () => {
                   <label className={S.label}>Role</label>
                   <select className={`${S.select} w-40`} value={payrollRole} onChange={e => setPayrollRole(e.target.value)}>
                     <option value="all">All roles</option>
-                    {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                    {empRoles.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
                   </select>
                 </div>
                 <div>
@@ -1202,7 +1735,17 @@ const HRPage = () => {
           employee={selected}
           payrollHistory={empPayroll(selected.id)}
           onEdit={() => openModal('hrEmployee', selected)}
+          onDelete={canDelete ? () => openModal('hrEmployeeDelete', selected) : undefined}
           onClose={() => closeModal('hrEmployeeDetail')}
+        />
+      )}
+
+      {/* Permanent delete confirmation */}
+      {deleteTarget && (
+        <DeleteEmployeeModal
+          employee={deleteTarget}
+          onClose={() => closeModal('hrEmployeeDelete')}
+          onDeleted={() => { closeModal('hrEmployeeDetail'); fetchAll(); }}
         />
       )}
 
