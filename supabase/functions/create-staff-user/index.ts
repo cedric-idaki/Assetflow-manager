@@ -24,6 +24,10 @@ const json = (payload: unknown, status = 200) =>
 const CAN_CREATE: Record<string, string[]> = {
   super_admin: ['admin', 'manager', 'finance', 'operations', 'collections_officer', 'accountant', 'director', 'sales_agent', 'sales', 'staff', 'client'],
   admin:       ['admin', 'manager', 'finance', 'operations', 'collections_officer', 'accountant', 'director', 'sales_agent', 'sales', 'staff', 'client'],
+  // A sacco_admin staffs its own tenant like a company admin, but cannot
+  // create other admin (company) accounts. sacco_member is the self-service
+  // portal login for a sacco_members row (BRS v3.0 member portal).
+  sacco_admin: ['manager', 'finance', 'operations', 'collections_officer', 'accountant', 'director', 'sales_agent', 'sales', 'staff', 'hr', 'client', 'sacco_member'],
   sales_agent: ['client', 'admin'],
   sales:       ['client', 'admin'],
   agent:       ['client', 'admin'],
@@ -93,9 +97,43 @@ Deno.serve(async (req) => {
       // When provisioning a client login, the caller passes the clients.id so we
       // can hard-link the auth user to the exact client row.
       client_id,
+      // When provisioning a sacco member login, the caller passes the
+      // sacco_members.id so we can hard-link the auth user to the member row.
+      sacco_member_id,
       // Company fields (only used when role === 'admin')
       company_name, business_reg_number, business_type, location, city, asset_types, plan,
     } = body;
+
+    // ── 3b. Password reset for an existing sacco member login ─────────────
+    // Generates nothing itself — the caller supplies the new password and
+    // shows it once in the UI (there is no email delivery dependency).
+    if (body.action === 'reset-password') {
+      if (!['sacco_admin', 'admin', 'super_admin'].includes(callerRole)) {
+        return json({ error: `Role "${callerRole}" is not permitted to reset member passwords.` }, 403);
+      }
+      if (!sacco_member_id || !password) {
+        return json({ error: 'sacco_member_id and password are required' }, 400);
+      }
+      if (password.length < 8) {
+        return json({ error: 'Password must be at least 8 characters' }, 400);
+      }
+      const { data: memberRow } = await adminClient
+        .from('sacco_members')
+        .select('id, user_id, email, full_name')
+        .eq('id', sacco_member_id)
+        // Tenant guard: the member row must belong to the caller's tenant.
+        .eq('admin_id', callerProfile.admin_id || caller.id)
+        .maybeSingle();
+      if (!memberRow?.user_id) {
+        return json({ error: 'No portal login found for this member in your sacco.' }, 404);
+      }
+      const { error: resetErr } = await adminClient.auth.admin.updateUserById(
+        memberRow.user_id,
+        { password },
+      );
+      if (resetErr) throw resetErr;
+      return json({ success: true, email: memberRow.email, full_name: memberRow.full_name }, 200);
+    }
 
     if (!email || !password || !full_name) {
       return json({ error: 'email, password, and full_name are required' }, 400);
@@ -187,6 +225,22 @@ Deno.serve(async (req) => {
         }
       } catch (linkErr) {
         console.error('client_auth_id link error (non-fatal):', (linkErr as Error).message);
+      }
+    }
+
+    // ── 6c. For sacco member logins, hard-link the sacco_members row ────────
+    // The member portal resolves everything through sacco_members.user_id, so
+    // this link is what actually grants the member their own-data RLS scope.
+    if (role === 'sacco_member' && sacco_member_id) {
+      const { error: memberLinkErr } = await adminClient
+        .from('sacco_members')
+        .update({ user_id: newUserId, email: cleanEmail })
+        .eq('id', sacco_member_id)
+        // Tenant guard: the member row must belong to the caller's tenant.
+        .eq('admin_id', callerProfile.admin_id || caller.id)
+        .is('user_id', null);
+      if (memberLinkErr) {
+        console.error('sacco_members link error (non-fatal):', memberLinkErr.message);
       }
     }
 

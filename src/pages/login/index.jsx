@@ -431,7 +431,7 @@ const LoginPage = () => {
               <div className="mt-6 p-4 rounded-xl"
                 style={{ border: '1px solid ' + C.border, background: C.bg }}>
                 <p className="text-sm font-medium text-center mb-1" style={{ color: C.navy }}>
-                  Are you a new company?
+                  Are you a new company or sacco?
                 </p>
                 <p className="text-xs text-center mb-3" style={{ color: C.textMuted }}>
                   Register your business and choose a subscription plan
@@ -445,7 +445,7 @@ const LoginPage = () => {
                     boxShadow: '0 4px 14px rgba(12,32,55,0.25)',
                   }}
                 >
-                  Register Your Company
+                  Register Your Company / Saccos
                 </button>
               </div>
             </div>

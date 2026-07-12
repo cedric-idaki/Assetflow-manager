@@ -191,6 +191,13 @@ const SuperAdminDashboard = () => {
           <div className="flex items-center gap-2">
             <ConnDot status={connectionStatus} />
             <button
+              onClick={() => navigate('/sacco-oversight')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+            >
+              <Icon name="ArrowLeftRight" size={12} color="currentColor" />
+              Switch to Saccos Portal
+            </button>
+            <button
               onClick={refetch}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
             >

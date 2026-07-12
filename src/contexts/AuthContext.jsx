@@ -25,7 +25,8 @@ export const useAuth = () => {
 
 // ── Role → dashboard path ─────────────────────────────────────────────────────
 const ROLE_REDIRECT_MAP = {
-  super_admin:         '/super-admin-dashboard',
+  // Super admin first picks a portal (Company vs Saccos) after login.
+  super_admin:         '/choose-portal',
   admin:               '/admin-dashboard',
   director:            '/role-based-dashboard',
   accountant:          '/role-based-dashboard',
@@ -40,6 +41,8 @@ const ROLE_REDIRECT_MAP = {
   sales:               '/sales-agent-portal',
   sales_agent:         '/sales-agent-portal',
   client:              '/client-portal',
+  sacco_admin:         '/sacco-dashboard',
+  sacco_member:        '/sacco-member-portal',
 };
 
 export const getRoleRedirectPath = (role) =>

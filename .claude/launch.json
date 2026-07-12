@@ -5,7 +5,8 @@
       "name": "assetflow",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
-      "port": 4028
+      "port": 4028,
+      "autoPort": true
     }
   ]
 }

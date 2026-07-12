@@ -30,8 +30,8 @@ const ReportsAnalyticsCenter = () => {
         if (!aId) return;
 
         const [assetsRes, paymentsRes, agentsRes, clientsRes, employeesRes, payrollRes] = await Promise.all([
-          supabase.from('assets').select('*').eq('company_id', aId).order('created_at', { ascending: false }),
-          supabase.from('payments').select('*').order('payment_date', { ascending: false }).limit(500),
+          supabase.from('assets').select('*').eq('admin_id', aId).order('created_at', { ascending: false }),
+          supabase.from('payments').select('*').eq('admin_id', aId).order('payment_date', { ascending: false }).limit(500),
           supabase.from('user_profiles').select('*').eq('admin_id', aId).eq('role', 'sales_agent'),
           supabase.from('clients').select('*').eq('admin_id', aId).order('created_at', { ascending: false }),
           // HR employees — all staff under this admin excluding clients and super_admin

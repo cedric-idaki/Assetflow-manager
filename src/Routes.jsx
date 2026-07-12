@@ -30,14 +30,20 @@ import ResetPassword from './pages/reset-password';
 import ClientPortal from './pages/client-portal';
 import SubscriptionBilling from './pages/subscription-billing';
 import ProfilePage from './pages/profile';
+import SaccoDashboard from './pages/sacco-dashboard';
+import SaccoMemberPortal from './pages/sacco-member-portal';
+import SaccoOversight from './pages/sacco-oversight';
+import ChoosePortal from './pages/choose-portal';
 
 const ADMIN_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
-const FINANCE_ROLES = ['super_admin', 'admin', 'accountant', 'finance', 'director', 'manager'];
+// sacco_admin runs the same back-office tooling as a company admin (finance,
+// e-sign, HR, staff & system) — its data stays tenant-isolated via admin_id.
+const FINANCE_ROLES = ['super_admin', 'admin', 'accountant', 'finance', 'director', 'manager', 'sacco_admin'];
 const STAFF_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
 // KYC Renewals is removed from the admin portal — only the super admin (and other
 // internal staff roles) may access the renewal management screen.
 const KYC_RENEWAL_ROLES = STAFF_ROLES.filter((r) => r !== 'admin');
-const ALL_INTERNAL  = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations', 'sales_agent', 'sales'];
+const ALL_INTERNAL  = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations', 'sales_agent', 'sales', 'sacco_admin'];
 
 const Routes = () => {
   return (
@@ -56,6 +62,24 @@ const Routes = () => {
           <Route path="/sign/:token"              element={<ExternalSignPage />} />
 
           {/* ── Super Admin only ───────────────────────────────────────── */}
+          {/* Post-login portal chooser — Company portal vs Saccos portal */}
+          <Route path="/choose-portal" element={
+            <ProtectedRoute>
+              <RoleGuard allowedRoles={['super_admin']}>
+                <ChoosePortal />
+              </RoleGuard>
+            </ProtectedRoute>
+          } />
+
+          {/* Global sacco oversight — registrations + activity across all saccos */}
+          <Route path="/sacco-oversight" element={
+            <ProtectedRoute>
+              <RoleGuard allowedRoles={['super_admin']}>
+                <SaccoOversight />
+              </RoleGuard>
+            </ProtectedRoute>
+          } />
+
           <Route path="/super-admin-dashboard" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={['super_admin']}>
@@ -77,6 +101,24 @@ const Routes = () => {
             <ProtectedRoute>
               <RoleGuard allowedRoles={['admin']}>
                 <AdminDashboard />
+              </RoleGuard>
+            </ProtectedRoute>
+          } />
+
+          {/* ── Sacco admin only ───────────────────────────────────────── */}
+          <Route path="/sacco-dashboard" element={
+            <ProtectedRoute>
+              <RoleGuard allowedRoles={['sacco_admin', 'super_admin']}>
+                <SaccoDashboard />
+              </RoleGuard>
+            </ProtectedRoute>
+          } />
+
+          {/* ── Sacco member self-service portal (BRS v3.0 Section 5) ──── */}
+          <Route path="/sacco-member-portal" element={
+            <ProtectedRoute>
+              <RoleGuard allowedRoles={['sacco_member']}>
+                <SaccoMemberPortal />
               </RoleGuard>
             </ProtectedRoute>
           } />
@@ -164,7 +206,7 @@ const Routes = () => {
           {/* ── System administration ──────────────────────────────────── */}
           <Route path="/system-administration" element={
             <ProtectedRoute>
-              <RoleGuard allowedRoles={['super_admin', 'admin']}>
+              <RoleGuard allowedRoles={['super_admin', 'admin', 'sacco_admin']}>
                 <SystemAdministration />
               </RoleGuard>
             </ProtectedRoute>
@@ -200,7 +242,7 @@ const Routes = () => {
           {/* ── HR Management — HR role + CEO (admin) + super admin ────── */}
           <Route path="/hr-management" element={
             <ProtectedRoute>
-              <RoleGuard allowedRoles={['hr', 'admin', 'super_admin']}>
+              <RoleGuard allowedRoles={['hr', 'admin', 'super_admin', 'sacco_admin']}>
                 <HRPage />
               </RoleGuard>
             </ProtectedRoute>

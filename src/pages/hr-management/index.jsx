@@ -76,6 +76,7 @@ const REQUIRED_FIELDS = [
   ['next_of_kin_name',               'Next of Kin Name'],
   ['next_of_kin_relationship',       'Next of Kin Relationship'],
   ['next_of_kin_phone',              'Next of Kin Phone'],
+  ['next_of_kin_id',                 'Next of Kin ID Number'],
   ['secondary_contact_name',         'Secondary Contact Name'],
   ['secondary_contact_relationship', 'Secondary Contact Relationship'],
   ['secondary_contact_phone',        'Secondary Contact Phone'],
@@ -175,6 +176,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     next_of_kin_name:               employee?.next_of_kin_name               || '',
     next_of_kin_relationship:       employee?.next_of_kin_relationship       || '',
     next_of_kin_phone:              employee?.next_of_kin_phone              || '',
+    next_of_kin_id:                 employee?.next_of_kin_id                 || '',
     secondary_contact_name:         employee?.secondary_contact_name         || '',
     secondary_contact_relationship: employee?.secondary_contact_relationship || '',
     secondary_contact_phone:        employee?.secondary_contact_phone        || '',
@@ -254,6 +256,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         next_of_kin_name:               form.next_of_kin_name               || null,
         next_of_kin_relationship:       form.next_of_kin_relationship       || null,
         next_of_kin_phone:              form.next_of_kin_phone              || null,
+        next_of_kin_id:                 form.next_of_kin_id                 || null,
         secondary_contact_name:         form.secondary_contact_name         || null,
         secondary_contact_relationship: form.secondary_contact_relationship || null,
         secondary_contact_phone:        form.secondary_contact_phone        || null,
@@ -343,6 +346,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             next_of_kin_name:               payload.next_of_kin_name,
             next_of_kin_relationship:       payload.next_of_kin_relationship,
             next_of_kin_phone:              payload.next_of_kin_phone,
+            next_of_kin_id:                 payload.next_of_kin_id,
             secondary_contact_name:         payload.secondary_contact_name,
             secondary_contact_relationship: payload.secondary_contact_relationship,
             secondary_contact_phone:        payload.secondary_contact_phone,
@@ -476,6 +480,10 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             <div>
               <label className={S.label}>Phone *</label>
               <input className={S.input + inv('next_of_kin_phone')} placeholder="+254 7XX XXX XXX" value={form.next_of_kin_phone} onChange={e => set('next_of_kin_phone', e.target.value)} />
+            </div>
+            <div>
+              <label className={S.label}>ID Number *</label>
+              <input className={S.input + inv('next_of_kin_id')} placeholder="National ID / Passport No." value={form.next_of_kin_id} onChange={e => set('next_of_kin_id', e.target.value)} />
             </div>
 
             <Section title="Secondary Contact" />
@@ -704,6 +712,7 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
             <Row label="Name"         value={employee.next_of_kin_name} />
             <Row label="Relationship" value={employee.next_of_kin_relationship} />
             <Row label="Phone"        value={employee.next_of_kin_phone} />
+            <Row label="ID Number"    value={employee.next_of_kin_id} />
           </div>
 
           <div>
@@ -1222,7 +1231,7 @@ const HRPage = () => {
     // full set first and transparently fall back to the base columns so staff still
     // load even when a migration is still pending.
     const BASE_EMP_COLS = 'id, admin_id, full_name, email, role, department, phone, gender, date_of_birth, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, nssf_number, sha_number, national_id, bank_name, bank_account, bank_branch';
-    const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url`;
+    const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, next_of_kin_id, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url`;
 
     const runEmpQuery = (cols) => {
       let q = supabase.from('user_profiles')

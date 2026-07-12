@@ -5,6 +5,8 @@ import Icon from '../../components/AppIcon';
 import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
 import { COMPANY_PLANS as PLANS, planForUsers, INSTALLATION_FEE } from '../../config/companyPlans';
+import { tierForMembers, SACCO_TIERS, INSTALLATION_FEE as SACCO_INSTALLATION_FEE } from '../../config/saccoTiers';
+import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../config/kenyaCounties';
 
 // Pricing is per user, per tier (KES / user / month). The number of users the
 // admin needs automatically selects the plan tier (which sets the free storage
@@ -17,8 +19,6 @@ const ASSET_TYPES = [
   'Vehicles', 'Property/Land', 'Construction Dealers',
   'Electronics', 'Furnitures', 'Heavy Equipment',
 ];
-
-const steps = ['Account', 'Company', 'Plan', 'Payment'];
 
 // ── System colors (matching LoginPage) ──────────────────────────────
 const C = {
@@ -51,21 +51,48 @@ const AdminRegistration = () => {
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
 
-  // Step 2 - Company
+  // Step 2 - Company / Sacco (organizationType is chosen on step 1 alongside
+  // the account details; it drives which fields show on this step).
   const [company, setCompany] = useState({
+    organizationType: 'company', // 'company' | 'sacco'
     companyName: '', businessRegNumber: '', businessType: '',
-    location: '', city: '', assetTypes: [],
+    sasraLicence: '', location: '', city: '', assetTypes: [],
   });
+  const isSacco = company.organizationType === 'sacco';
 
-  // Step 3 - Plan (number of users drives the tier + price)
+  const steps = ['Account', isSacco ? 'Sacco' : 'Company', 'Plan', 'Payment'];
+
+  // Step 3 - Plan. Companies: the number of users drives a per-user plan
+  // (companyPlans.js). Saccos: the number of members drives a tier — monthly
+  // bill = base fee + members × per-member fee (saccoTiers.js, BRS §7.2).
   const [numberOfUsers, setNumberOfUsers] = useState('');
   const userCount = parseInt(numberOfUsers, 10) || 0;
-  const activePlan = planForUsers(userCount);
+  const saccoTier = isSacco && userCount >= 1 ? tierForMembers(userCount) : null;
+  // Normalise the sacco tier into the shape the plan card renders so steps 3–4
+  // can treat both flows the same.
+  const activePlan = isSacco
+    ? (saccoTier && {
+        id: saccoTier.id,
+        name: saccoTier.name,
+        color: saccoTier.color,
+        storageGb: saccoTier.storageGb,
+        userRange: saccoTier.memberRange,
+      })
+    : planForUsers(userCount);
   // Registration is always a first-time signup, so the one-time installation
   // fee always applies here. Renewals (handled elsewhere) must NOT re-charge it.
-  const subscriptionPrice = activePlan ? userCount * activePlan.pricePerUser : 0;
-  const installationFee = activePlan ? INSTALLATION_FEE : 0;
+  const subscriptionPrice = isSacco
+    ? (saccoTier ? saccoTier.baseFee + userCount * saccoTier.perMemberFee : 0)
+    : (activePlan ? userCount * activePlan.pricePerUser : 0);
+  const installationFee = activePlan ? (isSacco ? SACCO_INSTALLATION_FEE : INSTALLATION_FEE) : 0;
   const totalPrice = subscriptionPrice + installationFee;
+  // Itemised monthly lines (installation fee is rendered separately).
+  const billLines = isSacco && saccoTier ? [
+    { label: `Monthly base fee · ${saccoTier.name} tier`, amount: saccoTier.baseFee },
+    { label: `Members · ${userCount} × KES ${saccoTier.perMemberFee}`, amount: userCount * saccoTier.perMemberFee },
+  ] : activePlan ? [
+    { label: `Monthly subscription · ${userCount} × KES ${activePlan.pricePerUser}`, amount: subscriptionPrice },
+  ] : [];
 
   // Step 4 - Payment
   const [mpesaPhone, setMpesaPhone] = useState('');
@@ -88,20 +115,28 @@ const AdminRegistration = () => {
     if (currentStep === 0) {
       if (!account.fullName) return setError('Full name is required.') || false;
       if (!account.email) return setError('Email is required.') || false;
-      if (!account.phone) return setError('Phone number is required.') || false;
-      if (!account.gender) return setError('Please select your gender.') || false;
+      // Sacco registrants only need the fields on their form — phone is picked
+      // up later from the M-Pesa payment step, and gender is optional.
+      if (!isSacco && !account.phone) return setError('Phone number is required.') || false;
+      if (!isSacco && !account.gender) return setError('Please select your gender.') || false;
       if (!account.password || account.password.length < 6) return setError('Password must be at least 6 characters.') || false;
       if (account.password !== account.confirmPassword) return setError('Passwords do not match.') || false;
       if (!termsAccepted) return setError('You must accept the Terms & Privacy Policy to continue.') || false;
     }
     if (currentStep === 1) {
-      if (!company.companyName) return setError('Company name is required.') || false;
+      if (!company.companyName) return setError(isSacco ? 'Sacco name is required.' : 'Company name is required.') || false;
+      if (isSacco && !company.businessRegNumber) return setError('Registration / certificate number is required.') || false;
+      if (isSacco && !company.city) return setError('Please select your county.') || false;
       if (!company.location) return setError('Location is required.') || false;
-      if (company.assetTypes.length === 0) return setError('Select at least one asset type.') || false;
+      if (!isSacco && company.assetTypes.length === 0) return setError('Select at least one asset type.') || false;
     }
     if (currentStep === 2) {
-      if (!userCount || userCount < 1) return setError('Enter the number of users you need (minimum 1).') || false;
-      if (!activePlan) return setError('Could not determine a plan for that number of users.') || false;
+      if (!userCount || userCount < 1) return setError(isSacco
+        ? 'Enter the number of members in your Sacco (minimum 1).'
+        : 'Enter the number of users you need (minimum 1).') || false;
+      if (!activePlan) return setError(isSacco
+        ? 'Could not determine a tier for that number of members.'
+        : 'Could not determine a plan for that number of users.') || false;
     }
     if (currentStep === 3) {
       if (!mpesaPhone || mpesaPhone.length < 10) return setError('Enter a valid Mpesa phone number.') || false;
@@ -113,12 +148,17 @@ const AdminRegistration = () => {
   const createAdminAccount = async () => {
     setLoading(true);
     try {
+      // A Sacco registrant becomes a sacco_admin (routed to /sacco-dashboard on
+      // login); a company registrant is a normal admin. Both share the same
+      // account/plan/payment steps — only the role and the tenant record differ.
+      const role = isSacco ? 'sacco_admin' : 'admin';
+
       // 1. Create auth user
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: account.email,
         password: account.password,
         options: {
-          data: { full_name: account.fullName, role: 'admin' },
+          data: { full_name: account.fullName, role },
         },
       });
       if (authError) throw authError;
@@ -131,25 +171,42 @@ const AdminRegistration = () => {
         id: userId,
         email: account.email,
         full_name: account.fullName,
-        phone: account.phone,
-        gender: account.gender, // 'male' | 'female'
-        role: 'admin',
+        phone: account.phone || null,
+        gender: account.gender || null, // 'male' | 'female' (optional for saccos)
+        role,
         is_active: false, // inactive until payment confirmed
       });
 
-      // 3. Create company profile
-      await supabase.from('company_profiles').insert({
-        admin_id: userId,
-        company_name: company.companyName,
-        business_registration_number: company.businessRegNumber,
-        business_type: company.businessType,
-        asset_types: company.assetTypes,
-        email: account.email,
-        phone: account.phone,
-        location: company.location,
-        city: company.city,
-        kyc_status: 'pending',
-      });
+      // 3. Create the tenant record — a sacco lives in its own `saccos` table
+      //    (backs the Sacco dashboard); a company keeps its company_profiles row.
+      if (isSacco) {
+        await supabase.from('saccos').insert({
+          admin_id: userId,
+          name: company.companyName,
+          registration_no: company.businessRegNumber,
+          sasra_licence_no: company.sasraLicence || null,
+          email: account.email,
+          phone: account.phone || null,
+          location: company.location,
+          city: company.city,
+          tier: saccoTier.id, // from the member count given on the plan step
+          member_cap: userCount,
+          kyc_status: 'pending',
+        });
+      } else {
+        await supabase.from('company_profiles').insert({
+          admin_id: userId,
+          company_name: company.companyName,
+          business_registration_number: company.businessRegNumber,
+          business_type: company.businessType,
+          asset_types: company.assetTypes,
+          email: account.email,
+          phone: account.phone,
+          location: company.location,
+          city: company.city,
+          kyc_status: 'pending',
+        });
+      }
 
       // 4. Create pending subscription
       const { data: planData } = await supabase
@@ -182,6 +239,13 @@ const AdminRegistration = () => {
     setPaymentStatus('processing');
 
     try {
+      // The sacco flow doesn't collect a contact phone up-front, so backfill
+      // the tenant records with the M-Pesa number once we have it.
+      if (isSacco && !account.phone) {
+        await supabase.from('user_profiles').update({ phone: mpesaPhone }).eq('id', adminId);
+        await supabase.from('saccos').update({ phone: mpesaPhone }).eq('admin_id', adminId);
+      }
+
       // Save payment record as pending
       await supabase.from('mpesa_subscription_payments').insert({
         admin_id: adminId,
@@ -334,8 +398,8 @@ const AdminRegistration = () => {
             </p>
             <h2 className="text-2xl font-bold mb-3" style={{ color: C.navy }}>
               {currentStep === 0 && 'Create Your Account'}
-              {currentStep === 1 && 'Company Details'}
-              {currentStep === 2 && 'Choose Your Plan'}
+              {currentStep === 1 && (isSacco ? 'Sacco Details' : 'Company Details')}
+              {currentStep === 2 && (isSacco ? 'Your Sacco Tier' : 'Choose Your Plan')}
               {currentStep === 3 && 'Complete Payment'}
             </h2>
             <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: C.border }}>
@@ -365,11 +429,49 @@ const AdminRegistration = () => {
           {/* ── STEP 0: Account ── */}
           {currentStep === 0 && (
             <div className="space-y-4">
+              {/* Organization type — decides whether the next step collects
+                  company details or sacco details. */}
+              <div>
+                <label className="block text-xs font-semibold mb-2" style={{ color: C.navy }}>
+                  I'm registering a *
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'company', label: 'Company', icon: 'Building2' },
+                    { id: 'sacco', label: 'Sacco / Chama', icon: 'Users' },
+                  ].map(opt => {
+                    const active = company.organizationType === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setCo('organizationType', opt.id)}
+                        className="flex items-center justify-center gap-2 px-3 py-3 rounded-lg text-sm border transition-all"
+                        style={{
+                          background: active ? 'rgba(52,193,221,0.1)' : C.inputBg,
+                          border: `1.5px solid ${active ? C.primary : C.border}`,
+                          color: active ? C.primary : C.text,
+                          fontWeight: active ? '600' : '400',
+                        }}
+                      >
+                        <Icon name={opt.icon} size={16} color="currentColor" />
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {isSacco && (
+                  <p className="text-xs mt-1.5" style={{ color: C.textMuted }}>
+                    You're registering a Sacco / Chama. After sign-in you'll get a dedicated Sacco dashboard — members, contributions, loans, shares, voting and governance.
+                  </p>
+                )}
+              </div>
+
               {[
                 { label: 'Full Name *', key: 'fullName', type: 'text', placeholder: 'John Kamau' },
                 { label: 'Email Address *', key: 'email', type: 'email', placeholder: 'john@company.com' },
-                { label: 'Phone Number *', key: 'phone', type: 'tel', placeholder: '+254 7XX XXX XXX' },
-                { label: 'Gender *', key: 'gender', type: 'select', options: [
+                ...(isSacco ? [] : [{ label: 'Phone Number *', key: 'phone', type: 'tel', placeholder: '+254 7XX XXX XXX' }]),
+                { label: isSacco ? 'Gender (Optional)' : 'Gender *', key: 'gender', type: 'select', options: [
                   { value: 'male', label: 'Male' },
                   { value: 'female', label: 'Female' },
                 ] },
@@ -397,7 +499,7 @@ const AdminRegistration = () => {
                         e.target.style.boxShadow = 'none';
                       }}
                     >
-                      <option value="" disabled>Select gender</option>
+                      <option value="" disabled={!isSacco}>Select gender</option>
                       {field.options.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
@@ -460,83 +562,132 @@ const AdminRegistration = () => {
             </div>
           )}
 
-          {/* ── STEP 1: Company ── */}
+          {/* ── STEP 1: Company / Sacco details ── */}
           {currentStep === 1 && (
             <div className="space-y-4">
-              {[
+              {(isSacco ? [
+                { label: 'Sacco Name *', key: 'companyName', placeholder: 'e.g. Umoja Sacco' },
+                { label: 'Registration / Certificate Number *', key: 'businessRegNumber', placeholder: 'e.g. CS/12345' },
+                { label: 'SASRA Licence Number (Optional)', key: 'sasraLicence', placeholder: 'e.g. SASRA/DTS/001' },
+                { label: 'City / County *', key: 'city', type: 'select', options: KENYA_COUNTIES, placeholder: 'Select county' },
+                // Location options depend on the county picked above.
+                { label: 'Location / Address *', key: 'location', type: 'select',
+                  options: LOCATIONS_BY_COUNTY[company.city] || [],
+                  placeholder: company.city ? 'Select location' : 'Select county first',
+                  disabled: !company.city },
+              ] : [
                 { label: 'Company Name *', key: 'companyName', placeholder: 'Acme Ltd' },
                 { label: 'Business Registration Number', key: 'businessRegNumber', placeholder: 'e.g. CPR/2024/001' },
                 { label: 'Business Type', key: 'businessType', placeholder: 'e.g. Limited Company, Sole Proprietor' },
                 { label: 'Location / Address *', key: 'location', placeholder: 'e.g. Westlands, Nairobi' },
-                { label: 'City', key: 'city', placeholder: 'Nairobi' },
-              ].map(field => (
+                { label: 'City / County', key: 'city', type: 'select', options: KENYA_COUNTIES, placeholder: 'Select county', optional: true },
+              ]).map(field => (
                 <div key={field.key}>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>{field.label}</label>
-                  <input
-                    type="text"
-                    value={company[field.key]}
-                    onChange={e => setCo(field.key, e.target.value)}
-                    placeholder={field.placeholder}
-                    className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
-                    style={{
-                      border: `1.5px solid ${C.border}`,
-                      color: C.text,
-                      background: C.inputBg,
-                    }}
-                    onFocus={(e) => {
-                      e.target.style.borderColor = C.primary;
-                      e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
-                    }}
-                    onBlur={(e) => {
-                      e.target.style.borderColor = C.border;
-                      e.target.style.boxShadow = 'none';
-                    }}
-                  />
+                  {field.type === 'select' ? (
+                    <select
+                      value={company[field.key]}
+                      onChange={e => {
+                        const v = e.target.value;
+                        // Changing county invalidates a location picked under the old one.
+                        if (isSacco && field.key === 'city') {
+                          setCompany(prev => ({ ...prev, city: v, location: '' }));
+                        } else {
+                          setCo(field.key, v);
+                        }
+                      }}
+                      disabled={field.disabled}
+                      className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                      style={{
+                        border: `1.5px solid ${C.border}`,
+                        color: company[field.key] ? C.text : C.textMuted,
+                        background: C.inputBg,
+                        opacity: field.disabled ? 0.6 : 1,
+                        cursor: field.disabled ? 'not-allowed' : 'pointer',
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = C.primary;
+                        e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = C.border;
+                        e.target.style.boxShadow = 'none';
+                      }}
+                    >
+                      <option value="" disabled={!field.optional}>{field.placeholder}</option>
+                      {field.options.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={company[field.key]}
+                      onChange={e => setCo(field.key, e.target.value)}
+                      placeholder={field.placeholder}
+                      className="w-full px-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
+                      style={{
+                        border: `1.5px solid ${C.border}`,
+                        color: C.text,
+                        background: C.inputBg,
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = C.primary;
+                        e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)';
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = C.border;
+                        e.target.style.boxShadow = 'none';
+                      }}
+                    />
+                  )}
                 </div>
               ))}
 
-              <div>
-                <label className="block text-xs font-semibold mb-2" style={{ color: C.navy }}>
-                  Asset Types You Deal In *
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {ASSET_TYPES.map(type => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => toggleAssetType(type)}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-all text-left"
-                      style={{
-                        background: company.assetTypes.includes(type) ? 'rgba(52,193,221,0.1)' : C.inputBg,
-                        border: `1px solid ${company.assetTypes.includes(type) ? C.primary : C.border}`,
-                        color: company.assetTypes.includes(type) ? C.primary : C.text,
-                        fontWeight: company.assetTypes.includes(type) ? '500' : '400',
-                      }}
-                    >
-                      <div className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+              {!isSacco && (
+                <div>
+                  <label className="block text-xs font-semibold mb-2" style={{ color: C.navy }}>
+                    Asset Types You Deal In *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {ASSET_TYPES.map(type => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => toggleAssetType(type)}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-all text-left"
                         style={{
-                          background: company.assetTypes.includes(type) ? C.primary : 'transparent',
-                          border: company.assetTypes.includes(type) ? 'none' : `1px solid ${C.border}`,
-                        }}>
-                        {company.assetTypes.includes(type) && (
-                          <Icon name="Check" size={10} color="white" />
-                        )}
-                      </div>
-                      {type}
-                    </button>
-                  ))}
+                          background: company.assetTypes.includes(type) ? 'rgba(52,193,221,0.1)' : C.inputBg,
+                          border: `1px solid ${company.assetTypes.includes(type) ? C.primary : C.border}`,
+                          color: company.assetTypes.includes(type) ? C.primary : C.text,
+                          fontWeight: company.assetTypes.includes(type) ? '500' : '400',
+                        }}
+                      >
+                        <div className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                          style={{
+                            background: company.assetTypes.includes(type) ? C.primary : 'transparent',
+                            border: company.assetTypes.includes(type) ? 'none' : `1px solid ${C.border}`,
+                          }}>
+                          {company.assetTypes.includes(type) && (
+                            <Icon name="Check" size={10} color="white" />
+                          )}
+                        </div>
+                        {type}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
           {/* ── STEP 2: Plan (auto-selected from number of users) ── */}
           {currentStep === 2 && (
             <div className="space-y-4">
-              {/* Number of users */}
+              {/* Number of users (companies) / members (saccos) */}
               <div>
                 <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>
-                  Number of Users *
+                  {isSacco ? 'Number of Members *' : 'Number of Users *'}
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -548,7 +699,7 @@ const AdminRegistration = () => {
                     inputMode="numeric"
                     value={numberOfUsers}
                     onChange={e => setNumberOfUsers(e.target.value.replace(/[^0-9]/g, ''))}
-                    placeholder="e.g. 8"
+                    placeholder={isSacco ? 'e.g. 25' : 'e.g. 8'}
                     className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg focus:outline-none transition-all"
                     style={{ border: `1.5px solid ${C.border}`, color: C.text, background: C.inputBg }}
                     onFocus={(e) => {
@@ -562,7 +713,9 @@ const AdminRegistration = () => {
                   />
                 </div>
                 <p className="text-xs mt-1" style={{ color: C.textMuted }}>
-                  How many staff login accounts you need. Your plan is chosen automatically.
+                  {isSacco
+                    ? 'How many members your Sacco / Chama has. Your tier is chosen automatically and per-member fees are billed monthly.'
+                    : 'How many staff login accounts you need. Your plan is chosen automatically.'}
                 </p>
               </div>
 
@@ -576,7 +729,7 @@ const AdminRegistration = () => {
                     </div>
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: C.primary }}>
-                        Your Plan
+                        {isSacco ? 'Your Tier' : 'Your Plan'}
                       </p>
                       <p className="font-bold" style={{ color: C.navy }}>{activePlan.name}</p>
                       <p className="text-xs" style={{ color: C.textMuted }}>
@@ -587,14 +740,14 @@ const AdminRegistration = () => {
 
                   {/* Price breakdown */}
                   <div className="mt-4 pt-3 space-y-2" style={{ borderTop: `1px solid ${C.border}` }}>
-                    <div className="flex items-center justify-between text-sm">
-                      <span style={{ color: C.textMuted }}>
-                        Monthly subscription · {userCount} × KES {activePlan.pricePerUser}
-                      </span>
-                      <span className="font-semibold" style={{ color: C.navy }}>
-                        KES {subscriptionPrice.toLocaleString()}
-                      </span>
-                    </div>
+                    {billLines.map(line => (
+                      <div key={line.label} className="flex items-center justify-between text-sm">
+                        <span style={{ color: C.textMuted }}>{line.label}</span>
+                        <span className="font-semibold" style={{ color: C.navy }}>
+                          KES {line.amount.toLocaleString()}
+                        </span>
+                      </div>
+                    ))}
                     <div className="flex items-center justify-between text-sm">
                       <span style={{ color: C.textMuted }}>
                         Installation fee · one-time
@@ -614,13 +767,15 @@ const AdminRegistration = () => {
               ) : (
                 <div className="p-4 rounded-xl text-sm text-center"
                   style={{ background: C.bg, border: `1px dashed ${C.border}`, color: C.textMuted }}>
-                  Enter the number of users to see your plan and price.
+                  {isSacco
+                    ? 'Enter the number of members to see your tier and price.'
+                    : 'Enter the number of users to see your plan and price.'}
                 </div>
               )}
 
               {/* All tiers for reference (active one highlighted) */}
               <div className="space-y-2">
-                {PLANS.map(plan => {
+                {(isSacco ? SACCO_TIERS : PLANS).map(plan => {
                   const isActive = activePlan?.id === plan.id;
                   return (
                     <div
@@ -640,12 +795,16 @@ const AdminRegistration = () => {
                         <div>
                           <p className="font-bold text-sm" style={{ color: C.navy }}>{plan.name}</p>
                           <p className="text-xs" style={{ color: C.textMuted }}>
-                            {plan.userRange} · {plan.storageGb} GB free
+                            {isSacco ? plan.memberRange : plan.userRange} · {plan.storageGb} GB free
                           </p>
                         </div>
                         <div className="ml-auto text-right">
-                          <p className="text-sm font-bold" style={{ color: C.navy }}>KES {plan.pricePerUser}</p>
-                          <p className="text-xs" style={{ color: C.textMuted }}>per user / month</p>
+                          <p className="text-sm font-bold" style={{ color: C.navy }}>
+                            KES {isSacco ? plan.baseFee : plan.pricePerUser}
+                          </p>
+                          <p className="text-xs" style={{ color: C.textMuted }}>
+                            {isSacco ? `base + KES ${plan.perMemberFee} / member` : 'per user / month'}
+                          </p>
                         </div>
                       </div>
                       {isActive && (
@@ -669,23 +828,23 @@ const AdminRegistration = () => {
               {activePlan && (
                 <div className="p-4 rounded-xl" style={{ background: C.bg, border: `1px solid ${C.border}` }}>
                   <div>
-                    <p className="text-xs" style={{ color: C.textMuted }}>Selected Plan</p>
-                    <p className="font-bold" style={{ color: C.navy }}>{activePlan.name} Plan</p>
+                    <p className="text-xs" style={{ color: C.textMuted }}>{isSacco ? 'Selected Tier' : 'Selected Plan'}</p>
+                    <p className="font-bold" style={{ color: C.navy }}>{activePlan.name} {isSacco ? 'Tier' : 'Plan'}</p>
                     <p className="text-xs" style={{ color: C.textMuted }}>
-                      {userCount} users · {activePlan.storageGb} GB free storage
+                      {userCount} {isSacco ? 'members' : 'users'} · {activePlan.storageGb} GB free storage
                     </p>
                   </div>
 
                   {/* Price breakdown */}
                   <div className="mt-3 pt-3 space-y-2" style={{ borderTop: `1px solid ${C.border}` }}>
-                    <div className="flex items-center justify-between text-sm">
-                      <span style={{ color: C.textMuted }}>
-                        Monthly subscription · {userCount} × KES {activePlan.pricePerUser}
-                      </span>
-                      <span className="font-semibold" style={{ color: C.navy }}>
-                        KES {subscriptionPrice.toLocaleString()}
-                      </span>
-                    </div>
+                    {billLines.map(line => (
+                      <div key={line.label} className="flex items-center justify-between text-sm">
+                        <span style={{ color: C.textMuted }}>{line.label}</span>
+                        <span className="font-semibold" style={{ color: C.navy }}>
+                          KES {line.amount.toLocaleString()}
+                        </span>
+                      </div>
+                    ))}
                     <div className="flex items-center justify-between text-sm">
                       <span style={{ color: C.textMuted }}>Installation fee · one-time</span>
                       <span className="font-semibold" style={{ color: C.navy }}>
@@ -757,6 +916,14 @@ const AdminRegistration = () => {
                       </span>
                     </p>
                   </div>
+                  {isSacco && (
+                    <div className="text-left p-3 rounded-lg text-sm"
+                      style={{ background: 'rgba(52,193,221,0.08)', border: `1px solid ${C.primary}`, color: C.navy }}>
+                      <span className="font-semibold">Your Sacco workspace is ready.</span>{' '}
+                      Once payment is confirmed and you sign in, you'll land on your Sacco dashboard —
+                      members, contributions, loans, shares, voting and governance all in one place.
+                    </div>
+                  )}
                   <button
                     onClick={() => navigate('/login')}
                     className="w-full py-3 rounded-xl text-sm font-bold text-white transition-all"

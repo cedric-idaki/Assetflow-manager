@@ -377,7 +377,8 @@ const UserManagementTab = () => {
   const [toast, setToast]                 = useState(null);
   const [confirmToggle, setConfirmToggle] = useState(null);
 
-  const isAdmin           = userProfile?.role === 'admin';
+  // A sacco_admin manages its tenant exactly like a company admin does.
+  const isAdmin           = userProfile?.role === 'admin' || userProfile?.role === 'sacco_admin';
   const availableRoles    = isAdmin ? ROLE_OPTIONS_ADMIN : ROLE_OPTIONS_ALL;
   const roleFilterOptions = isAdmin ? ROLE_OPTIONS_ADMIN : ROLE_OPTIONS_ALL;
 
@@ -399,7 +400,7 @@ const UserManagementTab = () => {
           .from('user_profiles')
           .select('*')
           .order('created_at', { ascending: false });
-      } else if (currentRole === 'admin') {
+      } else if (currentRole === 'admin' || currentRole === 'sacco_admin') {
         query = supabase
           .from('user_profiles')
           .select('*')

@@ -94,7 +94,12 @@ export const useFinanceHub = () => {
 
   // ── Resolve admin ID ─────────────────────────────────────────────────────────
   const resolveAdminId = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    // getSession() reads the locally persisted session (refreshing it if
+    // expired) instead of getUser()'s network round-trip, which returned
+    // null on transient network failures or token-refresh races and made
+    // the page show "Not authenticated" for logged-in users.
+    const { data: { session } } = await supabase.auth.getSession();
+    const user = session?.user;
     if (!user) throw new Error('Not authenticated');
     const { data: profile } = await supabase
       .from('user_profiles')

@@ -65,7 +65,6 @@ var Sidebar = function(props) {
     { label: 'E-Signature',    path: '/e-signature',                   icon: 'PenTool' },
     { label: 'Payments',       path: '/payment-collections-hub',       icon: 'CreditCard' },
     { label: 'KYC Management', path: '/kyc-management-screen',         icon: 'ShieldCheck' },
-    { label: 'KYC Renewals',   path: '/kyc-renewal-management-screen', icon: 'RefreshCw' },
     { label: 'Reports',        path: '/reports-analytics-center',      icon: 'BarChart3' },
     { label: 'HR Management',  path: '/hr-management',                 icon: 'Users' },
     { label: 'Administration', path: '/system-administration',         icon: 'Settings', badge: pendingCount || null },
@@ -113,11 +112,32 @@ var Sidebar = function(props) {
     { label: 'POS / New Sale', path: '/pos', icon: 'ShoppingCart' },
   ];
 
+  // Sacco / Chama admin — the dashboard page carries its own tab bar
+  // (Members, Contributions, Loans, Shares, Voting, Governance, Contracts,
+  // Billing), so the sidebar only links to the dashboard itself.
+  var saccoAdminItems = [
+    { label: 'Dashboard',     path: '/sacco-dashboard', icon: 'LayoutDashboard' },
+    // Shared back-office modules (same pages as a company admin; data stays
+    // tenant-isolated). Sales agents are created under Staff & System.
+    { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool' },
+    { label: 'Finance Hub',   path: '/finance-hub',           icon: 'Landmark' },
+    { label: 'HR Management', path: '/hr-management',         icon: 'UserCog' },
+    { label: 'Staff & System', path: '/system-administration', icon: 'Settings', badge: pendingCount || null },
+  ];
+
+  // Sacco member — the portal page carries its own tab bar (contributions,
+  // loans, shares, voting, contracts, documents, statement, profile).
+  var saccoMemberItems = [
+    { label: 'Member Portal', path: '/sacco-member-portal', icon: 'LayoutDashboard' },
+  ];
+
   var navItems =
     role === 'super_admin'       ? superAdminItems :
     role === 'admin'             ? adminItems :
     role === 'hr'                ? hrItems :
     role === 'client'            ? clientItems :
+    role === 'sacco_admin'       ? saccoAdminItems :
+    role === 'sacco_member'      ? saccoMemberItems :
     (role === 'sales_agent' || role === 'sales') ? salesAgentItems :
     (role === 'director' || role === 'accountant' || role === 'collections_officer' ||
      role === 'manager'  || role === 'finance'    || role === 'operations')
@@ -138,6 +158,7 @@ var Sidebar = function(props) {
       collections_officer: 'Collections', manager: 'Manager',
       finance: 'Finance', operations: 'Operations', hr: 'Human Resources',
       sales_agent: 'Sales Agent', sales: 'Sales Agent', client: 'Client',
+      sacco_admin: 'Sacco Admin', sacco_member: 'Sacco Member',
     })[r] || (r || 'Staff').replace(/_/g, ' ');
   };
 

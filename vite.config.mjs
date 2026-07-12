@@ -26,7 +26,7 @@ export default defineConfig({
   },
   plugins: [tsconfigPaths(), react()],
   server: {
-    port: "4028",
+    port: Number(process.env.PORT) || 4028,
     host: "0.0.0.0",
     strictPort: true,
     historyApiFallback: true,

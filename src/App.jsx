@@ -11,6 +11,8 @@ import { AccountantDashboardProvider } from './contexts/AccountantDashboardConte
 import { DirectorDashboardProvider } from './contexts/DirectorDashboardContext';
 import { CollectionsDashboardProvider } from './contexts/CollectionsDashboardContext';
 import { StaffDashboardProvider } from './contexts/StaffDashboardContext';
+import { SaccoDashboardProvider } from './contexts/SaccoDashboardContext';
+import { SaccoMemberProvider } from './contexts/SaccoMemberContext';
 
 function App() {
   return (
@@ -30,7 +32,11 @@ function App() {
                     <DirectorDashboardProvider>
                       <CollectionsDashboardProvider>
                         <StaffDashboardProvider>
-                          <Routes />
+                          <SaccoDashboardProvider>
+                            <SaccoMemberProvider>
+                              <Routes />
+                            </SaccoMemberProvider>
+                          </SaccoDashboardProvider>
                         </StaffDashboardProvider>
                       </CollectionsDashboardProvider>
                     </DirectorDashboardProvider>

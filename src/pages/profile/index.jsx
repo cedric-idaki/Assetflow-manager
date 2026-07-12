@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { formatKEPhone } from '../../utils/phoneUtils';
-import { planForUsers, subscriptionPriceFor } from '../../config/companyPlans';
+import { planForUsers, subscriptionPriceFor, planById } from '../../config/companyPlans';
+import { tierById } from '../../config/saccoTiers';
 import useAdminSubscription from '../../hooks/useAdminSubscription';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
@@ -102,6 +104,122 @@ const AccountCard = ({ user, userProfile, updateProfile }) => {
           <Icon name="Save" size={15} color="currentColor" />
           {saving ? 'Saving…' : 'Save changes'}
         </button>
+      </div>
+    </Card>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STORAGE — live usage vs the tier's free quota. Usage is computed on the fly
+// from storage.objects via the tenant_storage_bytes() RPC, so the gauge moves
+// as files are uploaded/deleted anywhere in the system.
+// ═══════════════════════════════════════════════════════════════════════════════
+const fmtGb = (n) => Number((Number(n) || 0).toFixed(2)).toLocaleString();
+
+const StorageCard = ({ role, userId, planName }) => {
+  const [state, setState] = useState({ loading: true, usedGb: 0, quotaGb: null, tierName: '' });
+
+  React.useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      const { data: bytes, error } = await supabase.rpc('tenant_storage_bytes');
+      const usedGb = error ? 0 : (Number(bytes) || 0) / (1024 ** 3);
+
+      // The free quota comes from the sacco tier or the company plan.
+      let quotaGb = null;
+      let tierName = '';
+      if (role === 'sacco_admin') {
+        const { data: sacco } = await supabase
+          .from('saccos').select('id, tier').eq('admin_id', userId).maybeSingle();
+        const tier = tierById(sacco?.tier);
+        quotaGb = tier?.storageGb ?? null;
+        tierName = tier?.name || '';
+        if (sacco?.id) {
+          // Keep the sacco dashboard gauge and the monthly-bill storage excess
+          // in sync with what is actually stored (BRS §7.5).
+          await supabase.from('saccos')
+            .update({ storage_used_gb: Math.round(usedGb * 100) / 100 })
+            .eq('id', sacco.id);
+        }
+      } else {
+        const plan = planById(planName);
+        quotaGb = plan?.storageGb ?? null;
+        tierName = plan?.name || '';
+      }
+      if (!cancelled) setState({ loading: false, usedGb, quotaGb, tierName });
+    })();
+    return () => { cancelled = true; };
+  }, [role, userId, planName]);
+
+  const { loading, usedGb, quotaGb, tierName } = state;
+  const pct = quotaGb ? Math.min(100, Math.round((usedGb / quotaGb) * 100)) : 0;
+  const leftGb = quotaGb != null ? Math.max(0, quotaGb - usedGb) : null;
+  const barColor = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#34c1dd';
+
+  return (
+    <Card icon="HardDrive" title="Storage"
+      subtitle={quotaGb != null ? `${quotaGb} GB free on ${tierName}` : 'Your storage usage'}
+      accent="#0891b2">
+      {loading ? (
+        <div className="py-4 text-center text-sm text-muted-foreground">Calculating usage…</div>
+      ) : (
+        <>
+          <div className="flex items-end justify-between">
+            <p className="text-2xl font-bold text-foreground">{fmtGb(usedGb)} GB</p>
+            {quotaGb != null && <p className="text-xs text-muted-foreground">of {quotaGb} GB</p>}
+          </div>
+          <div className="mt-2 h-2 rounded-full bg-muted overflow-hidden">
+            <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: barColor }} />
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            {quotaGb != null
+              ? `${pct}% used · ${fmtGb(leftGb)} GB left · alerts at 80% and 100%`
+              : 'No storage quota found for your plan.'}
+          </p>
+        </>
+      )}
+    </Card>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PORTAL SWITCHER — super admin only: jump between the Company and Saccos views
+// ═══════════════════════════════════════════════════════════════════════════════
+const PortalSwitchCard = () => {
+  const navigate = useNavigate();
+  const portals = [
+    {
+      id: 'company', label: 'Company Portal', path: '/super-admin-dashboard',
+      icon: 'Building2', accent: '#E85D2F',
+      desc: 'Companies, clients, agents & system operations',
+    },
+    {
+      id: 'sacco', label: 'Saccos Portal', path: '/sacco-oversight',
+      icon: 'PiggyBank', accent: '#0891b2',
+      desc: 'Sacco registrations, members & live activity',
+    },
+  ];
+
+  return (
+    <Card icon="ArrowLeftRight" title="Portal view" subtitle="Switch between the Company and Saccos portals" accent="#0891b2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {portals.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => navigate(p.path)}
+            className="flex items-center gap-3 p-4 rounded-xl border border-border text-left transition-all hover:border-primary/50 hover:bg-muted/40"
+          >
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${p.accent}1a` }}>
+              <Icon name={p.icon} size={18} color={p.accent} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground">{p.label}</p>
+              <p className="text-xs text-muted-foreground">{p.desc}</p>
+            </div>
+            <Icon name="ArrowRight" size={15} color="#9ca3af" />
+          </button>
+        ))}
       </div>
     </Card>
   );
@@ -500,6 +618,8 @@ const HistoryCard = ({ history, billTo }) => {
 const ProfilePage = () => {
   const { user, userProfile, updateProfile } = useAuth();
   const isAdmin = userProfile?.role === 'admin';
+  const isSaccoAdmin = userProfile?.role === 'sacco_admin';
+  const isSuperAdmin = userProfile?.role === 'super_admin';
   const sub = useAdminSubscription();
 
   const initials = (userProfile?.full_name || user?.email || 'U')
@@ -526,7 +646,14 @@ const ProfilePage = () => {
           </div>
         </div>
 
+        {isSuperAdmin && <PortalSwitchCard />}
+
         <AccountCard user={user} userProfile={userProfile} updateProfile={updateProfile} />
+
+        {(isAdmin || isSaccoAdmin) && (
+          <StorageCard role={userProfile?.role} userId={user?.id} planName={sub.planName} />
+        )}
+
         <PasswordCard email={user?.email} />
 
         {isAdmin && (

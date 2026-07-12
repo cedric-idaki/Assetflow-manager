@@ -51,7 +51,16 @@ const PaymentCollectionsHub = () => {
 
   const loadLinkedAssets = useCallback(async () => {
     try {
-      const data = await assetsService?.getAll({ status: 'reserved' });
+      // Scope to the current company (tenant). RLS also enforces this, but the
+      // explicit filter keeps the query intentional and fast.
+      const { data: { user } } = await supabase.auth.getUser();
+      let adminId = user?.id || null;
+      if (user) {
+        const { data: profile } = await supabase
+          .from('user_profiles').select('role, admin_id').eq('id', user.id).maybeSingle();
+        adminId = profile?.role === 'admin' ? user.id : (profile?.admin_id || user.id);
+      }
+      const data = await assetsService?.getAll({ status: 'reserved', adminId });
       setLinkedAssets(data?.map(a => ({
         id: a?.asset_code,
         name: a?.description,
