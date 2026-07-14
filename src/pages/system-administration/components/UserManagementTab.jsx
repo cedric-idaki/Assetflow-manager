@@ -3,6 +3,7 @@ import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../contexts/AuthContext';
 import { auditLogsService } from '../../../services/supabaseService';
+import { emailLoginCredentials } from '../../../services/credentialsEmailService';
 
 const ROLE_OPTIONS_ALL = [
   { value: 'super_admin',         label: 'Super Administrator', color: 'bg-purple-100 text-purple-700' },
@@ -164,6 +165,19 @@ const UserModal = ({ user, onClose, onSave, availableRoles = ROLE_OPTIONS_ALL })
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Failed to create user.');
 
+        // Auto-email the credentials to the new user (non-fatal).
+        emailLoginCredentials({
+          to: form.email.trim().toLowerCase(),
+          type: form.role === 'client' ? 'client_welcome' : 'staff_welcome',
+          data: {
+            fullName:   form.full_name.trim(),
+            email:      form.email.trim().toLowerCase(),
+            password:   form.password,
+            role:       form.role,
+            department: form.department,
+          },
+        });
+
         try {
           await auditLogsService.log(
             'user_created', 'user_profiles',
@@ -173,7 +187,7 @@ const UserModal = ({ user, onClose, onSave, availableRoles = ROLE_OPTIONS_ALL })
           );
         } catch (_) {}
 
-        onSave({ success: true, message: `User "${form.full_name}" created successfully` });
+        onSave({ success: true, message: `User "${form.full_name}" created — credentials emailed to ${form.email}` });
       }
     } catch (err) {
       onSave({ success: false, message: err.message || 'Something went wrong' });

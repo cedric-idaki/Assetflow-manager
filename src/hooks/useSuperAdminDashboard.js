@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '/src/lib/supabase.js';
+import { emailLoginCredentials } from '../services/credentialsEmailService';
 
 export const useSuperAdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -215,7 +216,9 @@ export const useSuperAdminDashboard = () => {
       body: JSON.stringify({
         email: agentData.email,
         password: agentData.password,
-        data: { full_name: agentData.fullName, role: 'sales_agent' },
+        // must_change_password: the portal blocks access until the agent
+        // replaces this admin-issued password with their own.
+        data: { full_name: agentData.fullName, role: 'sales_agent', must_change_password: true },
       }),
     });
 
@@ -248,6 +251,18 @@ export const useSuperAdminDashboard = () => {
       .select()
       .maybeSingle();
     if (agentError) throw agentError;
+
+    // Auto-email the credentials (non-fatal — the creator also sees them once).
+    emailLoginCredentials({
+      to: agentData.email,
+      type: 'staff_welcome',
+      data: {
+        fullName: agentData.fullName,
+        email:    agentData.email,
+        password: agentData.password,
+        role:     'sales_agent',
+      },
+    });
 
     await fetchSalesAgents();
     return agent;

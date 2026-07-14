@@ -339,6 +339,47 @@ const buildCredentialsEmail = (data: any) => {
 </body></html>`;
 };
 
+const buildStaffCredentialsEmail = (data: any) => {
+  const { fullName, email, password, role, department, companyName, portalUrl } = data;
+  const roleLabel = String(role || "staff").replace(/_/g, " ");
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🔑</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Welcome to ${companyName || "AssetFlow"}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Your staff portal account is ready</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Colleague"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      An account has been created for you${companyName ? ` at <strong>${companyName}</strong>` : ""} with the role of
+      <strong style="text-transform:capitalize">${roleLabel}</strong>. Sign in with the temporary password below —
+      <strong>you will be required to set your own password the first time you log in</strong>.
+    </p>
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Login Email</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${email}</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Temporary Password</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right;font-family:monospace">${password}</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Role</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right;text-transform:capitalize">${roleLabel}</td></tr>
+        ${department ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Department</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${department}</td></tr>` : ""}
+      </table>
+    </div>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Sign in to the portal</a>
+    </div>` : ""}
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#92400e">This temporary password stops being valid once you set your own. Keep these details private — if you didn't expect this email, contact your administrator.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 const buildMemberCredentialsEmail = (data: any) => {
   const { fullName, email, password, memberNo, saccoName, portalUrl } = data;
   return `
@@ -529,6 +570,10 @@ serve(async (req) => {
       case "sacco_member_welcome":
         subject = `Your ${data?.saccoName ? `${data.saccoName} ` : ""}member portal login`;
         html = buildMemberCredentialsEmail(data);
+        break;
+      case "staff_welcome":
+        subject = `Your ${data?.companyName ? `${data.companyName} ` : ""}staff portal login`;
+        html = buildStaffCredentialsEmail(data);
         break;
       case "signing_otp":
         subject = `Your signing code: ${data?.code || ""}`;

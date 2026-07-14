@@ -164,9 +164,10 @@ Deno.serve(async (req) => {
         department: department || null,
         admin_id:   admin_id || null,
         created_by: caller.id,
-        // Sacco member portal logins are issued with a temporary password;
-        // the portal blocks access until the member replaces it.
-        ...(role === 'sacco_member' ? { must_change_password: true } : {}),
+        // Every account provisioned here starts on a password someone else
+        // chose (a temp password or one typed by the creating admin). The app
+        // blocks portal access until the user replaces it with their own.
+        must_change_password: true,
       },
     });
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, getAccessToken } from '../lib/supabase';
+import { emailLoginCredentials, generateTempPassword } from '../services/credentialsEmailService';
 
 // Upload a file to a Supabase Storage bucket with progress reporting via XHR,
 // falling back to the JS client (no progress) if the direct upload fails so
@@ -245,7 +246,9 @@ export const useAdminDashboard = () => {
       headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
       body: JSON.stringify({
         email: agentData.email, password: agentData.password,
-        data: { full_name: agentData.fullName, role: 'sales_agent' },
+        // must_change_password: the portal blocks access until the agent
+        // replaces this admin-issued password with their own.
+        data: { full_name: agentData.fullName, role: 'sales_agent', must_change_password: true },
       }),
     });
     const json = await res.json();
@@ -273,6 +276,18 @@ export const useAdminDashboard = () => {
       .select().maybeSingle();
     if (agentError) throw agentError;
 
+    // Auto-email the credentials (non-fatal — the creator also sees them once).
+    emailLoginCredentials({
+      to: agentData.email,
+      type: 'staff_welcome',
+      data: {
+        fullName: agentData.fullName,
+        email:    agentData.email,
+        password: agentData.password,
+        role:     'sales_agent',
+      },
+    });
+
     await fetchAgents();
     return agent;
   }, [fetchAgents]);
@@ -286,13 +301,17 @@ export const useAdminDashboard = () => {
     const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+    // Generate a real temporary password (previously a throwaway string that
+    // nobody ever saw) so it can be emailed to the client.
+    const tempPassword = generateTempPassword();
+
     const res  = await fetch(`${supabaseUrl}/auth/v1/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
       body: JSON.stringify({
         email: formData.email,
-        password: Math.random().toString(36).slice(-10) + 'A1!',
-        data: { full_name: formData.fullName, role: 'client' },
+        password: tempPassword,
+        data: { full_name: formData.fullName, role: 'client', must_change_password: true },
       }),
     });
     const json = await res.json();
@@ -314,6 +333,17 @@ export const useAdminDashboard = () => {
       client_status: 'active', kyc_status: 'unverified',
     });
     if (clientErr) throw clientErr;
+
+    // Auto-email the temp credentials to the client (non-fatal).
+    emailLoginCredentials({
+      to: formData.email,
+      type: 'client_welcome',
+      data: {
+        fullName: formData.fullName,
+        email:    formData.email,
+        password: tempPassword,
+      },
+    });
 
     await Promise.all([fetchClients(), fetchStats()]);
   }, [fetchClients, fetchStats]);
@@ -351,13 +381,15 @@ export const useAdminDashboard = () => {
       }
     }
 
+    const staffPassword = formData.password || generateTempPassword();
+
     const res  = await fetch(`${supabaseUrl}/auth/v1/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
       body: JSON.stringify({
         email: formData.email,
-        password: formData.password || (Math.random().toString(36).slice(-10) + 'A1!'),
-        data: { full_name: formData.full_name, role: formData.role },
+        password: staffPassword,
+        data: { full_name: formData.full_name, role: formData.role, must_change_password: true },
       }),
     });
     const json = await res.json();
@@ -372,6 +404,19 @@ export const useAdminDashboard = () => {
       admin_id: adminId, is_active: true,
     });
     if (error) throw error;
+
+    // Auto-email the temp credentials to the new staff member (non-fatal).
+    emailLoginCredentials({
+      to: formData.email,
+      type: 'staff_welcome',
+      data: {
+        fullName:   formData.full_name,
+        email:      formData.email,
+        password:   staffPassword,
+        role:       formData.role || 'operations',
+        department: formData.department,
+      },
+    });
 
     await Promise.all([fetchStaff(), fetchStats()]);
   }, [fetchStaff, fetchStats]);

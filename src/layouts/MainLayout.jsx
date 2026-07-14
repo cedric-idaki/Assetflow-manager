@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/ui/Sidebar';
 import Header from '../components/ui/Header';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import ForcePasswordChange from '../components/ForcePasswordChange';
 
 const MainLayout = function(props) {
   var children = props.children;
@@ -49,6 +50,10 @@ const MainLayout = function(props) {
 
   return (
     <div className="min-h-screen bg-background">
+
+      {/* First-login gate: accounts provisioned with a temp password must
+          replace it before using any portal. */}
+      <ForcePasswordChange />
 
       {/* Mobile dark overlay — tap to close sidebar */}
       {isMobileOpen && (

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 import { useAuth } from '../../../contexts/AuthContext';
+import { emailLoginCredentials } from '../../../services/credentialsEmailService';
 import Icon from '../../../components/AppIcon';
 
 // ── Password strength ─────────────────────────────────────────────────────────
@@ -127,7 +128,8 @@ const SuccessPopup = ({ staff, onDone }) => (
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 mb-6 text-left w-full">
-        ⚠️ Share the login credentials securely — the password cannot be retrieved after this point.
+        ⚠️ The login credentials have been emailed to the staff member. They must set their own
+        password on first login. The password cannot be retrieved after this point.
       </div>
 
       <button
@@ -289,6 +291,19 @@ const CreateStaffUserModal = ({ isOpen, onClose, onSuccess }) => {
       } catch (auditErr) {
         console.warn('Audit log skipped:', auditErr.message);
       }
+
+      // Auto-email the credentials to the new staff member (non-fatal).
+      emailLoginCredentials({
+        to: form.email.trim().toLowerCase(),
+        type: 'staff_welcome',
+        data: {
+          fullName:   form.full_name.trim(),
+          email:      form.email.trim().toLowerCase(),
+          password:   form.password,
+          role:       form.role,
+          department: form.department,
+        },
+      });
 
       const staffDetails = {
         full_name:  form.full_name.trim(),

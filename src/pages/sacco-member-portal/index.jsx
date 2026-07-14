@@ -1,11 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSaccoMemberContext } from '../../contexts/SaccoMemberContext';
-import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
-import { Modal, Field, TextInput, PrimaryButton } from '../sacco-dashboard/components/_shared';
 
 import OverviewTab      from './components/OverviewTab';
 import ContributionsTab from './components/ContributionsTab';
@@ -34,70 +32,9 @@ const Tab = ({ active, label, icon, badge, onClick }) => (
   </button>
 );
 
-// First-login gate. Logins provisioned by the sacco admin carry
-// user_metadata.must_change_password = true (set by create-staff-user on both
-// creation and password reset); the member cannot use the portal until they
-// replace the emailed temporary password with their own.
-const ForcePasswordChange = () => {
-  const { user } = useAuth();
-  const [pw, setPw] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [show, setShow] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState('');
-
-  if (!user?.user_metadata?.must_change_password || done) return null;
-
-  const submit = async () => {
-    if (pw.length < 8) { setError('Use at least 8 characters.'); return; }
-    if (pw !== confirm) { setError('The passwords do not match.'); return; }
-    setSaving(true);
-    setError('');
-    const { error: err } = await supabase.auth.updateUser({
-      password: pw,
-      data: { must_change_password: false },
-    });
-    setSaving(false);
-    if (err) { setError(err.message || 'Could not update the password.'); return; }
-    setDone(true);
-  };
-
-  return (
-    <Modal
-      open
-      onClose={() => {}} /* deliberately not dismissable — the temp password must be replaced */
-      title="Set your own password"
-      footer={
-        <PrimaryButton icon="KeyRound" onClick={submit} disabled={saving}>
-          {saving ? 'Saving…' : 'Save password & continue'}
-        </PrimaryButton>
-      }
-    >
-      <div className="space-y-4">
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-50 border border-amber-200">
-          <Icon name="ShieldAlert" size={20} color="#ca8a04" />
-          <p className="text-sm text-foreground">
-            You signed in with a <strong>temporary password</strong>. Choose your own password to
-            secure your account and continue to the portal.
-          </p>
-        </div>
-        <Field label="New password (min. 8 characters)">
-          <TextInput type={show ? 'text' : 'password'} value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" />
-        </Field>
-        <Field label="Confirm new password">
-          <TextInput type={show ? 'text' : 'password'} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
-        </Field>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} />
-          Show passwords
-        </label>
-        {error && <p className="text-xs font-medium text-red-600">{error}</p>}
-      </div>
-    </Modal>
-  );
-};
-
+// NOTE: the first-login "set your own password" gate now lives in MainLayout
+// (src/components/ForcePasswordChange.jsx) so it covers every portal, not just
+// sacco members.
 const SaccoMemberPortal = () => {
   const { userProfile } = useAuth();
   const ctx = useSaccoMemberContext();
@@ -120,7 +57,6 @@ const SaccoMemberPortal = () => {
 
   return (
     <MainLayout>
-      <ForcePasswordChange />
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
