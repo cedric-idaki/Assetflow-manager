@@ -339,6 +339,45 @@ const buildCredentialsEmail = (data: any) => {
 </body></html>`;
 };
 
+const buildMemberCredentialsEmail = (data: any) => {
+  const { fullName, email, password, memberNo, saccoName, portalUrl } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🔑</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Welcome to ${saccoName || "your sacco"}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Your member portal login is ready</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      Your sacco administrator has created a member portal account for you. Sign in with the temporary
+      password below — <strong>you will be required to set your own password the first time you log in</strong>.
+      The portal gives you access to your contributions, loans, shares, voting, contracts and documents.
+    </p>
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Login Email</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${email}</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Temporary Password</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right;font-family:monospace">${password}</td></tr>
+        ${memberNo ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Member No.</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${memberNo}</td></tr>` : ""}
+      </table>
+    </div>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Sign in to the member portal</a>
+    </div>` : ""}
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#92400e">This temporary password stops being valid once you set your own. Keep these details private — if you didn't expect this email, contact your sacco administrator.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 const buildSigningOtpEmail = (data: any) => {
   const { signerName, code, documentName, expiresMinutes } = data;
   const digits = String(code || "").split("").map((d: string) =>
@@ -486,6 +525,10 @@ serve(async (req) => {
       case "client_welcome":
         subject = "Your AssetFlow client portal login";
         html = buildCredentialsEmail(data);
+        break;
+      case "sacco_member_welcome":
+        subject = `Your ${data?.saccoName ? `${data.saccoName} ` : ""}member portal login`;
+        html = buildMemberCredentialsEmail(data);
         break;
       case "signing_otp":
         subject = `Your signing code: ${data?.code || ""}`;

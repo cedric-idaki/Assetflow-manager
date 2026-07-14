@@ -25,7 +25,7 @@ const generatePassword = () => {
 };
 
 const MembersTab = ({ ctx }) => {
-  const { members, addMember, updateMember, exportCSV, refreshMembers } = ctx;
+  const { members, addMember, updateMember, exportCSV, refreshMembers, sacco } = ctx;
   const { user } = useAuth();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -40,6 +40,7 @@ const MembersTab = ({ ctx }) => {
   const [loginEmail, setLoginEmail] = useState('');
   const [creating, setCreating] = useState(false);
   const [credentials, setCredentials] = useState(null); // { email, password } shown once
+  const [emailStatus, setEmailStatus] = useState(null); // { state: 'sending'|'sent'|'failed', error? }
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
@@ -51,6 +52,7 @@ const MembersTab = ({ ctx }) => {
     setLoginMode('create');
     setLoginEmail(m.email || '');
     setCredentials(null);
+    setEmailStatus(null);
   };
 
   const openResetLogin = (m) => {
@@ -58,15 +60,16 @@ const MembersTab = ({ ctx }) => {
     setLoginMode('reset');
     setLoginEmail(m.email || '');
     setCredentials(null);
+    setEmailStatus(null);
   };
 
-  const callAuthFunction = async (body) => {
+  const callFunction = async (fn, body) => {
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
     if (!token) throw new Error('No active session.');
     const rawUrl = import.meta.env.VITE_SUPABASE_URL || '';
     const supabaseUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}.supabase.co`;
-    const res = await fetch(`${supabaseUrl}/functions/v1/create-staff-user`, {
+    const res = await fetch(`${supabaseUrl}/functions/v1/${fn}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -78,6 +81,32 @@ const MembersTab = ({ ctx }) => {
     const json = await res.json();
     if (!res.ok) throw new Error(json?.error || 'Request failed');
     return json;
+  };
+
+  const callAuthFunction = (body) => callFunction('create-staff-user', body);
+
+  // Email the credentials to the member automatically (Resend via send-email).
+  // Non-fatal: the modal still shows the password so the admin can share it
+  // manually if delivery fails.
+  const emailCredentials = async (member, { email, password }) => {
+    setEmailStatus({ state: 'sending' });
+    try {
+      await callFunction('send-email', {
+        type: 'sacco_member_welcome',
+        to: email,
+        data: {
+          fullName: member.full_name,
+          email,
+          password,
+          memberNo: member.member_no,
+          saccoName: sacco?.name,
+          portalUrl: `${window.location.origin}/login`,
+        },
+      });
+      setEmailStatus({ state: 'sent' });
+    } catch (e) {
+      setEmailStatus({ state: 'failed', error: e.message });
+    }
   };
 
   const createLogin = async () => {
@@ -100,6 +129,7 @@ const MembersTab = ({ ctx }) => {
       setCredentials({ email, password });
       toast.success('Member login created.');
       refreshMembers();
+      emailCredentials(loginFor, { email, password }); // fire-and-forget; status shown in the modal
     } catch (e) {
       toast.error(e.message || 'Could not create the login.');
     } finally {
@@ -116,8 +146,10 @@ const MembersTab = ({ ctx }) => {
         sacco_member_id: loginFor.id,
         password,
       });
-      setCredentials({ email: json.email || loginFor.email, password });
+      const email = json.email || loginFor.email;
+      setCredentials({ email, password });
       toast.success('Password reset.');
+      if (email) emailCredentials(loginFor, { email, password });
     } catch (e) {
       toast.error(e.message || 'Could not reset the password.');
     } finally {
@@ -259,14 +291,36 @@ const MembersTab = ({ ctx }) => {
             <div className="flex items-center gap-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
               <Icon name="CheckCircle2" size={20} color="#059669" />
               <p className="text-sm text-foreground">
-                Share these credentials with the member. The password is shown <strong>only once</strong> —
-                copy it before closing this window.
+                This is a <strong>temporary password</strong> — the member will be required to set their
+                own password on first login. It is shown here <strong>only once</strong>.
               </p>
             </div>
             <div className="space-y-2 text-sm">
               <p><span className="text-muted-foreground">Email:</span> <span className="font-mono text-foreground">{credentials.email}</span></p>
               <p><span className="text-muted-foreground">Password:</span> <span className="font-mono text-foreground">{credentials.password}</span></p>
             </div>
+            {emailStatus?.state === 'sending' && (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-muted border border-border">
+                <Icon name="Mail" size={16} color="currentColor" />
+                <p className="text-xs text-muted-foreground">Emailing these credentials to {credentials.email}…</p>
+              </div>
+            )}
+            {emailStatus?.state === 'sent' && (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-sky-50 border border-sky-200">
+                <Icon name="MailCheck" size={16} color="#0284c7" />
+                <p className="text-xs text-foreground">
+                  Credentials emailed to <strong>{credentials.email}</strong>.
+                </p>
+              </div>
+            )}
+            {emailStatus?.state === 'failed' && (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+                <Icon name="AlertTriangle" size={16} color="#ca8a04" />
+                <p className="text-xs text-foreground">
+                  The email could not be sent ({emailStatus.error}). Share the credentials manually.
+                </p>
+              </div>
+            )}
             <GhostButton icon="Copy" onClick={copyCredentials}>Copy credentials</GhostButton>
           </div>
         ) : loginMode === 'reset' ? (
@@ -274,13 +328,16 @@ const MembersTab = ({ ctx }) => {
             This generates a <strong className="text-foreground">new temporary password</strong> for{' '}
             <strong className="text-foreground">{loginFor?.full_name}</strong>
             {loginEmail ? <> (login: <span className="font-mono">{loginEmail}</span>)</> : null}.
-            Their old password stops working immediately.
+            Their old password stops working immediately, the new one is emailed to them, and they
+            must replace it with their own on next login.
           </p>
         ) : (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              The member signs in with this email and a generated temporary password, and
-              gets their own portal: contributions, loans, shares, voting, contracts and documents.
+              The member signs in with this email and a generated temporary password, which is
+              <strong className="text-foreground"> emailed to them automatically</strong>. They must set
+              their own password on first login, then get their own portal: contributions, loans,
+              shares, voting, contracts and documents.
             </p>
             <Field label="Login email *">
               <TextInput value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="member@example.com" />

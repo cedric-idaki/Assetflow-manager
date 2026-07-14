@@ -129,7 +129,9 @@ Deno.serve(async (req) => {
       }
       const { error: resetErr } = await adminClient.auth.admin.updateUserById(
         memberRow.user_id,
-        { password },
+        // The new password is temporary too: flag the account so the member
+        // portal forces the member to set their own password on next login.
+        { password, user_metadata: { must_change_password: true } },
       );
       if (resetErr) throw resetErr;
       return json({ success: true, email: memberRow.email, full_name: memberRow.full_name }, 200);
@@ -162,6 +164,9 @@ Deno.serve(async (req) => {
         department: department || null,
         admin_id:   admin_id || null,
         created_by: caller.id,
+        // Sacco member portal logins are issued with a temporary password;
+        // the portal blocks access until the member replaces it.
+        ...(role === 'sacco_member' ? { must_change_password: true } : {}),
       },
     });
 
