@@ -33,6 +33,10 @@ export const SaccoMemberProvider = ({ children }) => {
   const [transfers,     setTransfers]     = useState([]);
   const [motions,       setMotions]       = useState([]);
   const [votes,         setVotes]         = useState([]);
+  const [elections,          setElections]          = useState([]);
+  const [electionPositions,  setElectionPositions]  = useState([]);
+  const [electionCandidates, setElectionCandidates] = useState([]);
+  const [myVoterRows,        setMyVoterRows]        = useState([]); // RLS: own register rows only
   const [documents,     setDocuments]     = useState([]);
   const [contracts,     setContracts]     = useState([]);
   const [loading,       setLoading]       = useState(true);
@@ -118,6 +122,31 @@ export const SaccoMemberProvider = ({ children }) => {
     setVotes(data || []);
   }, []);
 
+  const fetchElections = useCallback(async () => {
+    const { data } = await supabase.from('sacco_elections').select('*')
+      .order('created_at', { ascending: false });
+    setElections(data || []);
+  }, []);
+
+  const fetchElectionPositions = useCallback(async () => {
+    const { data } = await supabase.from('sacco_election_positions').select('*')
+      .order('display_order', { ascending: true });
+    setElectionPositions(data || []);
+  }, []);
+
+  const fetchElectionCandidates = useCallback(async () => {
+    // Two FKs point at sacco_members, so both joins must be disambiguated.
+    const { data } = await supabase.from('sacco_election_candidates')
+      .select('*, member:sacco_members!member_id(id, full_name, member_no), nominator:sacco_members!nominated_by(full_name)')
+      .order('created_at', { ascending: false });
+    setElectionCandidates(data || []);
+  }, []);
+
+  const fetchMyVoterRows = useCallback(async () => {
+    const { data } = await supabase.from('sacco_election_voters').select('*');
+    setMyVoterRows(data || []);
+  }, []);
+
   const fetchDocuments = useCallback(async () => {
     const { data } = await supabase.from('sacco_documents').select('*')
       .order('created_at', { ascending: false });
@@ -139,12 +168,14 @@ export const SaccoMemberProvider = ({ children }) => {
       fetchMembers(), fetchContributions(), fetchLoanProducts(), fetchLoans(),
       fetchSchedules(), fetchShares(), fetchListings(), fetchTransfers(),
       fetchMotions(), fetchVotes(), fetchDocuments(), fetchContracts(meRow?.id),
+      fetchElections(), fetchElectionPositions(), fetchElectionCandidates(), fetchMyVoterRows(),
     ]);
     setLoading(false);
   }, [
     fetchMe, fetchSacco, fetchMembers, fetchContributions, fetchLoanProducts,
     fetchLoans, fetchSchedules, fetchShares, fetchListings, fetchTransfers,
     fetchMotions, fetchVotes, fetchDocuments, fetchContracts,
+    fetchElections, fetchElectionPositions, fetchElectionCandidates, fetchMyVoterRows,
   ]);
 
   // ── Derived stats (portal home mini-cards, BRS 5.1) ───────────────────────
@@ -159,8 +190,16 @@ export const SaccoMemberProvider = ({ children }) => {
   const myShares = shares[0] || null;
   const shareValue = (parseInt(myShares?.shares_held, 10) || 0) * parseFloat(myShares?.par_value || 0);
   const openMotions = motions.filter((m) => m.status === 'open').length;
+  // Elections needing my attention: open nominations, or an open ballot I'm
+  // registered for and haven't cast yet.
+  const openElections = elections.filter((e) => {
+    if (e.status === 'nominations_open') return true;
+    if (e.status !== 'voting_open') return false;
+    const reg = myVoterRows.find((r) => r.election_id === e.id);
+    return !!reg && !reg.voted_at;
+  }).length;
 
-  const stats = { totalSavings, loanBalance, nextDue, shareValue, openMotions };
+  const stats = { totalSavings, loanBalance, nextDue, shareValue, openMotions, openElections };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const updateProfile = useCallback(async (patch) => {
@@ -256,6 +295,60 @@ export const SaccoMemberProvider = ({ children }) => {
     return data?.[0] || { yes_count: 0, no_count: 0, abstain_count: 0, total_votes: 0 };
   }, []);
 
+  // ── Elections (polling station) ────────────────────────────────────────────
+  const nominateCandidate = useCallback(async (form) => {
+    const { error } = await supabase.from('sacco_election_candidates').insert({
+      admin_id: me?.admin_id, sacco_id: me?.sacco_id,
+      election_id: form.election_id, position_id: form.position_id,
+      member_id: form.member_id || me?.id,       // self-nomination by default
+      nominated_by: me?.id, status: 'pending',
+      manifesto: form.manifesto || '',
+    });
+    if (error) throw error;
+    await fetchElectionCandidates();
+  }, [me, fetchElectionCandidates]);
+
+  const withdrawCandidacy = useCallback(async (candidate) => {
+    const { error } = await supabase.from('sacco_election_candidates')
+      .update({ status: 'withdrawn', updated_at: new Date().toISOString() })
+      .eq('id', candidate.id);
+    if (error) throw error;
+    await fetchElectionCandidates();
+  }, [fetchElectionCandidates]);
+
+  // Cast the ballot — one atomic RPC, final once cast. Returns the anonymous
+  // receipt code; this is the ONLY time it is ever revealed (the DB keeps no
+  // link between the member and their ballot).
+  const castBallot = useCallback(async (electionId, choices) => {
+    const { data, error } = await supabase.rpc('sacco_election_cast_ballot', {
+      p_election_id: electionId, p_choices: choices,
+    });
+    if (error) throw error;
+    await fetchMyVoterRows();
+    return data;
+  }, [fetchMyVoterRows]);
+
+  // Aggregate results — the DB returns nothing until they're published.
+  const getElectionTally = useCallback(async (electionId) => {
+    const { data, error } = await supabase.rpc('sacco_election_tally', { p_election_id: electionId });
+    if (error) throw error;
+    return data || [];
+  }, []);
+
+  const getElectionTurnout = useCallback(async (electionId) => {
+    const { data, error } = await supabase.rpc('sacco_election_turnout', { p_election_id: electionId });
+    if (error) throw error;
+    return data?.[0] || { registered: 0, voted: 0, percent: 0 };
+  }, []);
+
+  const verifyReceipt = useCallback(async (electionId, code) => {
+    const { data, error } = await supabase.rpc('sacco_election_verify_receipt', {
+      p_election_id: electionId, p_receipt: code,
+    });
+    if (error) throw error;
+    return data || [];
+  }, []);
+
   // ── CSV export (same helper as the sacco dashboard) ───────────────────────
   const exportCSV = useCallback((data, filename) => {
     if (!data || data.length === 0) return;
@@ -295,6 +388,9 @@ export const SaccoMemberProvider = ({ children }) => {
       mk('listings', 'sacco_share_listings', fetchListings),
       mk('motions', 'sacco_motions', fetchMotions),
       mk('votes', 'sacco_votes', fetchVotes),
+      mk('elections', 'sacco_elections', fetchElections),
+      mk('elect_cands', 'sacco_election_candidates', fetchElectionCandidates),
+      mk('elect_voters', 'sacco_election_voters', fetchMyVoterRows),
     ];
     channelsRef.current = chs;
     return () => {
@@ -306,11 +402,14 @@ export const SaccoMemberProvider = ({ children }) => {
   const value = {
     me, sacco, members, contributions, loanProducts, loans, schedules,
     shares: myShares, listings, transfers, motions, votes, documents, contracts,
+    elections, electionPositions, electionCandidates, myVoterRows,
     stats, loading,
     refetch: fetchAll,
     updateProfile, applyLoan,
     createListing, cancelListing, buyListing,
     proposeMotion, secondMotion, castVote, getMotionResults,
+    nominateCandidate, withdrawCandidacy, castBallot,
+    getElectionTally, getElectionTurnout, verifyReceipt,
     exportCSV,
   };
 

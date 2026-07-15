@@ -62,6 +62,10 @@ const BADGE_TONES = {
   suspended: 'bg-red-100 text-red-700', rejected: 'bg-red-100 text-red-700',
   open: 'bg-sky-100 text-sky-700', proposed: 'bg-sky-100 text-sky-700',
   seconded: 'bg-indigo-100 text-indigo-700', draft: 'bg-slate-100 text-slate-600',
+  nominations_open: 'bg-sky-100 text-sky-700', nominations_closed: 'bg-indigo-100 text-indigo-700',
+  voting_open: 'bg-emerald-100 text-emerald-700', voting_closed: 'bg-amber-100 text-amber-700',
+  results_published: 'bg-emerald-100 text-emerald-700', cancelled: 'bg-red-100 text-red-700',
+  withdrawn: 'bg-slate-100 text-slate-600',
 };
 export const Badge = ({ status }) => (
   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize ${BADGE_TONES[status] || 'bg-slate-100 text-slate-600'}`}>

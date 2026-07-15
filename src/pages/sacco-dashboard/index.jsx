@@ -11,6 +11,7 @@ import ContributionsTab from './components/ContributionsTab';
 import LoansTab         from './components/LoansTab';
 import SharesTab        from './components/SharesTab';
 import VotingTab        from './components/VotingTab';
+import ElectionsTab     from './components/ElectionsTab';
 import GovernanceTab    from './components/GovernanceTab';
 import SaccoContractsTab from './components/SaccoContractsTab';
 import BillingTab       from './components/BillingTab';
@@ -61,6 +62,7 @@ const SaccoDashboard = () => {
     { id: 'loans',         label: 'Loans',         icon: 'Banknote' },
     { id: 'shares',        label: 'Shares',        icon: 'PieChart' },
     { id: 'voting',        label: 'Voting',        icon: 'Vote',       badge: stats.openMotions },
+    { id: 'elections',     label: 'Elections',     icon: 'Award',      badge: (stats.activeElections || 0) + (stats.pendingCandidates || 0) },
     { id: 'governance',    label: 'Governance',    icon: 'ScrollText' },
     { id: 'contracts',     label: 'Contracts',     icon: 'FileText' },
     { id: 'billing',       label: 'Billing',       icon: 'CreditCard' },
@@ -128,6 +130,7 @@ const SaccoDashboard = () => {
             {activeTab === 'loans'         && <LoansTab ctx={ctx} />}
             {activeTab === 'shares'        && <SharesTab ctx={ctx} />}
             {activeTab === 'voting'        && <VotingTab ctx={ctx} />}
+            {activeTab === 'elections'     && <ElectionsTab ctx={ctx} />}
             {activeTab === 'governance'    && <GovernanceTab ctx={ctx} />}
             {activeTab === 'contracts'     && <SaccoContractsTab />}
             {activeTab === 'billing'       && <BillingTab ctx={ctx} />}

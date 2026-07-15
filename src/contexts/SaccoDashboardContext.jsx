@@ -28,6 +28,7 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [sacco,         setSacco]         = useState(null);
   const [members,       setMembers]       = useState([]);
   const [contributions, setContributions] = useState([]);
+  const [contributionTypes, setContributionTypes] = useState([]);
   const [loanProducts,  setLoanProducts]  = useState([]);
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
@@ -36,6 +37,11 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [transfers,     setTransfers]     = useState([]);
   const [motions,       setMotions]       = useState([]);
   const [votes,         setVotes]         = useState([]);
+  const [elections,          setElections]          = useState([]);
+  const [electionPositions,  setElectionPositions]  = useState([]);
+  const [electionCandidates, setElectionCandidates] = useState([]);
+  const [electionVoters,     setElectionVoters]     = useState([]);
+  const [electionAudit,      setElectionAudit]      = useState([]);
   const [documents,     setDocuments]     = useState([]);
   const [invoices,      setInvoices]      = useState([]);
   const [loading,       setLoading]       = useState(true);
@@ -74,6 +80,15 @@ export const SaccoDashboardProvider = ({ children }) => {
         .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId)
         .order('created_at', { ascending: false });
       setContributions(data || []);
+    } catch (_) {}
+  }, []);
+
+  const fetchContributionTypes = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_contribution_types').select('*')
+        .eq('admin_id', adminId).order('created_at', { ascending: false });
+      setContributionTypes(data || []);
     } catch (_) {}
   }, []);
 
@@ -152,6 +167,53 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  const fetchElections = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_elections').select('*')
+        .eq('admin_id', adminId).order('created_at', { ascending: false });
+      setElections(data || []);
+    } catch (_) {}
+  }, []);
+
+  const fetchElectionPositions = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_election_positions').select('*')
+        .eq('admin_id', adminId).order('display_order', { ascending: true });
+      setElectionPositions(data || []);
+    } catch (_) {}
+  }, []);
+
+  const fetchElectionCandidates = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      // Two FKs point at sacco_members, so both joins must be disambiguated.
+      const { data } = await supabase.from('sacco_election_candidates')
+        .select('*, member:sacco_members!member_id(id, full_name, member_no), nominator:sacco_members!nominated_by(full_name)')
+        .eq('admin_id', adminId).order('created_at', { ascending: false });
+      setElectionCandidates(data || []);
+    } catch (_) {}
+  }, []);
+
+  const fetchElectionVoters = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_election_voters').select('*')
+        .eq('admin_id', adminId).order('full_name', { ascending: true });
+      setElectionVoters(data || []);
+    } catch (_) {}
+  }, []);
+
+  const fetchElectionAudit = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_election_audit').select('*')
+        .eq('admin_id', adminId).order('created_at', { ascending: false });
+      setElectionAudit(data || []);
+    } catch (_) {}
+  }, []);
+
   const fetchDocuments = useCallback(async () => {
     try {
       const adminId = await getAdminId();
@@ -173,16 +235,20 @@ export const SaccoDashboardProvider = ({ children }) => {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     await Promise.all([
-      fetchSacco(), fetchMembers(), fetchContributions(), fetchLoanProducts(),
-      fetchLoans(), fetchSchedules(), fetchShares(), fetchListings(),
+      fetchSacco(), fetchMembers(), fetchContributions(), fetchContributionTypes(),
+      fetchLoanProducts(), fetchLoans(), fetchSchedules(), fetchShares(), fetchListings(),
       fetchTransfers(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
+      fetchElections(), fetchElectionPositions(), fetchElectionCandidates(),
+      fetchElectionVoters(), fetchElectionAudit(),
     ]);
     hasLoaded.current = true;
     setLoading(false);
   }, [
-    fetchSacco, fetchMembers, fetchContributions, fetchLoanProducts, fetchLoans,
-    fetchSchedules, fetchShares, fetchListings, fetchTransfers, fetchMotions,
-    fetchVotes, fetchDocuments, fetchInvoices,
+    fetchSacco, fetchMembers, fetchContributions, fetchContributionTypes,
+    fetchLoanProducts, fetchLoans, fetchSchedules, fetchShares, fetchListings,
+    fetchTransfers, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
+    fetchElections, fetchElectionPositions, fetchElectionCandidates,
+    fetchElectionVoters, fetchElectionAudit,
   ]);
 
   // ── Derived stats ───────────────────────────────────────────────────────────
@@ -203,6 +269,8 @@ export const SaccoDashboardProvider = ({ children }) => {
     tier: tierForMembers(activeMembers),
     billing: calculateMonthlyBill({ members: activeMembers, storageGb: sacco?.storage_used_gb || 0, tier: sacco?.tier }),
     openMotions: motions.filter((m) => m.status === 'open').length,
+    activeElections: elections.filter((e) => ['nominations_open', 'voting_open'].includes(e.status)).length,
+    pendingCandidates: electionCandidates.filter((c) => c.status === 'pending').length,
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -246,6 +314,27 @@ export const SaccoDashboardProvider = ({ children }) => {
     if (error) throw error;
     await fetchContributions();
   }, [saccoId, fetchContributions]);
+
+  const createContributionType = useCallback(async (form) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_contribution_types').insert({
+      admin_id: adminId, sacco_id: saccoId, name: form.name.trim(),
+      description: form.description || '',
+      suggested_amount: parseFloat(form.suggested_amount) || 0,
+      frequency: form.frequency || 'one-off',
+      due_date: form.due_date || null,
+      is_active: true,
+    });
+    if (error) throw error;
+    await fetchContributionTypes();
+  }, [saccoId, fetchContributionTypes]);
+
+  const updateContributionType = useCallback(async (id, patch) => {
+    const { error } = await supabase.from('sacco_contribution_types')
+      .update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw error;
+    await fetchContributionTypes();
+  }, [fetchContributionTypes]);
 
   const createLoanProduct = useCallback(async (form) => {
     const adminId = await getAdminId();
@@ -459,6 +548,203 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchMotions();
   }, [votes, fetchMotions]);
 
+  // ── Elections lifecycle (polling station) ──────────────────────────────────
+  // Every state transition runs through a SECURITY DEFINER RPC (see
+  // 20260715120000_sacco_elections.sql): the DB freezes the voter register,
+  // stores ballots with no voter identity and computes the tally. Direct
+  // writes to status/register/ballots are refused at trigger level, so the
+  // client can only ask — never tamper.
+
+  const refreshElections = useCallback(async () => {
+    await Promise.all([
+      fetchElections(), fetchElectionPositions(), fetchElectionCandidates(),
+      fetchElectionVoters(), fetchElectionAudit(),
+    ]);
+  }, [fetchElections, fetchElectionPositions, fetchElectionCandidates, fetchElectionVoters, fetchElectionAudit]);
+
+  const electionRpc = useCallback(async (fn, electionId) => {
+    const { data, error } = await supabase.rpc(fn, { p_election_id: electionId });
+    if (error) throw error;
+    return data;
+  }, []);
+
+  const createElection = useCallback(async (form) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_elections').insert({
+      admin_id: adminId, sacco_id: saccoId, title: form.title,
+      description: form.description || '',
+      quorum_percent: parseInt(form.quorum_percent, 10) || 0,
+    });
+    if (error) throw error;
+    await Promise.all([fetchElections(), fetchElectionAudit()]);
+  }, [saccoId, fetchElections, fetchElectionAudit]);
+
+  const updateElection = useCallback(async (id, patch) => {
+    const { error } = await supabase.from('sacco_elections')
+      .update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw error;
+    await fetchElections();
+  }, [fetchElections]);
+
+  // Drafts only — later stages are history and can only be cancelled (DB-enforced).
+  const deleteElection = useCallback(async (id) => {
+    const { error } = await supabase.from('sacco_elections').delete().eq('id', id);
+    if (error) throw error;
+    await refreshElections();
+  }, [refreshElections]);
+
+  const addElectionPosition = useCallback(async (electionId, form) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_election_positions').insert({
+      admin_id: adminId, sacco_id: saccoId, election_id: electionId,
+      title: form.title, description: form.description || '',
+      seats: Math.max(1, parseInt(form.seats, 10) || 1),
+      display_order: parseInt(form.display_order, 10) || 0,
+    });
+    if (error) throw error;
+    await fetchElectionPositions();
+  }, [saccoId, fetchElectionPositions]);
+
+  const updateElectionPosition = useCallback(async (id, patch) => {
+    const { error } = await supabase.from('sacco_election_positions')
+      .update(patch).eq('id', id);
+    if (error) throw error;
+    await fetchElectionPositions();
+  }, [fetchElectionPositions]);
+
+  const deleteElectionPosition = useCallback(async (id) => {
+    const { error } = await supabase.from('sacco_election_positions').delete().eq('id', id);
+    if (error) throw error;
+    await Promise.all([fetchElectionPositions(), fetchElectionCandidates()]);
+  }, [fetchElectionPositions, fetchElectionCandidates]);
+
+  const openNominations = useCallback(async (electionId) => {
+    await electionRpc('sacco_election_open_nominations', electionId);
+    await refreshElections();
+  }, [electionRpc, refreshElections]);
+
+  const closeNominations = useCallback(async (electionId) => {
+    await electionRpc('sacco_election_close_nominations', electionId);
+    await refreshElections();
+  }, [electionRpc, refreshElections]);
+
+  // Freezes the voter register (active members at this instant). Returns the
+  // register size the DB reported.
+  const openElectionVoting = useCallback(async (electionId) => {
+    const registerSize = await electionRpc('sacco_election_open_voting', electionId);
+    await refreshElections();
+    return registerSize;
+  }, [electionRpc, refreshElections]);
+
+  const closeElectionVoting = useCallback(async (electionId) => {
+    await electionRpc('sacco_election_close_voting', electionId);
+    await refreshElections();
+  }, [electionRpc, refreshElections]);
+
+  const publishElectionResults = useCallback(async (electionId) => {
+    const results = await electionRpc('sacco_election_publish_results', electionId);
+    await refreshElections();
+    return results;
+  }, [electionRpc, refreshElections]);
+
+  const cancelElection = useCallback(async (electionId) => {
+    await electionRpc('sacco_election_cancel', electionId);
+    await refreshElections();
+  }, [electionRpc, refreshElections]);
+
+  const approveCandidate = useCallback(async (candidate) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_election_candidates').update({
+      status: 'approved', vetted_by: adminId,
+      vetted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq('id', candidate.id);
+    if (error) throw error;
+    await Promise.all([fetchElectionCandidates(), fetchElectionAudit()]);
+  }, [fetchElectionCandidates, fetchElectionAudit]);
+
+  const rejectCandidate = useCallback(async (candidate) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_election_candidates').update({
+      status: 'rejected', vetted_by: adminId,
+      vetted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq('id', candidate.id);
+    if (error) throw error;
+    await Promise.all([fetchElectionCandidates(), fetchElectionAudit()]);
+  }, [fetchElectionCandidates, fetchElectionAudit]);
+
+  // Admin adds a candidate directly (already vetted, nominated_by = null).
+  const addCandidateDirect = useCallback(async (form) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_election_candidates').insert({
+      admin_id: adminId, sacco_id: saccoId,
+      election_id: form.election_id, position_id: form.position_id,
+      member_id: form.member_id, nominated_by: null,
+      status: 'approved', manifesto: form.manifesto || '',
+      vetted_by: adminId, vetted_at: new Date().toISOString(),
+    });
+    if (error) throw error;
+    await Promise.all([fetchElectionCandidates(), fetchElectionAudit()]);
+  }, [saccoId, fetchElectionCandidates, fetchElectionAudit]);
+
+  // Aggregate tally (post-close preview + published view). Empty while voting
+  // is open — the DB refuses early counts for everyone.
+  const getElectionTally = useCallback(async (electionId) => {
+    const { data, error } = await supabase.rpc('sacco_election_tally', { p_election_id: electionId });
+    if (error) throw error;
+    return data || [];
+  }, []);
+
+  const verifyElectionReceipt = useCallback(async (electionId, code) => {
+    const { data, error } = await supabase.rpc('sacco_election_verify_receipt', {
+      p_election_id: electionId, p_receipt: code,
+    });
+    if (error) throw error;
+    return data || [];
+  }, []);
+
+  // Edge-function caller (same shape as MembersTab's callFunction).
+  const callFunction = useCallback(async (fn, body) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('No active session.');
+    const rawUrl = import.meta.env.VITE_SUPABASE_URL || '';
+    const supabaseUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}.supabase.co`;
+    const res = await fetch(`${supabaseUrl}/functions/v1/${fn}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error || 'Request failed');
+    return json;
+  }, []);
+
+  // Email every active member about an election event. One email per
+  // recipient (a shared `to` array would leak addresses to everyone).
+  // Callers fire-and-forget: delivery failures never block the lifecycle.
+  const notifyElection = useCallback(async (type, election, extra = {}) => {
+    const recipients = members.filter((m) => m.status === 'active' && m.email);
+    if (recipients.length === 0) return { sent: 0, failed: 0 };
+    const results = await Promise.allSettled(recipients.map((m) =>
+      callFunction('send-email', {
+        type,
+        to: m.email,
+        data: {
+          fullName: m.full_name,
+          saccoName: sacco?.name,
+          electionTitle: election.title,
+          portalUrl: `${window.location.origin}/login`,
+          ...extra,
+        },
+      })));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    return { sent: results.length - failed, failed };
+  }, [members, sacco?.name, callFunction]);
+
   const uploadDocument = useCallback(async (form) => {
     const adminId = await getAdminId();
     const { error } = await supabase.from('sacco_documents').insert({
@@ -509,6 +795,10 @@ export const SaccoDashboardProvider = ({ children }) => {
       mk('shares', 'sacco_shares', fetchShares),
       mk('motions', 'sacco_motions', fetchMotions),
       mk('votes', 'sacco_votes', fetchVotes),
+      mk('elections', 'sacco_elections', fetchElections),
+      mk('elect_pos', 'sacco_election_positions', fetchElectionPositions),
+      mk('elect_cands', 'sacco_election_candidates', () => { fetchElectionCandidates(); fetchElectionAudit(); }),
+      mk('elect_voters', 'sacco_election_voters', fetchElectionVoters),  // live turnout
     ];
     channelsRef.current = chs;
     return () => {
@@ -518,17 +808,25 @@ export const SaccoDashboardProvider = ({ children }) => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
-    sacco, members, contributions, loanProducts, loans, schedules,
+    sacco, members, contributions, contributionTypes, loanProducts, loans, schedules,
     shares, listings, transfers, motions, votes, documents, invoices,
+    elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     stats, loading, connectionStatus,
     refetch: fetchAll,
     // Refresh the members list WITHOUT flipping the dashboard into its loading
     // skeleton (fetchAll would unmount the active tab and kill open modals).
     refreshMembers: fetchMembers,
     addMember, updateMember, recordContribution,
+    createContributionType, updateContributionType,
     createLoanProduct, createLoan, approveLoan, rejectLoan, recordRepayment,
     saveShares, createListing, requestTransfer, approveTransfer,
     createMotion, secondMotion, openVoting, castVote, publishResults,
+    createElection, updateElection, deleteElection,
+    addElectionPosition, updateElectionPosition, deleteElectionPosition,
+    openNominations, closeNominations, openElectionVoting, closeElectionVoting,
+    publishElectionResults, cancelElection,
+    approveCandidate, rejectCandidate, addCandidateDirect,
+    getElectionTally, verifyElectionReceipt, notifyElection, refreshElections,
     uploadDocument, exportCSV,
   };
 

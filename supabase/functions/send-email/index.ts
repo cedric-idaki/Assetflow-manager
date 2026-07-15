@@ -419,6 +419,134 @@ const buildMemberCredentialsEmail = (data: any) => {
 </body></html>`;
 };
 
+const buildElectionNominationsOpenEmail = (data: any) => {
+  const { fullName, saccoName, electionTitle, positions, portalUrl } = data;
+  const positionItems = (positions || []).map((p: any) =>
+    `<li style="margin:0 0 6px;font-size:14px;color:#374151"><strong>${p.title || p}</strong>${p.seats > 1 ? ` — ${p.seats} seats` : ""}</li>`
+  ).join("");
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">📋</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Nominations are open</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${electionTitle || "Sacco election"}${saccoName ? ` · ${saccoName}` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      Nominations are now open for <strong>${electionTitle || "your sacco's election"}</strong>.
+      You can stand for a position yourself or nominate a fellow member from the member portal.
+      All nominations are vetted before the candidate list is confirmed.
+    </p>
+    ${positionItems ? `
+    <h3 style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 12px">Positions up for election</h3>
+    <ul style="margin:0 0 24px;padding-left:20px">${positionItems}</ul>` : ""}
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Open the member portal</a>
+    </div>` : ""}
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#6b7280">You are receiving this because you are a member of <strong>${saccoName || "your sacco"}</strong>.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
+const buildElectionVotingOpenEmail = (data: any) => {
+  const { fullName, saccoName, electionTitle, portalUrl } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🗳️</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Voting is open</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${electionTitle || "Sacco election"}${saccoName ? ` · ${saccoName}` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      Voting is now open for <strong>${electionTitle || "your sacco's election"}</strong>.
+      Sign in to the member portal to cast your ballot.
+    </p>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px;margin-bottom:24px">
+      <p style="margin:0;font-size:13px;color:#065f46;line-height:1.6">
+        <strong>Your vote is secret and final.</strong> Your ballot is stored with no link to your identity —
+        after voting you'll receive an anonymous receipt code you can use at any time to confirm your
+        ballot was counted exactly as you cast it.
+      </p>
+    </div>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Cast your ballot</a>
+    </div>` : ""}
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#6b7280">Every vote counts towards quorum — results are published only after voting closes.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
+const buildElectionResultsEmail = (data: any) => {
+  const { fullName, saccoName, electionTitle, winners, turnoutPercent, quorumMet, hasTies, portalUrl } = data;
+  const winnerRows = (winners || []).map((w: any) => `
+    <tr>
+      <td style="padding:10px 0;color:#374151;font-size:14px;border-bottom:1px solid #f3f4f6">${w.position}</td>
+      <td style="padding:10px 0;color:#111827;font-size:14px;font-weight:700;text-align:right;border-bottom:1px solid #f3f4f6">${w.tie ? '<span style="color:#d97706">Tie — runoff required</span>' : w.name}</td>
+    </tr>`).join("");
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🏆</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Results published</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${electionTitle || "Sacco election"}${saccoName ? ` · ${saccoName}` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      The results of <strong>${electionTitle || "your sacco's election"}</strong> have been published.
+      Full per-candidate counts and the election audit trail are available in the member portal.
+    </p>
+    ${winnerRows ? `
+    <h3 style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 12px">Elected</h3>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px">${winnerRows}</table>` : ""}
+    <div style="display:flex;gap:12px;margin-bottom:24px">
+      <div style="flex:1;background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:center">
+        <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase">Turnout</p>
+        <p style="margin:0;font-size:16px;font-weight:800;color:#111827">${turnoutPercent != null ? `${turnoutPercent}%` : "—"}</p>
+      </div>
+      <div style="flex:1;background:${quorumMet ? "#f0fdf4" : "#fef2f2"};border:1px solid ${quorumMet ? "#bbf7d0" : "#fecaca"};border-radius:10px;padding:14px;text-align:center">
+        <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase">Quorum</p>
+        <p style="margin:0;font-size:16px;font-weight:800;color:${quorumMet ? "#059669" : "#dc2626"}">${quorumMet ? "Met" : "Not met"}</p>
+      </div>
+    </div>
+    ${hasTies ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;text-align:center;margin-bottom:24px">
+      <p style="margin:0;font-size:13px;color:#92400e">One or more positions ended in a tie. No winner is declared for a tied seat — a runoff election will follow.</p>
+    </div>` : ""}
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">View full results</a>
+    </div>` : ""}
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#6b7280">Voted? You can verify your ballot any time with your receipt code in the portal.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 const buildSigningOtpEmail = (data: any) => {
   const { signerName, code, documentName, expiresMinutes } = data;
   const digits = String(code || "").split("").map((d: string) =>
@@ -570,6 +698,18 @@ serve(async (req) => {
       case "sacco_member_welcome":
         subject = `Your ${data?.saccoName ? `${data.saccoName} ` : ""}member portal login`;
         html = buildMemberCredentialsEmail(data);
+        break;
+      case "sacco_election_nominations_open":
+        subject = `Nominations open – ${data?.electionTitle || "sacco election"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
+        html = buildElectionNominationsOpenEmail(data);
+        break;
+      case "sacco_election_voting_open":
+        subject = `🗳️ Voting is open – ${data?.electionTitle || "sacco election"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
+        html = buildElectionVotingOpenEmail(data);
+        break;
+      case "sacco_election_results":
+        subject = `Results published – ${data?.electionTitle || "sacco election"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
+        html = buildElectionResultsEmail(data);
         break;
       case "staff_welcome":
         subject = `Your ${data?.companyName ? `${data.companyName} ` : ""}staff portal login`;
