@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import MainLayout from '../../layouts/MainLayout';
+import ClosePageButton from '../../components/ui/ClosePageButton';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
+import { generateTempPassword } from '../../services/credentialsEmailService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -292,7 +294,8 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         // New employee: must go through the Edge Function to satisfy user_profiles_id_fkey.
         // A strong random password is auto-generated — HR never sees it and the employee
         // receives no credentials. This is a payroll record, not a login account.
-        const autoPassword = `${Date.now()}-${Math.random().toString(36).substring(2)}-${Math.random().toString(36).substring(2)}`;
+        // Must satisfy the password policy now enforced by the edge function.
+        const autoPassword = generateTempPassword();
 
         const { data: sessionData } = await supabase.auth.getSession();
         const accessToken = sessionData?.session?.access_token;
@@ -1389,9 +1392,12 @@ const HRPage = () => {
             <h1 className="text-2xl font-black text-foreground tracking-tight">HR Management</h1>
             <p className="text-sm text-muted-foreground mt-1">Employee records, compensation and statutory details</p>
           </div>
-          <button className={S.btnPri} onClick={() => openModal('hrEmployee', true)}>
-            <Icon name="UserPlus" size={15} color="currentColor" /> Add Employee
-          </button>
+          <div className="flex items-center gap-2">
+            <button className={S.btnPri} onClick={() => openModal('hrEmployee', true)}>
+              <Icon name="UserPlus" size={15} color="currentColor" /> Add Employee
+            </button>
+            <ClosePageButton label="Close HR Management" />
+          </div>
         </div>
 
         {/* KPI strip */}

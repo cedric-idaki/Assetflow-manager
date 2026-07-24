@@ -8,6 +8,7 @@ import PenaltyCalculationPanel from './components/PenaltyCalculationPanel';
 import RecurringBillingPanel from './components/RecurringBillingPanel';
 import PaymentAlertsPanel from './components/PaymentAlertsPanel';
 import MainLayout from '../../layouts/MainLayout';
+import ClosePageButton from '../../components/ui/ClosePageButton';
 import RealtimeStatusBar from '../../components/ui/RealtimeStatusBar';
 import LivePulseWidget from '../../components/ui/LivePulseWidget';
 import { useRealtimePayments } from '../../hooks/useRealtimePayments';
@@ -35,6 +36,7 @@ const PaymentCollectionsHub = () => {
   const [linkedAssets, setLinkedAssets] = useState([]);
   const [overdueAccounts, setOverdueAccounts] = useState([]);
   const [currentAllocations, setCurrentAllocations] = useState([]);
+  const [companyProfile, setCompanyProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -70,6 +72,21 @@ const PaymentCollectionsHub = () => {
       })));
     } catch (err) {
       console.error('Failed to load assets:', err);
+    }
+  }, []);
+
+  const loadCompanyProfile = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: profile } = await supabase
+        .from('user_profiles').select('role, admin_id').eq('id', user.id).maybeSingle();
+      const adminId = profile?.role === 'admin' ? user.id : (profile?.admin_id || user.id);
+      const { data } = await supabase
+        .from('company_profiles').select('*').eq('admin_id', adminId).maybeSingle();
+      setCompanyProfile(data || null);
+    } catch (err) {
+      console.error('Failed to load company profile:', err);
     }
   }, []);
 
@@ -112,11 +129,11 @@ const PaymentCollectionsHub = () => {
   useEffect(() => {
     const init = async () => {
       setLoading(true);
-      await Promise.all([loadLinkedAssets(), loadOverdueAccounts()]);
+      await Promise.all([loadLinkedAssets(), loadOverdueAccounts(), loadCompanyProfile()]);
       setLoading(false);
     };
     init();
-  }, [loadLinkedAssets, loadOverdueAccounts]);
+  }, [loadLinkedAssets, loadOverdueAccounts, loadCompanyProfile]);
 
   const handlePaymentSubmit = async (paymentData) => {
     // Merge in any allocations set from the allocation panel
@@ -187,13 +204,16 @@ const PaymentCollectionsHub = () => {
             <h1 className="text-2xl font-bold text-foreground">Payment Collections</h1>
             <p className="text-sm text-muted-foreground mt-0.5">Track and manage all payment transactions</p>
           </div>
-          <button
-            onClick={refetch}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-          >
-            <Icon name="RefreshCw" size={12} color="currentColor" className={syncing ? 'animate-spin' : ''} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={refetch}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+            >
+              <Icon name="RefreshCw" size={12} color="currentColor" className={syncing ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+            <ClosePageButton label="Close Payments" />
+          </div>
         </div>
 
         {/* Global Real-time Status Bar */}
@@ -298,7 +318,7 @@ const PaymentCollectionsHub = () => {
               {activeTab === 'payment-entry' && <PaymentEntryForm linkedAssets={linkedAssets} onSubmit={handlePaymentSubmit} />}
               {activeTab === 'allocation' && <PaymentAllocationPanel linkedAssets={linkedAssets} totalAmount={linkedAssets?.reduce((sum, asset) => sum + (asset?.outstandingBalance || 0), 0)} onAllocationChange={handleAllocationChange} />}
               {activeTab === 'overdue' && <OverdueAccountsSection overdueAccounts={overdueAccounts} />}
-              {activeTab === 'history' && <TransactionHistoryTable transactions={transactions} />}
+              {activeTab === 'history' && <TransactionHistoryTable transactions={transactions} companyProfile={companyProfile} />}
               {activeTab === 'penalties' && <PenaltyCalculationPanel overdueAccounts={overdueAccounts} onPenaltyApplied={() => loadOverdueAccounts()} />}
               {activeTab === 'recurring' && <RecurringBillingPanel />}
               {activeTab === 'alerts' && <PaymentAlertsPanel />}

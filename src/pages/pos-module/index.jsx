@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import MainLayout from '../../layouts/MainLayout';
+import ClosePageButton from '../../components/ui/ClosePageButton';
 import Icon from '../../components/AppIcon';
 import { usePOS, buildInstallmentSchedule, VAT_RATE } from '../../hooks/usePOS';
 import { generateReceiptPDF } from '../../utils/generateReceiptPDF';
@@ -493,11 +494,14 @@ const POSModule = () => {
               <p className="text-xs text-muted-foreground">New asset sale transaction</p>
             </div>
           </div>
-          {step > 1 && (
-            <button onClick={resetForm} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 px-3 py-1.5 border border-border rounded-lg hover:bg-muted transition-colors">
-              <Icon name="RotateCcw" size={13} color="currentColor" /> Reset
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {step > 1 && (
+              <button onClick={resetForm} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 px-3 py-1.5 border border-border rounded-lg hover:bg-muted transition-colors">
+                <Icon name="RotateCcw" size={13} color="currentColor" /> Reset
+              </button>
+            )}
+            <ClosePageButton label="Close Point of Sale" />
+          </div>
         </div>
 
         <div className="bg-card border border-border rounded-2xl overflow-hidden">

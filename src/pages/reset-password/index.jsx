@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
+import { getPasswordError } from '../../utils/validation';
 import Icon from '../../components/AppIcon';
 
 const ResetPasswordPage = () => {
@@ -89,7 +90,8 @@ const ResetPasswordPage = () => {
   const handleSubmit = async () => {
     setError('');
     if (!password) return setError('Please enter a new password.');
-    if (strength < 3) return setError('Password is too weak. Use at least 8 characters, uppercase, lowercase, and numbers.');
+    const policyError = getPasswordError(password);
+    if (policyError) return setError(policyError);
     if (password !== confirmPassword) return setError('Passwords do not match.');
 
     setLoading(true);
@@ -131,7 +133,7 @@ const ResetPasswordPage = () => {
             <Icon name="Building2" size={22} color="#0A1628" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-white">AssetFlow</h1>
+            <h1 className="text-xl font-bold text-white">Ararat</h1>
             <p className="text-xs" style={{ color: '#C9A84C' }}>Financial Management Platform</p>
           </div>
         </div>
@@ -178,7 +180,7 @@ const ResetPasswordPage = () => {
             <>
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-gray-900 mb-1">Set Your Password</h2>
-                <p className="text-sm text-gray-500">Welcome to AssetFlow — choose a strong password to activate your account</p>
+                <p className="text-sm text-gray-500">Welcome to Ararat — choose a strong password to activate your account</p>
                 <div className="mt-3 w-10 h-0.5" style={{ background: '#C9A84C' }} />
               </div>
 

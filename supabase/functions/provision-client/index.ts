@@ -1,5 +1,5 @@
 /**
- * AssetFlow — provision-client Edge Function (v2 — fixed)
+ * Ararat — provision-client Edge Function (v2 — fixed)
  *
  * Fixes from v1:
  *   1. Role check now correctly filters by the caller's user id from JWT

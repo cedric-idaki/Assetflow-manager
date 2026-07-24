@@ -128,7 +128,7 @@ export const useFinanceHub = () => {
     try {
       const { data: payments, error: pErr } = await supabase
         .from('payments')
-        .select('id, amount, payment_date, payment_status, transaction_id, reference_number, payment_method, notes, created_at, client_id')
+        .select('id, amount, payment_date, payment_status, transaction_id, reference_number, payment_method, notes, created_at, client_id, asset_id')
         .eq('processed_by', aId)
         .order('payment_date', { ascending: false })
         .limit(200);
@@ -142,9 +142,28 @@ export const useFinanceHub = () => {
         (clients || []).forEach(c => { clientMap[c.id] = c; });
       }
 
+      // Pull the linked asset for each payment so invoice line items describe the
+      // real asset (make/model/plate/description) instead of a static placeholder.
+      const assetIds = [...new Set((payments || []).map(p => p.asset_id).filter(Boolean))];
+      let assetMap = {};
+      if (assetIds.length > 0) {
+        const { data: assets } = await supabase
+          .from('assets')
+          .select('id, asset_code, description, asset_type, make, model, year, plate_number')
+          .in('id', assetIds);
+        (assets || []).forEach(a => { assetMap[a.id] = a; });
+      }
+
       const now = new Date();
       const mapped = (payments || []).map((p, i) => {
         const client  = clientMap[p.client_id] || {};
+        const asset   = assetMap[p.asset_id]   || null;
+        const assetLabel = asset
+          ? (asset.description
+              || [asset.make, asset.model, asset.year].filter(Boolean).join(' ')
+              || asset.asset_code
+              || '—')
+          : '—';
         const payDate = new Date(p.payment_date || p.created_at);
         const dueDate = new Date(payDate);
         dueDate.setDate(dueDate.getDate() + 30);
@@ -158,7 +177,10 @@ export const useFinanceHub = () => {
           client_email: client.email          || '',
           client_phone: client.phone          || '',
           account_no:   client.account_number || '',
-          asset:        '—',
+          asset:        assetLabel,
+          asset_code:   asset?.asset_code || '',
+          asset_type:   asset?.asset_type || '',
+          plate_number: asset?.plate_number || '',
           amount:       parseFloat(p.amount   || 0),
           vat_amount:   parseFloat(p.amount   || 0) * 0.16,
           status:       p.payment_status === 'completed' ? 'paid' : isOverdue ? 'overdue' : 'pending',

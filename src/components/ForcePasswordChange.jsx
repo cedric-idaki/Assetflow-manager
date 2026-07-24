@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { PASSWORD_POLICY, getPasswordError } from '../utils/validation';
 import Icon from './AppIcon';
 
 // Global first-login gate, mounted in MainLayout so it covers every portal
@@ -22,7 +23,8 @@ const ForcePasswordChange = () => {
   if (!user?.user_metadata?.must_change_password || done) return null;
 
   const submit = async () => {
-    if (pw.length < 8) { setError('Use at least 8 characters.'); return; }
+    const policyError = getPasswordError(pw) || (!pw ? 'Enter a new password.' : null);
+    if (policyError) { setError(policyError); return; }
     if (pw !== confirm) { setError('The passwords do not match.'); return; }
     setSaving(true);
     setError('');
@@ -59,7 +61,7 @@ const ForcePasswordChange = () => {
           </div>
 
           <label className="block">
-            <span className="block text-xs font-semibold mb-1.5 text-foreground">New password (min. 8 characters)</span>
+            <span className="block text-xs font-semibold mb-1.5 text-foreground">New password</span>
             <input
               type={show ? 'text' : 'password'}
               value={pw}
@@ -68,6 +70,19 @@ const ForcePasswordChange = () => {
               className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:border-primary"
             />
           </label>
+
+          {/* Live checklist of the password policy */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            {PASSWORD_POLICY.map((check) => {
+              const ok = check.test(pw);
+              return (
+                <div key={check.label} className="flex items-center gap-1.5">
+                  <Icon name={ok ? 'CheckCircle2' : 'Circle'} size={12} color={ok ? '#059669' : 'var(--color-muted-foreground)'} />
+                  <span className={`text-[11px] ${ok ? 'text-emerald-600' : 'text-muted-foreground'}`}>{check.label}</span>
+                </div>
+              );
+            })}
+          </div>
 
           <label className="block">
             <span className="block text-xs font-semibold mb-1.5 text-foreground">Confirm new password</span>

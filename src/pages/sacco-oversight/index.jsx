@@ -5,6 +5,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { tierById } from '../../config/saccoTiers';
+import SaccoAgentsTab from './components/SaccoAgentsTab';
+import { emailLoginCredentials } from '../../services/credentialsEmailService';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 const fmtKES  = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -41,23 +43,25 @@ const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted round
 
 // ── Data hook — super_admin reads all sacco_* tables via is_global_viewer() ──
 const useSaccoOversight = () => {
-  const [data, setData]       = useState({ saccos: [], members: [], contributions: [], loans: [], motions: [], invoices: [], admins: {} });
+  const [data, setData]       = useState({ saccos: [], members: [], contributions: [], loans: [], motions: [], invoices: [], agents: [], admins: {} });
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
 
   const fetchAll = async () => {
     setLoading(true); setError(null);
     try {
-      const [saccosR, membersR, contribR, loansR, motionsR, invoicesR] = await Promise.all([
+      const [saccosR, membersR, contribR, loansR, motionsR, invoicesR, agentsR] = await Promise.all([
         supabase.from('saccos').select('*').order('created_at', { ascending: false }),
         supabase.from('sacco_members').select('id, sacco_id, full_name, status, kyc_status, created_at').order('created_at', { ascending: false }),
         supabase.from('sacco_contributions').select('id, sacco_id, amount, status, created_at').order('created_at', { ascending: false }).limit(400),
         supabase.from('sacco_loans').select('id, sacco_id, principal, status, created_at').order('created_at', { ascending: false }).limit(200),
         supabase.from('sacco_motions').select('id, sacco_id, title, status, created_at').order('created_at', { ascending: false }).limit(100),
         supabase.from('sacco_invoices').select('id, sacco_id, period, total, status, created_at').order('created_at', { ascending: false }).limit(100),
+        // Sacco-side sales agents only — company agents stay on /super-admin-dashboard.
+        supabase.from('agents').select('*').eq('agent_type', 'sacco').order('created_at', { ascending: false }),
       ]);
 
-      const firstError = [saccosR, membersR, contribR, loansR, motionsR, invoicesR].find((r) => r.error)?.error;
+      const firstError = [saccosR, membersR, contribR, loansR, motionsR, invoicesR, agentsR].find((r) => r.error)?.error;
       if (firstError) throw firstError;
 
       // Resolve the admin account behind each sacco for the registration card.
@@ -78,6 +82,7 @@ const useSaccoOversight = () => {
         loans: loansR.data || [],
         motions: motionsR.data || [],
         invoices: invoicesR.data || [],
+        agents: agentsR.data || [],
         admins,
       });
     } catch (e) {
@@ -87,8 +92,79 @@ const useSaccoOversight = () => {
     }
   };
 
+  // Create a sacco-side sales agent — mirrors createSalesAgent on the company
+  // super-admin dashboard, but tags the row agent_type='sacco' so the agent's
+  // portal registers saccos instead of companies.
+  const createSaccoAgent = async (agentData) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    const adminId = user?.id;
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    const signUpRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseAnonKey,
+      },
+      body: JSON.stringify({
+        email: agentData.email,
+        password: agentData.password,
+        // must_change_password: the portal blocks access until the agent
+        // replaces this admin-issued password with their own.
+        data: { full_name: agentData.fullName, role: 'sales_agent', must_change_password: true },
+      }),
+    });
+
+    const signUpJson = await signUpRes.json();
+    if (!signUpRes.ok) {
+      throw new Error(signUpJson?.msg || signUpJson?.message || 'Failed to create agent auth account.');
+    }
+
+    const userId = signUpJson?.id ?? signUpJson?.user?.id;
+    if (!userId) throw new Error('Agent creation failed — no user ID returned.');
+
+    const { error: profileError } = await supabase.from('user_profiles').upsert({
+      id: userId, email: agentData.email, full_name: agentData.fullName,
+      role: 'sales_agent', phone: agentData.phone || '', is_active: true,
+      admin_id: adminId,
+    });
+    if (profileError) console.error('Profile upsert error:', profileError.message);
+
+    const { data: agent, error: agentError } = await supabase
+      .from('agents')
+      .insert({
+        user_id: userId, agent_code: `AGT-${Date.now()}`,
+        full_name: agentData.fullName, email: agentData.email,
+        phone: agentData.phone, region: agentData.region,
+        admin_id: adminId,
+        commission_rate: agentData.commissionRate || 5,
+        target_amount: agentData.targetAmount || 0,
+        agent_plan: agentData.plan || 'bronze',
+        agent_type: 'sacco',
+      })
+      .select()
+      .maybeSingle();
+    if (agentError) throw agentError;
+
+    // Auto-email the credentials (non-fatal — the creator also sees them once).
+    emailLoginCredentials({
+      to: agentData.email,
+      type: 'staff_welcome',
+      data: {
+        fullName: agentData.fullName,
+        email:    agentData.email,
+        password: agentData.password,
+        role:     'sales_agent',
+      },
+    });
+
+    await fetchAll();
+    return agent;
+  };
+
   useEffect(() => { fetchAll(); }, []);
-  return { ...data, loading, error, refetch: fetchAll };
+  return { ...data, loading, error, refetch: fetchAll, createSaccoAgent };
 };
 
 // ── KPI card ─────────────────────────────────────────────────────────────────
@@ -226,11 +302,27 @@ const ActivityFeed = ({ events }) => (
 const SaccoOversight = () => {
   const { userProfile } = useAuth();
   const navigate = useNavigate();
-  const { saccos, members, contributions, loans, motions, invoices, admins, loading, error, refetch } = useSaccoOversight();
+  const { saccos, members, contributions, loans, motions, invoices, agents, admins, loading, error, refetch, createSaccoAgent } = useSaccoOversight();
 
+  const [activeTab, setActiveTab]         = useState('overview');
   const [selectedSacco, setSelectedSacco] = useState(null);
   const [saccoFilter, setSaccoFilter]     = useState('all');
   const [search, setSearch]               = useState('');
+
+  const exportCSV = (rows, filename) => {
+    if (!rows || rows.length === 0) return;
+    const keys = Object.keys(rows[0]);
+    const csv = [keys.join(','), ...rows.map(row =>
+      keys.map(k => `"${String(row[k] ?? '').replace(/"/g, '""')}"`).join(',')
+    )].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const saccoName = useMemo(() => Object.fromEntries(saccos.map((s) => [s.id, s.name])), [saccos]);
 
@@ -315,6 +407,42 @@ const SaccoOversight = () => {
             {error}
           </div>
         )}
+
+        {/* Tabs */}
+        <div className="flex items-center gap-1 bg-card border border-border rounded-xl p-1 w-fit">
+          {[
+            { id: 'overview', label: 'Overview',     icon: 'LayoutDashboard' },
+            { id: 'agents',   label: 'Sales Agents', icon: 'Users' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+                activeTab === tab.id
+                  ? 'text-white'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+              }`}
+              style={activeTab === tab.id ? { background: 'linear-gradient(135deg, #0891b2, #0e7490)' } : undefined}
+            >
+              <Icon name={tab.icon} size={13} color="currentColor" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* SALES AGENTS TAB */}
+        {activeTab === 'agents' && (
+          loading ? <Sk className="h-64" /> : (
+            <SaccoAgentsTab
+              agents={agents}
+              onCreateAgent={createSaccoAgent}
+              onExport={exportCSV}
+            />
+          )
+        )}
+
+        {/* OVERVIEW TAB */}
+        {activeTab === 'overview' && (<>
 
         {/* KPIs */}
         {loading ? (
@@ -427,6 +555,8 @@ const SaccoOversight = () => {
             {loading ? <Sk className="h-80" /> : <ActivityFeed events={events} />}
           </div>
         </div>
+
+        </>)}
       </div>
 
       {selectedSacco && (

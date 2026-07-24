@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import MainLayout from '../../layouts/MainLayout';
+import ClosePageButton from '../../components/ui/ClosePageButton';
 import { supabase } from '../../lib/supabase';
 import ReportsHub from '../admin-dashboard/components/ReportsHub';
 
@@ -65,6 +66,13 @@ const ReportsAnalyticsCenter = () => {
   return (
     <MainLayout>
       <div className="p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Reports & Analytics</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">Executive dashboards, charts and scheduled reports</p>
+          </div>
+          <ClosePageButton label="Close Reports" />
+        </div>
         {loading ? (
           <div className="space-y-4">
             {[1, 2, 3].map(i => (

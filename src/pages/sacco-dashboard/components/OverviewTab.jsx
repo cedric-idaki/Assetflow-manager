@@ -1,8 +1,10 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import Icon from '../../../components/AppIcon';
 import { Card, StatCard, KES } from './_shared';
 
 const OverviewTab = ({ ctx, onNavigate }) => {
+  const navigate = useNavigate();
   const { stats, sacco, members, loans, motions } = ctx;
   const bill = stats.billing;
   const freeGb = stats.tier?.storageGb || 0;
@@ -46,8 +48,8 @@ const OverviewTab = ({ ctx, onNavigate }) => {
               <span className="text-xl font-bold text-foreground">{KES(bill.total)}</span>
             </div>
           </div>
-          <button onClick={() => onNavigate('billing')} className="text-xs text-primary font-semibold mt-3 hover:underline">
-            View billing details →
+          <button onClick={() => navigate('/profile')} className="text-xs text-primary font-semibold mt-3 hover:underline">
+            View billing details in My Profile →
           </button>
         </Card>
 

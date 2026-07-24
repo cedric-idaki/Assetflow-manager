@@ -10,7 +10,9 @@ import ClientCard from './components/ClientCard';
 import LinkAssetClientModal from './components/LinkAssetClientModal';
 import AssetDetailsModal from './components/AssetDetailsModal';
 import ClientDetailsModal from './components/ClientDetailsModal';
+import WebsiteSyncModal from './components/WebsiteSyncModal';
 import MainLayout from '../../layouts/MainLayout';
+import ClosePageButton from '../../components/ui/ClosePageButton';
 import { auditLogsService } from '../../services/supabaseService';
 import { supabase } from '../../lib/supabase';
 
@@ -49,6 +51,7 @@ const AssetClientManagement = () => {
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const [syncError, setSyncError] = useState(false);
   const [portalCredentials, setPortalCredentials] = useState(null);
+  const [showWebsiteSync, setShowWebsiteSync] = useState(false);
 
   // ── Get current admin ID and company profile ───────────────────────────────
   useEffect(() => {
@@ -466,7 +469,7 @@ const AssetClientManagement = () => {
             });
           } else {
             // Client record saved successfully — login can be retried later.
-            console.warn('[AssetFlow] Portal provisioning warning:', provisionResult.error);
+            console.warn('[Ararat] Portal provisioning warning:', provisionResult.error);
             setError(
               `Client saved, but the portal login could not be created: ${provisionResult.error}.`
             );
@@ -599,6 +602,17 @@ const AssetClientManagement = () => {
                 <><Icon name="CheckCircle" size={12} color="currentColor" /><span className="text-xs font-medium">Synced{lastSynced ? ` · ${lastSynced.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}</span></>
               )}
             </div>
+            {activeTab === 'assets' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowWebsiteSync(true)}
+                title="Auto-import vehicles from your website"
+              >
+                <Icon name="Globe" size={16} color="currentColor" />
+                Website Sync
+              </Button>
+            )}
             <Button
               variant="primary"
               size="sm"
@@ -607,6 +621,7 @@ const AssetClientManagement = () => {
               <Icon name="Plus" size={16} color="white" />
               {activeTab === 'assets' ? 'Add Asset' : 'Add Client'}
             </Button>
+            <ClosePageButton label="Close Assets & Clients" />
           </div>
         </div>
 
@@ -756,6 +771,12 @@ const AssetClientManagement = () => {
         {showAssetDetails && selectedAsset && (
           <AssetDetailsModal asset={selectedAsset} onClose={() => setShowAssetDetails(false)} />
         )}
+        {showWebsiteSync && (
+          <WebsiteSyncModal
+            onClose={() => setShowWebsiteSync(false)}
+            assetTypes={assetTypeOptions.filter(t => t.value !== 'all')}
+          />
+        )}
         {showClientDetails && selectedClient && (
           <ClientDetailsModal client={selectedClient} onClose={() => setShowClientDetails(false)} />
         )}
@@ -821,7 +842,7 @@ const AssetClientManagement = () => {
               <div className="px-6 pb-5 flex gap-3">
                 <button
                   onClick={() => navigator.clipboard?.writeText(
-                    `AssetFlow Client Portal Login\nName: ${portalCredentials.fullName}\nEmail: ${portalCredentials.email}\nPassword: ${portalCredentials.password}\nAccount: ${portalCredentials.accountNumber || ''}`
+                    `Ararat Client Portal Login\nName: ${portalCredentials.fullName}\nEmail: ${portalCredentials.email}\nPassword: ${portalCredentials.password}\nAccount: ${portalCredentials.accountNumber || ''}`
                   )}
                   className="px-4 py-2.5 border border-border text-muted-foreground text-sm font-medium rounded-xl hover:bg-muted"
                 >

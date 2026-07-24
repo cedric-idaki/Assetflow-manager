@@ -38,7 +38,7 @@ const buildHeader = (gradient: string, icon: string, title: string, subtitle: st
 
 const buildFooter = () => `
   <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center;margin-top:24px;">
-    <p style="margin:0;font-size:12px;color:#94a3b8;">This is an automated notification from <strong>AssetFlow Management System</strong>.</p>
+    <p style="margin:0;font-size:12px;color:#94a3b8;">This is an automated notification from <strong>Ararat Management System</strong>.</p>
   </div>`;
 
 const buildRow = (label: string, value: string, highlight = false) => `
@@ -166,14 +166,14 @@ const buildSuccessSMS = (data: any) => {
   const { transaction, client, amount } = data;
   const name = client?.name || client?.full_name || 'Valued Client';
   const txnId = transaction?.transactionId || transaction?.transaction_id || 'N/A';
-  return `AssetFlow: Hi ${name}, your payment of ${formatCurrency(amount || 0)} was received successfully. Txn ID: ${txnId}. Thank you!`;
+  return `Ararat: Hi ${name}, your payment of ${formatCurrency(amount || 0)} was received successfully. Txn ID: ${txnId}. Thank you!`;
 };
 
 const buildFailureSMS = (data: any) => {
   const { transaction, client, amount, failureReason } = data;
   const name = client?.name || client?.full_name || 'Valued Client';
   const txnId = transaction?.transactionId || transaction?.transaction_id || 'N/A';
-  return `AssetFlow Alert: Hi ${name}, your payment of ${formatCurrency(amount || 0)} FAILED. Reason: ${failureReason || 'Declined'}. Txn: ${txnId}. Please retry or contact support.`;
+  return `Ararat Alert: Hi ${name}, your payment of ${formatCurrency(amount || 0)} FAILED. Reason: ${failureReason || 'Declined'}. Txn: ${txnId}. Please retry or contact support.`;
 };
 
 const buildDueDateSMS = (data: any) => {
@@ -183,14 +183,14 @@ const buildDueDateSMS = (data: any) => {
   const dueDate = installment?.due_date || installment?.scheduled_date
     ? new Date(installment.due_date || installment.scheduled_date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' })
     : 'N/A';
-  return `AssetFlow Reminder: Hi ${name}, your installment of ${amount} is due in ${daysUntilDue} day${daysUntilDue !== 1 ? 's' : ''} on ${dueDate}. Please arrange payment to avoid penalties.`;
+  return `Ararat Reminder: Hi ${name}, your installment of ${amount} is due in ${daysUntilDue} day${daysUntilDue !== 1 ? 's' : ''} on ${dueDate}. Please arrange payment to avoid penalties.`;
 };
 
 const buildThresholdSMS = (data: any) => {
   const { client, amount, thresholdType, thresholdLimit } = data;
   const name = client?.name || client?.full_name || 'N/A';
   const typeLabel = thresholdType === 'transaction' ? 'transaction' : 'balance';
-  return `AssetFlow Alert: ${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)} threshold breached for ${name}. Amount: ${formatCurrency(amount || 0)} exceeds limit of ${formatCurrency(thresholdLimit || 0)}. Admin review required.`;
+  return `Ararat Alert: ${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)} threshold breached for ${name}. Amount: ${formatCurrency(amount || 0)} exceeds limit of ${formatCurrency(thresholdLimit || 0)}. Admin review required.`;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ const sendEmail = async (to: string, subject: string, html: string) => {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: 'AssetFlow <notifications@assetflow.com>', to: [to], subject, html }),
+    body: JSON.stringify({ from: 'Ararat <notifications@assetflow.com>', to: [to], subject, html }),
   });
   return res.ok ? { status: 'sent' } : { status: 'failed', reason: await res.text() };
 };

@@ -30,6 +30,30 @@ export const sanitise = (value) => {
 export const sanitiseEmail = (value) =>
   sanitise(value).toLowerCase().replace(/\s+/g, '');
 
+// ── Password policy (single source of truth) ─────────────────────────────────
+// Every screen that sets a password imports this — registration, reset,
+// profile change, forced first-login change, and all staff/agent/client
+// creation modals. The SAME policy is enforced server-side in the
+// create-staff-user edge function and in Supabase Auth settings; keep them in sync.
+export const PASSWORD_POLICY = [
+  { label: 'At least 8 characters', msg: 'at least 8 characters', test: (p) => (p || '').length >= 8 },
+  { label: 'Uppercase letter',      msg: 'an uppercase letter',   test: (p) => /[A-Z]/.test(p || '') },
+  { label: 'Lowercase letter',      msg: 'a lowercase letter',    test: (p) => /[a-z]/.test(p || '') },
+  { label: 'Number',                msg: 'a number',              test: (p) => /[0-9]/.test(p || '') },
+  { label: 'Special character',     msg: 'a special character (e.g. !@#$%)', test: (p) => /[^A-Za-z0-9]/.test(p || '') },
+];
+
+/** Returns an error message if the password fails the policy, otherwise null. */
+export const getPasswordError = (value) => {
+  if (!value) return null; // pair with a required() check
+  const failed = PASSWORD_POLICY.filter((c) => !c.test(value)).map((c) => c.msg);
+  return failed.length > 0 ? `Password must include ${failed.join(', ')}.` : null;
+};
+
+/** True when the password satisfies every policy rule. */
+export const isPasswordStrong = (value) =>
+  PASSWORD_POLICY.every((c) => c.test(value));
+
 // ── Reusable field rules ──────────────────────────────────────────────────────
 const rules = {
   required: (value, label) =>
@@ -82,20 +106,7 @@ const rules = {
       : 'National ID must be 7–8 digits.';
   },
 
-  strongPassword: (value) => {
-    if (!value) return null;
-    const checks = [
-      { test: value.length >= 8,       msg: 'at least 8 characters' },
-      { test: /[A-Z]/.test(value),     msg: 'an uppercase letter' },
-      { test: /[a-z]/.test(value),     msg: 'a lowercase letter' },
-      { test: /[0-9]/.test(value),     msg: 'a number' },
-      { test: /[^A-Za-z0-9]/.test(value), msg: 'a special character' },
-    ];
-    const failed = checks.filter((c) => !c.test).map((c) => c.msg);
-    return failed.length > 0
-      ? `Password must include ${failed.join(', ')}.`
-      : null;
-  },
+  strongPassword: (value) => getPasswordError(value),
 };
 
 // ── Collect errors helper ─────────────────────────────────────────────────────

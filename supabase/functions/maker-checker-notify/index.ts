@@ -35,7 +35,7 @@ serve(async (req) => {
     // Send email via Resend
     if (RESEND_API_KEY && initiator_email) {
       const emailBody = {
-        from: 'AssetFlow <notifications@assetflow.com>',
+        from: 'Ararat <notifications@assetflow.com>',
         to: [initiator_email],
         subject: `${statusEmoji} Action ${statusLabel}: ${title}`,
         html: `
@@ -46,7 +46,7 @@ serve(async (req) => {
                   <span style="color: white; font-size: 24px;">🏢</span>
                 </div>
                 <div>
-                  <h1 style="margin: 0; font-size: 20px; color: #1e293b;">AssetFlow</h1>
+                  <h1 style="margin: 0; font-size: 20px; color: #1e293b;">Ararat</h1>
                   <p style="margin: 0; color: #64748b; font-size: 14px;">Maker-Checker Notification</p>
                 </div>
               </div>
@@ -77,7 +77,7 @@ serve(async (req) => {
                 </tr>` : ''}
               </table>
 
-              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 24px;">This is an automated notification from AssetFlow Management System</p>
+              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 24px;">This is an automated notification from Ararat Management System</p>
             </div>
           </div>
         `,
@@ -94,7 +94,7 @@ serve(async (req) => {
 
     // Send SMS via Twilio
     if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER && initiator_phone) {
-      const smsBody = `AssetFlow: Your action "${title}" has been ${statusLabel} by ${checker_name}.${checker_comment ? ` Comment: ${checker_comment}` : ''} Ref: ${action_id?.slice(0, 8)}`;
+      const smsBody = `Ararat: Your action "${title}" has been ${statusLabel} by ${checker_name}.${checker_comment ? ` Comment: ${checker_comment}` : ''} Ref: ${action_id?.slice(0, 8)}`;
 
       const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
       const twilioAuth = btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`);

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import TermsModal from '../../components/TermsModal';
@@ -7,6 +7,7 @@ import { formatKEPhone } from '../../utils/phoneUtils';
 import { COMPANY_PLANS as PLANS, planForUsers, INSTALLATION_FEE } from '../../config/companyPlans';
 import { tierForMembers, SACCO_TIERS, INSTALLATION_FEE as SACCO_INSTALLATION_FEE } from '../../config/saccoTiers';
 import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../config/kenyaCounties';
+import { getPasswordError } from '../../utils/validation';
 
 // Pricing is per user, per tier (KES / user / month). The number of users the
 // admin needs automatically selects the plan tier (which sets the free storage
@@ -39,14 +40,16 @@ const C = {
 
 const AdminRegistration = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // Step 1 - Account
+  // Step 1 - Account. The landing page's subscribe form hands the email over
+  // in router state so the visitor doesn't have to type it twice.
   const [account, setAccount] = useState({
-    fullName: '', email: '', phone: '', gender: '', password: '', confirmPassword: '',
+    fullName: '', email: location.state?.email || '', phone: '', gender: '', password: '', confirmPassword: '',
   });
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -56,8 +59,15 @@ const AdminRegistration = () => {
   const [company, setCompany] = useState({
     organizationType: 'company', // 'company' | 'sacco'
     companyName: '', businessRegNumber: '', businessType: '',
+    // Saccos declare up-front whether they are registered ('Yes' | 'No'). Only a
+    // registered sacco is asked for its certificate + SASRA licence numbers, and
+    // for those both are compulsory.
+    isRegistered: '',
     sasraLicence: '', location: '', city: '', assetTypes: [],
   });
+  // "Other" asset-type entry — free-text types not in the predefined ASSET_TYPES list
+  const [showOther, setShowOther] = useState(false);
+  const [otherInput, setOtherInput] = useState('');
   const isSacco = company.organizationType === 'sacco';
 
   const steps = ['Account', isSacco ? 'Sacco' : 'Company', 'Plan', 'Payment'];
@@ -109,6 +119,38 @@ const AdminRegistration = () => {
     );
   };
 
+  // ── "Other" custom asset types ────────────────────────────────────────────
+  // Anything selected that isn't a predefined ASSET_TYPES label is a custom
+  // "Other" entry (e.g. "Motorbike"). No special handling is needed downstream:
+  // the asset-management screen maps unknown labels to a lowercase type key and
+  // the asset form falls back to its generic "Other" field set.
+  const customAssetTypes = company.assetTypes.filter(t => !ASSET_TYPES.includes(t));
+  const otherActive = showOther || customAssetTypes.length > 0;
+
+  const addCustomTypes = () => {
+    const existing = company.assetTypes.map(t => t.toLowerCase());
+    const added = [];
+    otherInput.split(',').map(s => s.trim()).filter(Boolean).forEach(name => {
+      const key = name.toLowerCase();
+      if (!existing.includes(key) && !added.some(a => a.toLowerCase() === key)) added.push(name);
+    });
+    if (added.length) setCo('assetTypes', [...company.assetTypes, ...added]);
+    setOtherInput('');
+  };
+
+  const removeCustomType = (name) =>
+    setCo('assetTypes', company.assetTypes.filter(t => t !== name));
+
+  const toggleOther = () => {
+    if (otherActive) {
+      setShowOther(false);
+      setOtherInput('');
+      setCo('assetTypes', company.assetTypes.filter(t => ASSET_TYPES.includes(t)));
+    } else {
+      setShowOther(true);
+    }
+  };
+
   // ── Validate each step ──────────────────────────────────────────────────────
   const validateStep = () => {
     setError('');
@@ -119,13 +161,18 @@ const AdminRegistration = () => {
       // up later from the M-Pesa payment step, and gender is optional.
       if (!isSacco && !account.phone) return setError('Phone number is required.') || false;
       if (!isSacco && !account.gender) return setError('Please select your gender.') || false;
-      if (!account.password || account.password.length < 6) return setError('Password must be at least 6 characters.') || false;
+      if (!account.password) return setError('Password is required.') || false;
+      const pwError = getPasswordError(account.password);
+      if (pwError) return setError(pwError) || false;
       if (account.password !== account.confirmPassword) return setError('Passwords do not match.') || false;
       if (!termsAccepted) return setError('You must accept the Terms & Privacy Policy to continue.') || false;
     }
     if (currentStep === 1) {
       if (!company.companyName) return setError(isSacco ? 'Sacco name is required.' : 'Company name is required.') || false;
-      if (isSacco && !company.businessRegNumber) return setError('Registration / certificate number is required.') || false;
+      if (isSacco && !company.isRegistered) return setError('Please select whether your Sacco is registered.') || false;
+      // Both registration details are compulsory once the sacco says it is registered.
+      if (isSacco && company.isRegistered === 'Yes' && !company.businessRegNumber) return setError('Registration / certificate number is required.') || false;
+      if (isSacco && company.isRegistered === 'Yes' && !company.sasraLicence) return setError('SASRA licence number is required.') || false;
       if (isSacco && !company.city) return setError('Please select your county.') || false;
       if (!company.location) return setError('Location is required.') || false;
       if (!isSacco && company.assetTypes.length === 0) return setError('Select at least one asset type.') || false;
@@ -180,10 +227,14 @@ const AdminRegistration = () => {
       // 3. Create the tenant record — a sacco lives in its own `saccos` table
       //    (backs the Sacco dashboard); a company keeps its company_profiles row.
       if (isSacco) {
-        await supabase.from('saccos').insert({
+        // If this fails the DB self-heals on activation (a stub saccos row is
+        // created by the ensure_sacco_admin_tenant_row trigger), but the stub
+        // lacks the registration details — so at least make the failure visible.
+        const { error: saccoError } = await supabase.from('saccos').insert({
           admin_id: userId,
           name: company.companyName,
-          registration_no: company.businessRegNumber,
+          // Left null for an unregistered sacco (both columns are nullable).
+          registration_no: company.businessRegNumber || null,
           sasra_licence_no: company.sasraLicence || null,
           email: account.email,
           phone: account.phone || null,
@@ -193,6 +244,7 @@ const AdminRegistration = () => {
           member_cap: userCount,
           kyc_status: 'pending',
         });
+        if (saccoError) console.error('saccos insert failed during registration:', saccoError);
       } else {
         await supabase.from('company_profiles').insert({
           admin_id: userId,
@@ -331,7 +383,7 @@ const AdminRegistration = () => {
             <Icon name="Building2" size={24} color={C.navy} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">AssetFlow</h1>
+            <h1 className="text-2xl font-bold text-white">Ararat</h1>
             <p className="text-xs" style={{ color: C.primary }}>Business Management Platform</p>
           </div>
         </div>
@@ -340,7 +392,7 @@ const AdminRegistration = () => {
         <div className="relative z-10 flex-1 flex flex-col justify-center">
           <div className="w-12 h-0.5 mb-6" style={{ background: C.primary }} />
           <h2 className="text-4xl font-bold text-white leading-tight mb-4">
-            Grow Your Business with AssetFlow
+            Grow Your Business with Ararat
           </h2>
           <p className="text-base leading-relaxed mb-10" style={{ color: '#7a9cb8' }}>
             Manage your assets, clients, and sales team all in one place.
@@ -373,7 +425,7 @@ const AdminRegistration = () => {
         {/* Footer */}
         <div className="relative z-10">
           <p className="text-xs" style={{ color: '#3a5a7a' }}>
-            © {new Date().getFullYear()} AssetFlow. All rights reserved.
+            © {new Date().getFullYear()} Ararat. All rights reserved.
           </p>
         </div>
       </div>
@@ -388,7 +440,7 @@ const AdminRegistration = () => {
               style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})` }}>
               <Icon name="Building2" size={22} color="white" />
             </div>
-            <h1 className="text-xl font-bold" style={{ color: C.navy }}>AssetFlow</h1>
+            <h1 className="text-xl font-bold" style={{ color: C.navy }}>Ararat</h1>
           </div>
 
           {/* Step header */}
@@ -460,11 +512,19 @@ const AdminRegistration = () => {
                     );
                   })}
                 </div>
-                {isSacco && (
-                  <p className="text-xs mt-1.5" style={{ color: C.textMuted }}>
-                    You're registering a Sacco / Chama. After sign-in you'll get a dedicated Sacco dashboard — members, contributions, loans, shares, voting and governance.
-                  </p>
-                )}
+              </div>
+
+              {/* Section header — makes it clear this step collects the account
+                  holder's OWN details first; the sacco/company details come next. */}
+              <div className="pt-2 border-t" style={{ borderColor: C.border }}>
+                <p className="text-xs font-bold uppercase tracking-wide" style={{ color: C.navy }}>
+                  {isSacco ? 'Sacco Admin Account Holder' : 'Company Admin Account Holder'}
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
+                  {isSacco
+                    ? "Enter your personal details as the sacco administrator. We'll collect the sacco's information in the next step."
+                    : "Enter your personal details as the company administrator. We'll collect the company's information in the next step."}
+                </p>
               </div>
 
               {[
@@ -475,7 +535,7 @@ const AdminRegistration = () => {
                   { value: 'male', label: 'Male' },
                   { value: 'female', label: 'Female' },
                 ] },
-                { label: 'Password *', key: 'password', type: 'password', placeholder: 'Min. 6 characters' },
+                { label: 'Password *', key: 'password', type: 'password', placeholder: '8+ chars, Aa, 0-9, symbol' },
                 { label: 'Confirm Password *', key: 'confirmPassword', type: 'password', placeholder: 'Repeat password' },
               ].map(field => (
                 <div key={field.key}>
@@ -567,8 +627,14 @@ const AdminRegistration = () => {
             <div className="space-y-4">
               {(isSacco ? [
                 { label: 'Sacco Name *', key: 'companyName', placeholder: 'e.g. Umoja Sacco' },
-                { label: 'Registration / Certificate Number *', key: 'businessRegNumber', placeholder: 'e.g. CS/12345' },
-                { label: 'SASRA Licence Number (Optional)', key: 'sasraLicence', placeholder: 'e.g. SASRA/DTS/001' },
+                { label: 'Is your Sacco registered? *', key: 'isRegistered', type: 'select',
+                  options: ['Yes', 'No'], placeholder: 'Select Yes or No' },
+                // Registration details only apply to a registered sacco — and
+                // then both are compulsory.
+                ...(company.isRegistered === 'Yes' ? [
+                  { label: 'Registration / Certificate Number *', key: 'businessRegNumber', placeholder: 'e.g. CS/12345' },
+                  { label: 'SASRA Licence Number *', key: 'sasraLicence', placeholder: 'e.g. SASRA/DTS/001' },
+                ] : []),
                 { label: 'City / County *', key: 'city', type: 'select', options: KENYA_COUNTIES, placeholder: 'Select county' },
                 // Location options depend on the county picked above.
                 { label: 'Location / Address *', key: 'location', type: 'select',
@@ -592,6 +658,14 @@ const AdminRegistration = () => {
                         // Changing county invalidates a location picked under the old one.
                         if (isSacco && field.key === 'city') {
                           setCompany(prev => ({ ...prev, city: v, location: '' }));
+                        } else if (isSacco && field.key === 'isRegistered') {
+                          // Switching to "No" hides the registration fields, so drop
+                          // anything already typed into them.
+                          setCompany(prev => ({
+                            ...prev,
+                            isRegistered: v,
+                            ...(v === 'Yes' ? {} : { businessRegNumber: '', sasraLicence: '' }),
+                          }));
                         } else {
                           setCo(field.key, v);
                         }
@@ -675,7 +749,69 @@ const AdminRegistration = () => {
                         {type}
                       </button>
                     ))}
+
+                    {/* "Other" — register an asset type not in the list (e.g. Motorbike) */}
+                    <button
+                      type="button"
+                      onClick={toggleOther}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-all text-left"
+                      style={{
+                        background: otherActive ? 'rgba(52,193,221,0.1)' : C.inputBg,
+                        border: `1px solid ${otherActive ? C.primary : C.border}`,
+                        color: otherActive ? C.primary : C.text,
+                        fontWeight: otherActive ? '500' : '400',
+                      }}
+                    >
+                      <div className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                        style={{
+                          background: otherActive ? C.primary : 'transparent',
+                          border: otherActive ? 'none' : `1px solid ${C.border}`,
+                        }}>
+                        {otherActive && <Icon name="Check" size={10} color="white" />}
+                      </div>
+                      Other
+                    </button>
                   </div>
+
+                  {otherActive && (
+                    <div className="mt-2 space-y-2">
+                      {customAssetTypes.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {customAssetTypes.map(t => (
+                            <span key={t} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs"
+                              style={{ background: 'rgba(52,193,221,0.1)', color: C.primary, border: `1px solid ${C.primary}` }}>
+                              {t}
+                              <button type="button" onClick={() => removeCustomType(t)} className="hover:opacity-70">
+                                <Icon name="X" size={11} color={C.primary} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={otherInput}
+                          onChange={e => setOtherInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomTypes(); } }}
+                          placeholder="Type an asset type e.g. Motorbike"
+                          className="flex-1 px-3 py-2 rounded-lg text-sm focus:outline-none"
+                          style={{ background: C.inputBg, border: `1px solid ${C.border}`, color: C.text }}
+                        />
+                        <button
+                          type="button"
+                          onClick={addCustomTypes}
+                          className="px-3 py-2 rounded-lg text-sm font-medium transition-all flex-shrink-0"
+                          style={{ background: C.primary, color: '#fff' }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                      <p className="text-xs" style={{ color: C.textMuted }}>
+                        Add any asset type not listed above. Press Enter or tap Add — you can add more than one.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

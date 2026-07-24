@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "assetflow",
+      "name": "ararat",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
       "port": 4028,

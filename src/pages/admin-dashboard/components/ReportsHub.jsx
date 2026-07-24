@@ -991,7 +991,7 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
                 <!DOCTYPE html>
                 <html>
                   <head>
-                    <title>AssetFlow Report</title>
+                    <title>Ararat Report</title>
                     <style>
                       body { font-family: sans-serif; padding: 24px; color: #111; }
                       table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -1009,7 +1009,7 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
                   </head>
                   <body>
                     <div style="margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e5e7eb;">
-                      <strong style="font-size:20px;">AssetFlow</strong>
+                      <strong style="font-size:20px;">Ararat</strong>
                       <span style="font-size:12px;color:#6b7280;margin-left:12px;">Report printed on ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                     </div>
                     ${reportEl.innerHTML}

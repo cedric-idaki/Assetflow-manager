@@ -12,11 +12,13 @@ import Icon from '../../../components/AppIcon';
 import { useToast } from '../../../components/Toast';
 import {
   Card, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput,
-  NumberInput, Select, EmptyState, fmtDate,
+  NumberInput, Select, EmptyState, fmtDate, fmtDateTime,
+  DateTimeInput, CountdownPill, toLocalInput, fromLocalInput,
 } from './_shared';
 
 const AUDIT_META = {
   created:             { icon: 'FilePlus',    label: 'Election created' },
+  schedule_set:        { icon: 'CalendarClock', label: 'Schedule updated' },
   nominations_opened:  { icon: 'Megaphone',   label: 'Nominations opened' },
   candidate_nominated: { icon: 'UserPlus',    label: 'Candidate nominated' },
   candidate_added:     { icon: 'UserCheck',   label: 'Candidate added by admin' },
@@ -156,7 +158,7 @@ const ElectionsTab = ({ ctx }) => {
     members, elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     createElection, deleteElection, addElectionPosition, deleteElectionPosition,
     openNominations, closeNominations, openElectionVoting, closeElectionVoting,
-    publishElectionResults, cancelElection,
+    publishElectionResults, cancelElection, setElectionSchedule,
     approveCandidate, rejectCandidate, addCandidateDirect,
     getElectionTally, verifyElectionReceipt, notifyElection,
   } = ctx;
@@ -166,6 +168,8 @@ const ElectionsTab = ({ ctx }) => {
   const [createOpen, setCreateOpen] = useState(false);
   const [posOpen, setPosOpen] = useState(false);
   const [candOpen, setCandOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [schedForm, setSchedForm] = useState({ nominations_close: '', voting_open: '', voting_close: '' });
   const [confirm, setConfirm] = useState(null); // { action, title, body, cta, tone }
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null); // tally preview when voting_closed
@@ -248,6 +252,29 @@ const ElectionsTab = ({ ctx }) => {
       setCandOpen(false);
       setCandForm({ position_id: '', member_id: '', manifesto: '' });
     } catch (e) { toast.error(e.message || 'Could not add the candidate.'); }
+    finally { setSaving(false); }
+  };
+
+  const openSchedule = () => {
+    setSchedForm({
+      nominations_close: toLocalInput(election.nominations_close_scheduled_at),
+      voting_open: toLocalInput(election.voting_open_scheduled_at),
+      voting_close: toLocalInput(election.voting_close_scheduled_at),
+    });
+    setScheduleOpen(true);
+  };
+
+  const doSaveSchedule = async () => {
+    setSaving(true);
+    try {
+      await setElectionSchedule(election.id, {
+        nominations_close: fromLocalInput(schedForm.nominations_close),
+        voting_open: fromLocalInput(schedForm.voting_open),
+        voting_close: fromLocalInput(schedForm.voting_close),
+      });
+      toast.success('Schedule saved — the system will run these transitions automatically.');
+      setScheduleOpen(false);
+    } catch (e) { toast.error(e.message || 'Could not save the schedule.'); }
     finally { setSaving(false); }
   };
 
@@ -354,6 +381,8 @@ const ElectionsTab = ({ ctx }) => {
   };
 
   const canCancel = election && !['results_published', 'cancelled'].includes(election.status);
+  const canSchedule = election && ['draft', 'nominations_open', 'nominations_closed'].includes(election.status);
+  const hasSchedule = election && (election.nominations_close_scheduled_at || election.voting_open_scheduled_at || election.voting_close_scheduled_at);
 
   const doVerifyReceipt = async () => {
     if (!receiptCode.trim()) return;
@@ -407,6 +436,11 @@ const ElectionsTab = ({ ctx }) => {
             actions={
               <div className="flex items-center gap-2 flex-wrap justify-end">
                 {lifecycle(election)}
+                {canSchedule && (
+                  <GhostButton icon="CalendarClock" onClick={openSchedule}>
+                    {hasSchedule ? 'Edit schedule' : 'Set schedule'}
+                  </GhostButton>
+                )}
                 {canCancel && (
                   <GhostButton icon="Ban" onClick={() => setConfirm({
                     title: 'Cancel this election?',
@@ -425,7 +459,22 @@ const ElectionsTab = ({ ctx }) => {
               {election.voting_open_at && <span>· Voting opened {fmtDate(election.voting_open_at)}</span>}
               {election.register_size != null && <span>· Register {election.register_size} voters</span>}
               {election.results_published_at && <span>· Published {fmtDate(election.results_published_at)}</span>}
+              {election.status === 'voting_open' && election.voting_close_scheduled_at && (
+                <CountdownPill targetIso={election.voting_close_scheduled_at} label="Auto-closes in" endedLabel="Closing…" />
+              )}
             </div>
+
+            {/* Scheduled auto-transitions */}
+            {hasSchedule && (
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground border-t border-border pt-3">
+                <span className="flex items-center gap-1.5">
+                  <Icon name="CalendarClock" size={12} color="#1da8c5" /> Scheduled:
+                </span>
+                {election.nominations_close_scheduled_at && <span>Nominations close <strong className="text-foreground">{fmtDateTime(election.nominations_close_scheduled_at)}</strong></span>}
+                {election.voting_open_scheduled_at && <span>Voting opens <strong className="text-foreground">{fmtDateTime(election.voting_open_scheduled_at)}</strong></span>}
+                {election.voting_close_scheduled_at && <span>Voting closes <strong className="text-foreground">{fmtDateTime(election.voting_close_scheduled_at)}</strong></span>}
+              </div>
+            )}
 
             {election.status === 'voting_open' && (
               <div className="mt-4">
@@ -664,6 +713,31 @@ const ElectionsTab = ({ ctx }) => {
             </Select>
           </Field>
           <Field label="Manifesto"><TextInput value={candForm.manifesto} onChange={(e) => setCandForm({ ...candForm, manifesto: e.target.value })} placeholder="Optional statement shown to voters" /></Field>
+        </div>
+      </Modal>
+
+      {/* Schedule auto-transitions */}
+      <Modal open={scheduleOpen} onClose={() => !saving && setScheduleOpen(false)} title="Voting schedule"
+        footer={<><GhostButton onClick={() => setScheduleOpen(false)} disabled={saving}>Cancel</GhostButton><PrimaryButton icon="Check" onClick={doSaveSchedule} disabled={saving}>{saving ? 'Saving…' : 'Save schedule'}</PrimaryButton></>}>
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Set the times the system should run each transition automatically. Leave a field blank to keep that
+            step manual. Nominations must be opened by you first; the rest can then run on the clock.
+          </p>
+          <Field label="Nominations close">
+            <DateTimeInput value={schedForm.nominations_close} onChange={(e) => setSchedForm({ ...schedForm, nominations_close: e.target.value })} />
+          </Field>
+          <Field label="Voting opens (freezes the register)">
+            <DateTimeInput value={schedForm.voting_open} onChange={(e) => setSchedForm({ ...schedForm, voting_open: e.target.value })} />
+          </Field>
+          <Field label="Voting closes (hard deadline)">
+            <DateTimeInput value={schedForm.voting_close} onChange={(e) => setSchedForm({ ...schedForm, voting_close: e.target.value })} />
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            No ballot is accepted once the voting-close time passes, even if the system has not yet flipped the
+            status. Voting only auto-opens if every position has an approved candidate; results are always
+            published by you, never automatically.
+          </p>
         </div>
       </Modal>
 

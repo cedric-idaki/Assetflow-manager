@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { calcKenyaTax } from '../../hooks/useFinanceHub';
 import { useFinanceHubContext } from '../../contexts/FinanceHubContext';
+import { sendInvoiceEmail } from '../../services/emailService';
 import Icon from '../../components/AppIcon';
+import SaccoFinanceHub from './sacco';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -16,7 +18,7 @@ const fmtMonth = (m) => m ? new Date(m + '-01').toLocaleDateString('en-GB', { mo
 const fmtPct   = (n) => `${parseFloat(n || 0).toFixed(1)}%`;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESIGN TOKENS (FINNOVA-inspired dark-mode aesthetic adapted for AssetFlow)
+// DESIGN TOKENS (FINNOVA-inspired dark-mode aesthetic adapted for Ararat)
 // ─────────────────────────────────────────────────────────────────────────────
 const S = {
   page:     'min-h-screen bg-background',
@@ -147,7 +149,7 @@ const toast = (msg, type = 'success') => {
 const printPayslip = ({ company, employee, month, data }) => {
   const w = window.open('', '_blank');
   if (!w) { toast('Allow pop-ups to print the payslip', 'error'); return; }
-  const coName = company?.company_name || 'AssetFlow Company';
+  const coName = company?.company_name || 'Ararat Company';
   const earn = (label, value) =>
     `<div class="row"><span>${label}</span><span>${fmt(value)}</span></div>`;
   const ded = (label, value) =>
@@ -216,6 +218,90 @@ const printPayslip = ({ company, employee, month, data }) => {
   w.print();
 };
 
+// Printable invoice — opens a clean, print-ready window for the given invoice,
+// generated on the fly from the live invoice record (client, asset, amounts).
+const printInvoice = ({ company, invoice: inv }) => {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups to print the invoice', 'error'); return; }
+  const coName = company?.company_name || 'Ararat Company';
+  const total  = (inv.amount || 0) + (inv.vat_amount || 0);
+  const assetDesc = inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment';
+  const assetRef  = [inv.asset_code, inv.plate_number].filter(Boolean).join(' · ');
+  w.document.write(`
+    <html><head><title>Invoice — ${inv.invoice_no} — ${inv.client_name || 'Client'}</title>
+    <style>
+      body { font-family: Arial, sans-serif; max-width: 680px; margin: 32px auto; color: #111; }
+      .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1A56DB; padding-bottom: 16px; margin-bottom: 20px; }
+      .co { font-size: 18px; font-weight: 700; }
+      .muted { color: #666; font-size: 12px; margin-top: 2px; }
+      .title { font-size: 26px; font-weight: 800; color: #1A56DB; text-align: right; letter-spacing: 1px; }
+      .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; font-size: 13px; }
+      .lbl { font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: .05em; margin-bottom: 4px; }
+      table.items { width: 100%; border-collapse: collapse; margin: 8px 0 4px; }
+      table.items th { text-align: left; font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: .05em; border-bottom: 1px solid #ddd; padding: 8px 6px; }
+      table.items th.r, table.items td.r { text-align: right; }
+      table.items td { font-size: 13px; padding: 10px 6px; border-bottom: 1px solid #f0f0f0; }
+      table.items td.r { font-family: monospace; }
+      .vat td { color: #666; font-size: 12px; }
+      .total { display: flex; justify-content: space-between; align-items: center; background: #1A56DB; color: #fff; padding: 14px 18px; border-radius: 8px; margin-top: 14px; }
+      .total .amt { font-family: monospace; font-size: 20px; font-weight: 800; }
+      .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; }
+      .note { margin-top: 16px; font-size: 12px; color: #666; font-style: italic; }
+      .foot { margin-top: 28px; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 12px; }
+    </style></head><body>
+      <div class="head">
+        <div>
+          <div class="co">${coName}</div>
+          ${company?.kra_pin ? `<div class="muted">KRA PIN: ${company.kra_pin}</div>` : ''}
+          ${company?.physical_address ? `<div class="muted">${company.physical_address}</div>` : ''}
+        </div>
+        <div>
+          <div class="title">INVOICE</div>
+          <div class="muted" style="text-align:right;font-family:monospace;font-weight:700;">${inv.invoice_no}</div>
+        </div>
+      </div>
+      <div class="meta">
+        <div>
+          <div class="lbl">Bill To</div>
+          <div style="font-weight:600;">${inv.client_name || '—'}</div>
+          ${inv.account_no ? `<div class="muted">${inv.account_no}</div>` : ''}
+          ${inv.client_email ? `<div class="muted">${inv.client_email}</div>` : ''}
+          ${inv.client_phone ? `<div class="muted">${inv.client_phone}</div>` : ''}
+        </div>
+        <div style="text-align:right;">
+          <div class="lbl">Details</div>
+          <div><strong>Date:</strong> ${fmtDate(inv.date)}</div>
+          <div><strong>Due:</strong> ${fmtDate(inv.due_date)}</div>
+          <div><strong>Method:</strong> ${inv.method || '—'}</div>
+          <div><strong>Ref:</strong> ${inv.reference || '—'}</div>
+        </div>
+      </div>
+      <table class="items">
+        <thead><tr><th>Description</th><th class="r">Amount (KES)</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>${assetDesc}${assetRef ? `<div class="muted">${assetRef}</div>` : ''}</td>
+            <td class="r">${(inv.amount || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
+          </tr>
+          <tr class="vat">
+            <td>VAT (16%)</td>
+            <td class="r">${(inv.vat_amount || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="total">
+        <span style="font-weight:700;">TOTAL DUE</span>
+        <span class="amt">${fmt(total)}</span>
+      </div>
+      ${inv.notes ? `<div class="note">Note: ${inv.notes}</div>` : ''}
+      <div class="foot">Generated by ${coName} on ${fmtDate(new Date())} · Computer-generated invoice.</div>
+    </body></html>
+  `);
+  w.document.close();
+  w.focus();
+  w.print();
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB 1 — INVOICES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,6 +309,7 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
   const [search,  setSearch]  = useState('');
   const [filter,  setFilter]  = useState('all');
   const [selected, setSelected] = useState(null);
+  const [emailing, setEmailing] = useState(false);
 
   const filtered = useMemo(() =>
     invoices.filter(inv => {
@@ -245,6 +332,40 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
   if (selected) {
     const inv = selected;
     const co  = companyProfile;
+
+    const handleEmail = async () => {
+      if (!inv.client_email) { toast('This client has no email address on file', 'warning'); return; }
+      setEmailing(true);
+      try {
+        await sendInvoiceEmail(inv.client_email, {
+          invoice: {
+            invoiceNumber: inv.invoice_no,
+            issueDate:     inv.date,
+            dueDate:       inv.due_date,
+            total:         (inv.amount || 0) + (inv.vat_amount || 0),
+          },
+          client: {
+            full_name:      inv.client_name,
+            account_number: inv.account_no,
+            email:          inv.client_email,
+            phone:          inv.client_phone,
+          },
+          asset: (inv.asset && inv.asset !== '—') || inv.asset_code
+            ? { description: inv.asset, asset_code: inv.asset_code, asset_type: inv.asset_type }
+            : null,
+          lineItems: [
+            { description: inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment', quantity: 1, unitPrice: inv.amount || 0 },
+            { description: 'VAT (16%)', quantity: 1, unitPrice: inv.vat_amount || 0 },
+          ],
+        });
+        toast(`Invoice ${inv.invoice_no} emailed to ${inv.client_email}`, 'success');
+      } catch (e) {
+        toast(e.message || 'Failed to send invoice email', 'error');
+      } finally {
+        setEmailing(false);
+      }
+    };
+
     return (
       <div className="space-y-4">
         <button onClick={() => setSelected(null)} className={S.btnGhost}>
@@ -254,7 +375,7 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
           {/* Header */}
           <div className="flex justify-between items-start mb-8 pb-6 border-b-2 border-primary">
             <div>
-              <p className="text-base font-semibold text-gray-900 dark:text-foreground">{co?.company_name || 'AssetFlow Company'}</p>
+              <p className="text-base font-semibold text-gray-900 dark:text-foreground">{co?.company_name || 'Ararat Company'}</p>
               <p className="text-xs text-gray-500 mt-1">KRA PIN: {co?.kra_pin || 'N/A'}</p>
               <p className="text-xs text-gray-500">{co?.physical_address || ''}</p>
             </div>
@@ -290,7 +411,14 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
             </thead>
             <tbody>
               <tr className="border-b border-gray-100 dark:border-border">
-                <td className="px-4 py-3 text-gray-800 dark:text-foreground">{inv.asset}</td>
+                <td className="px-4 py-3 text-gray-800 dark:text-foreground">
+                  {inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment'}
+                  {[inv.asset_code, inv.plate_number].filter(Boolean).length > 0 && (
+                    <span className="block text-xs text-gray-400">
+                      {[inv.asset_code, inv.plate_number].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-right font-mono text-gray-800 dark:text-foreground">{inv.amount.toLocaleString('en-KE')}</td>
               </tr>
               <tr className="border-b border-gray-100 dark:border-border text-gray-500">
@@ -306,11 +434,18 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
           </div>
           {inv.notes && <p className="mt-4 text-xs text-gray-500 italic">Note: {inv.notes}</p>}
           <div className="mt-6 flex gap-3">
-            <button className={S.btnPri} onClick={() => toast(`Printing ${inv.invoice_no}…`, 'info')}>
+            <button className={S.btnPri} onClick={() => printInvoice({ company: co, invoice: inv })}>
               <Icon name="Printer" size={14} color="currentColor" /> Print
             </button>
-            <button className={S.btnSec} onClick={() => toast(`Sending ${inv.invoice_no} by email…`, 'info')}>
-              <Icon name="Mail" size={14} color="currentColor" /> Email
+            <button
+              className={S.btnSec}
+              onClick={handleEmail}
+              disabled={emailing || !inv.client_email}
+              title={inv.client_email ? `Email invoice to ${inv.client_email}` : 'No client email on file'}
+            >
+              {emailing
+                ? <><Icon name="Loader" size={14} color="currentColor" className="animate-spin" /> Sending…</>
+                : <><Icon name="Mail" size={14} color="currentColor" /> Email</>}
             </button>
           </div>
         </div>
@@ -995,7 +1130,7 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs font-semibold text-primary-foreground/70 uppercase tracking-wider">Payslip Preview</p>
-                      <p className="text-sm font-semibold text-primary-foreground mt-0.5">{companyProfile?.company_name || 'AssetFlow Company'}</p>
+                      <p className="text-sm font-semibold text-primary-foreground mt-0.5">{companyProfile?.company_name || 'Ararat Company'}</p>
                     </div>
                     <span className="text-xs font-bold text-primary-foreground/90 uppercase tracking-wider">PAYSLIP</span>
                   </div>
@@ -1177,7 +1312,7 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
 
   const co      = companyProfile;
   const allJournals = [...journalEntries, ...automatedEntries];
-  const coName  = co?.company_name || 'AssetFlow Company';
+  const coName  = co?.company_name || 'Ararat Company';
   const periodLabel = fmtMonth(period);
 
   // Trial balance from chart of accounts + journals
@@ -1523,7 +1658,13 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 const FinanceHub = () => {
-  const { user } = useAuth();
+  const { user, userProfile, getRoleRedirectPath } = useAuth();
+  const navigate = useNavigate();
+
+  // Close (✕) exits the Finance Hub back to the user's own dashboard portal —
+  // the same role-based destination they land on right after login.
+  const handleClose = () => navigate(getRoleRedirectPath(userProfile?.role));
+
   const {
     invoices, journalEntries, automatedEntries, chartOfAccounts,
     payrollRecords, employees, financialSummary: fs,
@@ -1582,6 +1723,14 @@ const FinanceHub = () => {
             )}
             <button className={S.btnSec} onClick={refetch}>
               <Icon name="RefreshCw" size={14} color="currentColor" /> Refresh
+            </button>
+            <button
+              onClick={handleClose}
+              title="Close Finance Hub"
+              aria-label="Close Finance Hub and return to dashboard"
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-muted-foreground border border-border hover:text-red-600 hover:border-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+            >
+              <Icon name="X" size={18} color="currentColor" />
             </button>
           </div>
         </div>
@@ -1657,4 +1806,22 @@ const FinanceHub = () => {
   );
 };
 
-export default FinanceHub;
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUTE ENTRY POINT
+//
+// /finance-hub serves two completely different products. A company tenant gets
+// the hub above (invoices, payroll, VAT — built on chart_of_accounts and
+// journal_entries). A sacco/chama tenant gets the fund-accounting ledger in
+// ./sacco, which implements the SACCO/Chama Financial Accounting System
+// specification against the sacco_* tables and never touches the company ones.
+//
+// The split is on role alone, so no company user can reach the sacco hub and
+// no sacco admin lands on a hub whose tables are empty for them.
+// ─────────────────────────────────────────────────────────────────────────────
+const FinanceHubRoute = () => {
+  const { userProfile } = useAuth();
+  if (userProfile?.role === 'sacco_admin') return <SaccoFinanceHub />;
+  return <FinanceHub />;
+};
+
+export default FinanceHubRoute;

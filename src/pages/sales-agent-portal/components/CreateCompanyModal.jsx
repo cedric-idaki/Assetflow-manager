@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { getPasswordError } from '../../../utils/validation';
 import { useAuth } from '../../../contexts/AuthContext';
 import Icon from '../../../components/AppIcon';
 
@@ -203,6 +204,9 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
   const [errors, setErrors]     = useState({});
   const [showPwd, setShowPwd]   = useState(false);
   const [showConf, setShowConf] = useState(false);
+  // "Other" asset-type entry — free-text types not in the predefined ASSET_TYPES list
+  const [showOther, setShowOther]   = useState(false);
+  const [otherInput, setOtherInput] = useState('');
 
   const pwdStrength = getPasswordStrength(form.password);
 
@@ -217,6 +221,38 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
       ? form.asset_types.filter(t => t !== type)
       : [...form.asset_types, type]
     );
+  };
+
+  // ── "Other" custom asset types ────────────────────────────────────────────
+  // Anything selected that isn't a predefined ASSET_TYPES label is a custom
+  // "Other" entry (e.g. "Motorbike"). It flows through the app untouched — the
+  // asset-management screen maps unknown labels to a lowercase type key and the
+  // asset form falls back to its generic "Other" field set.
+  const customAssetTypes = form.asset_types.filter(t => !ASSET_TYPES.includes(t));
+  const otherActive = showOther || customAssetTypes.length > 0;
+
+  const addCustomTypes = () => {
+    const existing = form.asset_types.map(t => t.toLowerCase());
+    const added = [];
+    otherInput.split(',').map(s => s.trim()).filter(Boolean).forEach(name => {
+      const key = name.toLowerCase();
+      if (!existing.includes(key) && !added.some(a => a.toLowerCase() === key)) added.push(name);
+    });
+    if (added.length) set('asset_types', [...form.asset_types, ...added]);
+    setOtherInput('');
+  };
+
+  const removeCustomType = (name) =>
+    set('asset_types', form.asset_types.filter(t => t !== name));
+
+  const toggleOther = () => {
+    if (otherActive) {
+      setShowOther(false);
+      setOtherInput('');
+      set('asset_types', form.asset_types.filter(t => ASSET_TYPES.includes(t)));
+    } else {
+      setShowOther(true);
+    }
   };
 
   // ── Validation ────────────────────────────────────────────────────────────
@@ -238,8 +274,7 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
     if (form.asset_types.length === 0) e.asset_types = 'Select at least one asset type';
     if (!form.plan)                    e.plan        = 'Select a subscription plan';
     if (!form.password)                e.password    = 'Password is required';
-    else if (form.password.length < 8) e.password    = 'Minimum 8 characters';
-    else if (pwdStrength.score < 2)    e.password    = 'Password too weak';
+    else if (getPasswordError(form.password)) e.password = getPasswordError(form.password);
     if (form.password !== form.confirm_password) e.confirm_password = 'Passwords do not match';
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -522,8 +557,59 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
                       </button>
                     );
                   })}
+
+                  {/* "Other" — register an asset type not in the list (e.g. Motorbike) */}
+                  <button
+                    type="button"
+                    onClick={toggleOther}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm border text-left transition-all ${
+                      otherActive ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-medium' : 'border-gray-200 text-gray-600 hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${otherActive ? 'bg-emerald-600' : 'border border-gray-300'}`}>
+                      {otherActive && <Icon name="Check" size={10} color="white" />}
+                    </div>
+                    Other
+                  </button>
                 </div>
                 {errors.asset_types && <p className="mt-1 text-xs text-red-500">{errors.asset_types}</p>}
+
+                {otherActive && (
+                  <div className="mt-2 space-y-2">
+                    {customAssetTypes.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {customAssetTypes.map(t => (
+                          <span key={t} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border border-emerald-500 bg-emerald-50 text-emerald-700">
+                            {t}
+                            <button type="button" onClick={() => removeCustomType(t)} className="hover:opacity-70">
+                              <Icon name="X" size={11} color="#047857" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={otherInput}
+                        onChange={e => setOtherInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomTypes(); } }}
+                        placeholder="Type an asset type e.g. Motorbike"
+                        className="flex-1 px-3 py-2 rounded-xl text-sm border border-gray-200 text-gray-700 focus:outline-none focus:border-emerald-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={addCustomTypes}
+                        className="px-3 py-2 rounded-xl text-sm font-medium bg-emerald-600 text-white flex-shrink-0 hover:bg-emerald-700 transition-colors"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Add any asset type not listed above. Press Enter or tap Add — you can add more than one.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div>

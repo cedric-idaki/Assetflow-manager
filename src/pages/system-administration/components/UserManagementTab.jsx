@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
+import { getPasswordError } from '../../../utils/validation';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../contexts/AuthContext';
 import { auditLogsService } from '../../../services/supabaseService';
@@ -86,7 +87,7 @@ const UserModal = ({ user, onClose, onSave, availableRoles = ROLE_OPTIONS_ALL })
     if (!form.role) e.role = 'Role is required';
     if (!isEdit) {
       if (!form.password) e.password = 'Password is required';
-      else if (form.password.length < 8) e.password = 'Minimum 8 characters';
+      else if (getPasswordError(form.password)) e.password = getPasswordError(form.password);
       if (form.password !== form.confirm_password) e.confirm_password = 'Passwords do not match';
     }
     return e;

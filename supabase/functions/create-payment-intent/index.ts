@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
       amount: Math.round(paymentData.amount * 100),
       currency: paymentData.currency || 'usd',
       customer: stripeCustomer.id,
-      description: paymentData.description || 'AssetFlow Payment',
+      description: paymentData.description || 'Ararat Payment',
       metadata: {
         clientId: paymentData.additionalFields?.clientId || '',
         assetId: paymentData.additionalFields?.assetId || '',

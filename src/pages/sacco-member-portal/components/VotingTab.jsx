@@ -3,7 +3,7 @@ import { useToast } from '../../../components/Toast';
 import Icon from '../../../components/AppIcon';
 import {
   Card, Badge, EmptyState, PrimaryButton, GhostButton,
-  Modal, Field, TextInput, Select, fmtDate,
+  Modal, Field, TextInput, Select, fmtDate, CountdownPill,
 } from '../../sacco-dashboard/components/_shared';
 
 const emptyMotion = { title: '', description: '', ballot_type: 'visible' };
@@ -130,10 +130,16 @@ const VotingTab = ({ ctx }) => {
                       {m.ballot_type === 'secret' ? 'Secret ballot' : 'Open ballot'}
                       {m.proposer?.full_name ? ` · proposed by ${m.proposer.full_name}` : ''}
                       {m.seconder?.full_name ? ` · seconded by ${m.seconder.full_name}` : ''}
+                      {m.quorum_percent > 0 ? ` · quorum ${m.quorum_percent}%` : ''}
                       {m.voting_end ? ` · voting ${votingClosed(m) ? 'closed' : 'closes'} ${fmtDate(m.voting_end)}` : ''}
                     </p>
                   </div>
-                  <Badge status={m.status} />
+                  <div className="flex flex-col items-end gap-1">
+                    <Badge status={m.status} />
+                    {m.status === 'open' && m.voting_end && !votingClosed(m) && (
+                      <CountdownPill targetIso={m.voting_end} label="Closes in" endedLabel="Closed" />
+                    )}
+                  </div>
                 </div>
 
                 {canSecond && (

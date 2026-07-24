@@ -33,6 +33,7 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
   const [shares,        setShares]        = useState([]);
+  const [sharePrices,   setSharePrices]   = useState([]);
   const [listings,      setListings]      = useState([]);
   const [transfers,     setTransfers]     = useState([]);
   const [motions,       setMotions]       = useState([]);
@@ -148,6 +149,16 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  // Daily market-value series the sacco_admin publishes (latest = current value).
+  const fetchSharePrices = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_share_prices').select('*')
+        .eq('admin_id', adminId).order('effective_date', { ascending: false });
+      setSharePrices(data || []);
+    } catch (_) {}
+  }, []);
+
   const fetchMotions = useCallback(async () => {
     try {
       const adminId = await getAdminId();
@@ -237,7 +248,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     await Promise.all([
       fetchSacco(), fetchMembers(), fetchContributions(), fetchContributionTypes(),
       fetchLoanProducts(), fetchLoans(), fetchSchedules(), fetchShares(), fetchListings(),
-      fetchTransfers(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
+      fetchTransfers(), fetchSharePrices(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(),
       fetchElectionVoters(), fetchElectionAudit(),
     ]);
@@ -246,7 +257,7 @@ export const SaccoDashboardProvider = ({ children }) => {
   }, [
     fetchSacco, fetchMembers, fetchContributions, fetchContributionTypes,
     fetchLoanProducts, fetchLoans, fetchSchedules, fetchShares, fetchListings,
-    fetchTransfers, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
+    fetchTransfers, fetchSharePrices, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
     fetchElections, fetchElectionPositions, fetchElectionCandidates,
     fetchElectionVoters, fetchElectionAudit,
   ]);
@@ -259,6 +270,10 @@ export const SaccoDashboardProvider = ({ children }) => {
   const activeLoans = loans.filter((l) => l.status === 'active').length;
   const totalShareValue = shares.reduce(
     (s, r) => s + (parseInt(r.shares_held, 10) || 0) * parseFloat(r.par_value || 0), 0);
+  // Market value the admin publishes: latest price × all shares in issue.
+  const totalSharesHeld = shares.reduce((s, r) => s + (parseInt(r.shares_held, 10) || 0), 0);
+  const currentMarketValue = parseFloat(sharePrices[0]?.market_value || 0);
+  const marketCap = totalSharesHeld * currentMarketValue;
 
   const stats = {
     totalMembers: members.length,
@@ -443,6 +458,21 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchShares();
   }, [shares, saccoId, fetchShares]);
 
+  // Publish (or revise) the market value per share for a given day. Upserts on
+  // (sacco_id, effective_date) so re-setting today's value overwrites it.
+  const setMarketValue = useCallback(async (form) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_share_prices').upsert({
+      admin_id: adminId, sacco_id: saccoId,
+      market_value: parseFloat(form.market_value) || 0,
+      effective_date: form.effective_date || new Date().toISOString().slice(0, 10),
+      note: form.note || null,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'sacco_id,effective_date' });
+    if (error) throw error;
+    await fetchSharePrices();
+  }, [saccoId, fetchSharePrices]);
+
   const createListing = useCallback(async (form) => {
     const adminId = await getAdminId();
     const { error } = await supabase.from('sacco_share_listings').insert({
@@ -536,17 +566,16 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchVotes();
   }, [fetchVotes]);
 
+  // Close a motion through the quorum-aware DB function: it counts the ballots
+  // (bypassing vote RLS so secret ballots stay aggregate-only), checks quorum
+  // against the active-member count, and sets passed/rejected. Returns the
+  // outcome { yes, no, abstain, total, eligible, quorum_met, passed, status }.
   const publishResults = useCallback(async (motion) => {
-    const motionVotes = votes.filter((v) => v.motion_id === motion.id);
-    const yes = motionVotes.filter((v) => v.choice === 'yes').length;
-    const no  = motionVotes.filter((v) => v.choice === 'no').length;
-    const passed = yes > no;
-    const { error } = await supabase.from('sacco_motions').update({
-      status: passed ? 'passed' : 'rejected', updated_at: new Date().toISOString(),
-    }).eq('id', motion.id);
+    const { data, error } = await supabase.rpc('sacco_motion_close', { p_motion_id: motion.id });
     if (error) throw error;
     await fetchMotions();
-  }, [votes, fetchMotions]);
+    return data;
+  }, [fetchMotions]);
 
   // ── Elections lifecycle (polling station) ──────────────────────────────────
   // Every state transition runs through a SECURITY DEFINER RPC (see
@@ -652,6 +681,19 @@ export const SaccoDashboardProvider = ({ children }) => {
     await refreshElections();
   }, [electionRpc, refreshElections]);
 
+  // Set (or clear) the auto-transition schedule. Pass null for any leg to leave
+  // that transition manual. The DB refuses edits once voting has opened.
+  const setElectionSchedule = useCallback(async (electionId, { nominations_close, voting_open, voting_close }) => {
+    const { error } = await supabase.rpc('sacco_election_set_schedule', {
+      p_election_id: electionId,
+      p_nominations_close: nominations_close || null,
+      p_voting_open: voting_open || null,
+      p_voting_close: voting_close || null,
+    });
+    if (error) throw error;
+    await refreshElections();
+  }, [refreshElections]);
+
   const approveCandidate = useCallback(async (candidate) => {
     const adminId = await getAdminId();
     const { error } = await supabase.from('sacco_election_candidates').update({
@@ -745,6 +787,28 @@ export const SaccoDashboardProvider = ({ children }) => {
     return { sent: results.length - failed, failed };
   }, [members, sacco?.name, callFunction]);
 
+  // Email every active member about a motion event (e.g. voting opened). Same
+  // one-email-per-recipient, fire-and-forget shape as notifyElection.
+  const notifyMotion = useCallback(async (type, motion, extra = {}) => {
+    const recipients = members.filter((m) => m.status === 'active' && m.email);
+    if (recipients.length === 0) return { sent: 0, failed: 0 };
+    const results = await Promise.allSettled(recipients.map((m) =>
+      callFunction('send-email', {
+        type,
+        to: m.email,
+        data: {
+          fullName: m.full_name,
+          saccoName: sacco?.name,
+          motionTitle: motion.title,
+          ballotType: motion.ballot_type,
+          portalUrl: `${window.location.origin}/login`,
+          ...extra,
+        },
+      })));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    return { sent: results.length - failed, failed };
+  }, [members, sacco?.name, callFunction]);
+
   const uploadDocument = useCallback(async (form) => {
     const adminId = await getAdminId();
     const { error } = await supabase.from('sacco_documents').insert({
@@ -793,6 +857,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       mk('contribs', 'sacco_contributions', fetchContributions),
       mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); }),
       mk('shares', 'sacco_shares', fetchShares),
+      mk('share_prices', 'sacco_share_prices', fetchSharePrices),
       mk('motions', 'sacco_motions', fetchMotions),
       mk('votes', 'sacco_votes', fetchVotes),
       mk('elections', 'sacco_elections', fetchElections),
@@ -809,7 +874,8 @@ export const SaccoDashboardProvider = ({ children }) => {
 
   const value = {
     sacco, members, contributions, contributionTypes, loanProducts, loans, schedules,
-    shares, listings, transfers, motions, votes, documents, invoices,
+    shares, sharePrices, listings, transfers, motions, votes, documents, invoices,
+    currentMarketValue, marketCap, totalSharesHeld,
     elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     stats, loading, connectionStatus,
     refetch: fetchAll,
@@ -819,12 +885,12 @@ export const SaccoDashboardProvider = ({ children }) => {
     addMember, updateMember, recordContribution,
     createContributionType, updateContributionType,
     createLoanProduct, createLoan, approveLoan, rejectLoan, recordRepayment,
-    saveShares, createListing, requestTransfer, approveTransfer,
-    createMotion, secondMotion, openVoting, castVote, publishResults,
+    saveShares, setMarketValue, createListing, requestTransfer, approveTransfer,
+    createMotion, secondMotion, openVoting, castVote, publishResults, notifyMotion,
     createElection, updateElection, deleteElection,
     addElectionPosition, updateElectionPosition, deleteElectionPosition,
     openNominations, closeNominations, openElectionVoting, closeElectionVoting,
-    publishElectionResults, cancelElection,
+    publishElectionResults, cancelElection, setElectionSchedule,
     approveCandidate, rejectCandidate, addCandidateDirect,
     getElectionTally, verifyElectionReceipt, notifyElection, refreshElections,
     uploadDocument, exportCSV,

@@ -139,7 +139,7 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
   // Company name
   setFont('bold', 16);
   setColor(WHITE);
-  txt(company?.company_name || 'AssetFlow Ltd', M, 16);
+  txt(company?.company_name || 'Ararat Ltd', M, 16);
 
   setFont('normal', 8);
   setColor([180, 210, 255]);
@@ -496,7 +496,7 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
     setFont('normal', 6.5);
     setColor([180, 210, 255]);
     txt(
-      `${company?.company_name || 'AssetFlow'} · ${contractTitle} · Ref: ${sale?.invoice_number || ''} · Page ${i} of ${totalPages}`,
+      `${company?.company_name || 'Ararat'} · ${contractTitle} · Ref: ${sale?.invoice_number || ''} · Page ${i} of ${totalPages}`,
       W / 2, 293, { align: 'center' }
     );
   }

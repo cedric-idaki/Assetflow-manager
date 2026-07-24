@@ -31,7 +31,7 @@ const UserRegistrationScreen = () => {
               <Icon name="Building2" size={24} color="#0A1628" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Merriweather, serif' }}>AssetFlow</h1>
+              <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Merriweather, serif' }}>Ararat</h1>
               <p className="text-xs" style={{ color: '#C9A84C' }}>Financial Management Platform</p>
             </div>
           </div>
@@ -41,7 +41,7 @@ const UserRegistrationScreen = () => {
         <div className="relative z-10 flex-1 flex flex-col justify-center">
           <div className="w-12 h-0.5 mb-6" style={{ background: '#C9A84C' }} />
           <h2 className="text-3xl font-bold text-white leading-tight mb-4" style={{ fontFamily: 'Merriweather, serif' }}>
-            Join AssetFlow Today
+            Join Ararat Today
           </h2>
           <p className="text-sm leading-relaxed mb-8" style={{ color: '#A8BDD4' }}>
             Create your account to access the full suite of financial management tools designed for your business.
@@ -62,7 +62,7 @@ const UserRegistrationScreen = () => {
 
         {/* Footer */}
         <div className="relative z-10">
-          <p className="text-xs" style={{ color: '#5A7A9A' }}>© {new Date()?.getFullYear()} AssetFlow. All rights reserved.</p>
+          <p className="text-xs" style={{ color: '#5A7A9A' }}>© {new Date()?.getFullYear()} Ararat. All rights reserved.</p>
         </div>
       </div>
 
@@ -76,7 +76,7 @@ const UserRegistrationScreen = () => {
           >
             <Icon name="Building2" size={26} color="white" />
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: '#0A1628', fontFamily: 'Merriweather, serif' }}>AssetFlow</h1>
+          <h1 className="text-2xl font-bold" style={{ color: '#0A1628', fontFamily: 'Merriweather, serif' }}>Ararat</h1>
         </div>
 
         <div className="w-full max-w-md">

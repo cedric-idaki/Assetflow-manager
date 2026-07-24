@@ -7,6 +7,7 @@ import ActivityFeed from './components/ActivityFeed';
 import LeadRegistrationModal from './components/LeadRegistrationModal';
 import CreateClientModal from './components/CreateClientModal';
 import CreateCompanyModal from './components/CreateCompanyModal';
+import CreateSaccoModal from './components/CreateSaccoModal';
 import AssistModal from './components/AssistModal';
 import AgentActivityTrail from './components/AgentActivityTrail';
 import SalesCostTracker from './components/SalesCostTracker';
@@ -295,7 +296,7 @@ const KPICard = ({ label, value, icon, colorClass, loading, subtext }) => (
 );
 
 // ── Lead Detail Modal ─────────────────────────────────────────────────────────
-const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isClientMode }) => {
+const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isClientMode, isSaccoMode }) => {
   const [newStage, setNewStage] = useState(lead?.stage || 'new_lead');
   const [saving, setSaving]     = useState(false);
 
@@ -378,13 +379,15 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isCl
             <p className="text-xs text-emerald-700 mb-2">
               {isClientMode
                 ? 'Convert them into a client with a portal login. Their details are prefilled.'
+                : isSaccoMode
+                ? 'Register them as a sacco with a sacco admin portal account. Their details are prefilled.'
                 : 'Register them as a company with an admin portal account. Their details are prefilled.'}
             </p>
             <button
               onClick={() => { onClose(); onConvertToClient(lead); }}
               className="w-full py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
             >
-              {isClientMode ? 'Convert to Client →' : 'Register as Company →'}
+              {isClientMode ? 'Convert to Client →' : isSaccoMode ? 'Register as Sacco →' : 'Register as Company →'}
             </button>
           </div>
         </div>
@@ -418,8 +421,10 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isCl
 };
 
 // ── My Clients Section ────────────────────────────────────────────────────────
-const MyClientsSection = ({ leads, onCreateClient, isClientMode }) => {
+const MyClientsSection = ({ leads, onCreateClient, isClientMode, isSaccoMode }) => {
   const closedLeads = (leads || []).filter(l => l.stage === 'closed');
+  const registerLabel = isClientMode ? 'Create Client' : isSaccoMode ? 'Register Sacco' : 'Register Company';
+  const registerNoun  = isClientMode ? 'client' : isSaccoMode ? 'sacco' : 'company';
 
   return (
     <div className="bg-card border border-border rounded-xl p-5">
@@ -433,8 +438,8 @@ const MyClientsSection = ({ leads, onCreateClient, isClientMode }) => {
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white"
           style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
         >
-          <Icon name={isClientMode ? 'UserPlus' : 'Building2'} size={13} color="white" />
-          {isClientMode ? 'Create Client' : 'Register Company'}
+          <Icon name={isClientMode ? 'UserPlus' : isSaccoMode ? 'PiggyBank' : 'Building2'} size={13} color="white" />
+          {registerLabel}
         </button>
       </div>
 
@@ -442,12 +447,12 @@ const MyClientsSection = ({ leads, onCreateClient, isClientMode }) => {
         <div className="text-center py-8 text-muted-foreground">
           <Icon name="Users" size={28} color="currentColor" />
           <p className="text-xs mt-2 font-medium">No converted clients yet</p>
-          <p className="text-xs opacity-60 mt-0.5">Convert a lead or register a new company</p>
+          <p className="text-xs opacity-60 mt-0.5">Convert a lead or register a new {registerNoun}</p>
           <button
             onClick={() => onCreateClient(null)}
             className="mt-3 text-xs text-emerald-600 hover:underline font-semibold"
           >
-            Register a company →
+            Register a {registerNoun} →
           </button>
         </div>
       ) : (
@@ -474,7 +479,7 @@ const MyClientsSection = ({ leads, onCreateClient, isClientMode }) => {
                   onClick={() => onCreateClient(lead)}
                   className="text-xs text-blue-600 hover:underline"
                 >
-                  Register company
+                  Register {registerNoun}
                 </button>
               </div>
             </div>
@@ -499,8 +504,10 @@ const SalesAgentPortal = () => {
     activeView, setActiveView, modals, openModal, closeModal,
   } = useSalesAgentContext();
 
-  // Admin-created agents register clients; super-admin-created agents register companies.
+  // Admin-created agents register clients; super-admin-created agents register
+  // companies; sacco-oversight-created agents (agent_type 'sacco') register saccos.
   const isClientMode = agentMode === 'client';
+  const isSaccoMode  = agentMode === 'sacco';
   // Only super-admin BRONZE agents can hand an admin to a gold agent for onboarding.
   const isBronzeCompanyAgent = agentMode === 'company' && (agentProfile?.agent_plan || 'bronze') === 'bronze';
 
@@ -598,14 +605,15 @@ const SalesAgentPortal = () => {
               </button>
             </div>
 
-            {/* Create a client (admin agents) or register a company (super-admin agents) */}
+            {/* Create a client (admin agents), register a company (super-admin
+                agents) or register a sacco (sacco-oversight agents) */}
             <button
               onClick={() => { closeModal('prefillLead'); openModal('createClient'); }}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
             >
-              <Icon name={isClientMode ? 'UserPlus' : 'Building2'} size={15} color="white" />
-              {isClientMode ? 'Create Client' : 'Register Company'}
+              <Icon name={isClientMode ? 'UserPlus' : isSaccoMode ? 'PiggyBank' : 'Building2'} size={15} color="white" />
+              {isClientMode ? 'Create Client' : isSaccoMode ? 'Register Sacco' : 'Register Company'}
             </button>
 
             {/* Assist — bronze agents hand an admin to a gold agent for onboarding */}
@@ -718,7 +726,7 @@ const SalesAgentPortal = () => {
 
             {/* My Clients + Commission */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <MyClientsSection leads={leads} onCreateClient={handleConvertToClient} isClientMode={isClientMode} />
+              <MyClientsSection leads={leads} onCreateClient={handleConvertToClient} isClientMode={isClientMode} isSaccoMode={isSaccoMode} />
               <CommissionDashboard
                 kpis={kpis}
                 walletTransactions={walletTransactions}
@@ -786,13 +794,22 @@ const SalesAgentPortal = () => {
           onStageChange={updateLeadStage}
           onConvertToClient={handleConvertToClient}
           isClientMode={isClientMode}
+          isSaccoMode={isSaccoMode}
         />
       )}
 
-      {/* ── Convert / register modal — client or company per agent type ── */}
+      {/* ── Convert / register modal — client, sacco or company per agent type ── */}
       {modals.createClient && (
         isClientMode ? (
           <CreateClientModal
+            isOpen={modals.createClient}
+            onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
+            agentProfile={agentProfile}
+            prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
+            onSuccess={handleClientCreated}
+          />
+        ) : isSaccoMode ? (
+          <CreateSaccoModal
             isOpen={modals.createClient}
             onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
             agentProfile={agentProfile}

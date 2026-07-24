@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { getPasswordError } from '../../../utils/validation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { emailLoginCredentials } from '../../../services/credentialsEmailService';
 import Icon from '../../../components/AppIcon';
@@ -212,8 +213,7 @@ const CreateStaffUserModal = ({ isOpen, onClose, onSuccess }) => {
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Invalid email address';
     if (!form.department)              e.department       = 'Department is required';
     if (!form.password)                e.password         = 'Password is required';
-    else if (form.password.length < 8) e.password         = 'Minimum 8 characters';
-    else if (pwdStrength.score < 2)    e.password         = 'Password is too weak';
+    else if (getPasswordError(form.password)) e.password = getPasswordError(form.password);
     if (form.password !== form.confirm_password) e.confirm_password = 'Passwords do not match';
     setErrors(e);
     return Object.keys(e).length === 0;

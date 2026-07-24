@@ -20,19 +20,33 @@ const json = (payload: unknown, status = 200) =>
   });
 
 // Which roles each caller role is allowed to create.
-// NOTE: sales agents may now create BOTH client and admin (company) accounts.
+// NOTE: sales agents may now create client, admin (company) AND sacco_admin
+// (sacco) accounts — a sacco-side agent registers saccos instead of companies.
 const CAN_CREATE: Record<string, string[]> = {
-  super_admin: ['admin', 'manager', 'finance', 'operations', 'collections_officer', 'accountant', 'director', 'sales_agent', 'sales', 'staff', 'client'],
+  super_admin: ['admin', 'sacco_admin', 'manager', 'finance', 'operations', 'collections_officer', 'accountant', 'director', 'sales_agent', 'sales', 'staff', 'client'],
   admin:       ['admin', 'manager', 'finance', 'operations', 'collections_officer', 'accountant', 'director', 'sales_agent', 'sales', 'staff', 'client'],
   // A sacco_admin staffs its own tenant like a company admin, but cannot
   // create other admin (company) accounts. sacco_member is the self-service
   // portal login for a sacco_members row (BRS v3.0 member portal).
   sacco_admin: ['manager', 'finance', 'operations', 'collections_officer', 'accountant', 'director', 'sales_agent', 'sales', 'staff', 'hr', 'client', 'sacco_member'],
-  sales_agent: ['client', 'admin'],
-  sales:       ['client', 'admin'],
-  agent:       ['client', 'admin'],
+  sales_agent: ['client', 'admin', 'sacco_admin'],
+  sales:       ['client', 'admin', 'sacco_admin'],
+  agent:       ['client', 'admin', 'sacco_admin'],
   manager:     ['client', 'staff'],
   staff:       ['client'],
+};
+
+// Server-side password policy — mirrors PASSWORD_POLICY in src/utils/validation.js.
+// Enforced here so the rule cannot be bypassed by calling the API directly;
+// keep the two in sync.
+const passwordPolicyError = (pw: string): string | null => {
+  const failed: string[] = [];
+  if (pw.length < 8) failed.push('at least 8 characters');
+  if (!/[A-Z]/.test(pw)) failed.push('an uppercase letter');
+  if (!/[a-z]/.test(pw)) failed.push('a lowercase letter');
+  if (!/[0-9]/.test(pw)) failed.push('a number');
+  if (!/[^A-Za-z0-9]/.test(pw)) failed.push('a special character');
+  return failed.length > 0 ? `Password must include ${failed.join(', ')}.` : null;
 };
 
 // Fallback plan pricing if the subscription_plans lookup misses.
@@ -102,6 +116,8 @@ Deno.serve(async (req) => {
       sacco_member_id,
       // Company fields (only used when role === 'admin')
       company_name, business_reg_number, business_type, location, city, asset_types, plan,
+      // Sacco fields (only used when role === 'sacco_admin')
+      sacco_name, sasra_licence_no, tier, member_cap,
     } = body;
 
     // ── 3b. Password reset for an existing sacco member login ─────────────
@@ -114,8 +130,9 @@ Deno.serve(async (req) => {
       if (!sacco_member_id || !password) {
         return json({ error: 'sacco_member_id and password are required' }, 400);
       }
-      if (password.length < 8) {
-        return json({ error: 'Password must be at least 8 characters' }, 400);
+      const resetPwError = passwordPolicyError(password);
+      if (resetPwError) {
+        return json({ error: resetPwError }, 400);
       }
       const { data: memberRow } = await adminClient
         .from('sacco_members')
@@ -137,11 +154,55 @@ Deno.serve(async (req) => {
       return json({ success: true, email: memberRow.email, full_name: memberRow.full_name }, 200);
     }
 
+    // ── 3c. Delete a sacco member (and their portal login, if any) ────────
+    // The member row is deleted FIRST: frozen election registers and cast
+    // ballots reference sacco_members with no ON DELETE action, so a member
+    // with election history aborts here before the login is touched.
+    if (body.action === 'delete-member') {
+      if (!['sacco_admin', 'admin', 'super_admin'].includes(callerRole)) {
+        return json({ error: `Role "${callerRole}" is not permitted to delete members.` }, 403);
+      }
+      if (!sacco_member_id) {
+        return json({ error: 'sacco_member_id is required' }, 400);
+      }
+      const { data: memberRow } = await adminClient
+        .from('sacco_members')
+        .select('id, user_id')
+        .eq('id', sacco_member_id)
+        // Tenant guard: the member row must belong to the caller's tenant.
+        .eq('admin_id', callerProfile.admin_id || caller.id)
+        .maybeSingle();
+      if (!memberRow) {
+        return json({ error: 'Member not found in your sacco.' }, 404);
+      }
+      const { error: delErr } = await adminClient
+        .from('sacco_members')
+        .delete()
+        .eq('id', memberRow.id);
+      if (delErr) {
+        if (delErr.code === '23503') {
+          return json({
+            error: 'This member is on a frozen election register or has cast ballots, records that must be kept for audit. Set their status to inactive instead.',
+          }, 409);
+        }
+        throw delErr;
+      }
+      if (memberRow.user_id) {
+        // Non-fatal: the member row is already gone; an orphaned login has no
+        // member to resolve and the portal denies it, but log for cleanup.
+        const { error: authDelErr } = await adminClient.auth.admin.deleteUser(memberRow.user_id);
+        if (authDelErr) console.error('auth user delete error (non-fatal):', authDelErr.message);
+        await adminClient.from('user_profiles').delete().eq('id', memberRow.user_id);
+      }
+      return json({ success: true }, 200);
+    }
+
     if (!email || !password || !full_name) {
       return json({ error: 'email, password, and full_name are required' }, 400);
     }
-    if (password.length < 8) {
-      return json({ error: 'Password must be at least 8 characters' }, 400);
+    const pwError = passwordPolicyError(password);
+    if (pwError) {
+      return json({ error: pwError }, 400);
     }
 
     // ── 4. Authorise the requested role ───────────────────────────────────
@@ -295,6 +356,53 @@ Deno.serve(async (req) => {
           warnings.push(`company_subscriptions: ${subErr.message}`);
           console.error('company_subscriptions insert error:', subErr.message);
         }
+      }
+    }
+
+    // ── 7b. For sacco_admin accounts, provision the sacco tenant record +
+    //        subscription, mirroring the self-service sacco registration
+    //        (src/pages/admin-registration). Used by sacco sales agents. ───
+    if (role === 'sacco_admin') {
+      const saccoTier = (tier as string) || 'bronze';
+
+      const { error: saccoErr } = await adminClient.from('saccos').insert({
+        admin_id:         newUserId,
+        name:             sacco_name || company_name || full_name,
+        registration_no:  business_reg_number || null,
+        sasra_licence_no: sasra_licence_no || null,
+        business_type:    business_type || null,
+        email:            cleanEmail,
+        phone:            phone || null,
+        location:         location || null,
+        city:             city || null,
+        tier:             saccoTier,
+        member_cap:       member_cap || null,
+        kyc_status:       'pending',
+      });
+      if (saccoErr) {
+        warnings.push(`saccos: ${saccoErr.message}`);
+        console.error('saccos insert error:', saccoErr.message);
+      }
+
+      const { data: planRow } = await adminClient
+        .from('subscription_plans')
+        .select('id')
+        .eq('name', saccoTier)
+        .maybeSingle();
+
+      const { error: subErr } = await adminClient.from('company_subscriptions').insert({
+        admin_id:   newUserId,
+        plan_id:    planRow?.id || null,
+        plan_name:  saccoTier,
+        status:     'pending',
+        price_paid: typeof body.price_paid === 'number' ? body.price_paid : 0,
+        max_users:  member_cap || null,
+        start_date: new Date().toISOString(),
+        end_date:   new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+      if (subErr) {
+        warnings.push(`company_subscriptions: ${subErr.message}`);
+        console.error('company_subscriptions insert error:', subErr.message);
       }
     }
 

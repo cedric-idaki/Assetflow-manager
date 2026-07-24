@@ -8,6 +8,9 @@ import { formatKEPhone } from '../../utils/phoneUtils';
 import { planForUsers, subscriptionPriceFor, planById } from '../../config/companyPlans';
 import { tierById } from '../../config/saccoTiers';
 import useAdminSubscription from '../../hooks/useAdminSubscription';
+import { useSaccoDashboardContext } from '../../contexts/SaccoDashboardContext';
+import SaccoBillingSection from '../sacco-dashboard/components/BillingTab';
+import { PASSWORD_POLICY } from '../../utils/validation';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 const fmtKES  = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -236,12 +239,7 @@ const PasswordCard = ({ email }) => {
   const [busy, setBusy]       = useState(false);
   const [msg, setMsg]         = useState(null);
 
-  const rules = [
-    { label: '8+ characters', met: next.length >= 8 },
-    { label: 'Uppercase',     met: /[A-Z]/.test(next) },
-    { label: 'Lowercase',     met: /[a-z]/.test(next) },
-    { label: 'Number',        met: /[0-9]/.test(next) },
-  ];
+  const rules = PASSWORD_POLICY.map((c) => ({ label: c.label, met: c.test(next) }));
   const strongEnough = rules.every((r) => r.met);
 
   const submit = async () => {
@@ -548,7 +546,7 @@ const buildInvoiceHtml = (row, billTo) => {
     <div></div>
     <div class="right">Total<br><span class="total">${fmtKES(row.price_paid)}</span></div>
   </div>
-  <div class="foot">Thank you for using AssetFlow. Generated on ${new Date().toLocaleDateString('en-GB')}.</div>
+  <div class="foot">Thank you for using Ararat. Generated on ${new Date().toLocaleDateString('en-GB')}.</div>
   <script>window.onload=function(){window.print();}</script>
 </body></html>`;
 };
@@ -621,6 +619,7 @@ const ProfilePage = () => {
   const isSaccoAdmin = userProfile?.role === 'sacco_admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const sub = useAdminSubscription();
+  const saccoCtx = useSaccoDashboardContext();
 
   const initials = (userProfile?.full_name || user?.email || 'U')
     .split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
@@ -655,6 +654,29 @@ const ProfilePage = () => {
         )}
 
         <PasswordCard email={user?.email} />
+
+        {/* Sacco billing — moved here from the sacco dashboard's Billing tab */}
+        {isSaccoAdmin && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 pt-2">
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(52,193,221,0.12)' }}>
+                <Icon name="CreditCard" size={17} color="#1da8c5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Billing</h2>
+                <p className="text-xs text-muted-foreground">Your sacco's tier, monthly bill and invoices</p>
+              </div>
+            </div>
+            {saccoCtx.loading ? (
+              <div className="bg-card border border-border rounded-xl p-8 text-center text-sm text-muted-foreground">
+                <Icon name="Loader" size={20} color="#9ca3af" className="mx-auto mb-2 animate-spin" />
+                Loading your billing…
+              </div>
+            ) : (
+              <SaccoBillingSection ctx={saccoCtx} />
+            )}
+          </div>
+        )}
 
         {isAdmin && (
           sub.loading ? (

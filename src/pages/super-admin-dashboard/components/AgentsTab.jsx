@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { getPasswordError } from '../../../utils/validation';
 import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const CreateAgentModal = ({ onClose, onCreate }) => {
@@ -18,6 +19,8 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
       setError('Full name, email and password are required.');
       return;
     }
+    const pwErr = getPasswordError(form.password);
+    if (pwErr) { setError(pwErr); return; }
     setLoading(true);
     setError('');
     try {

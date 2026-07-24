@@ -48,12 +48,12 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     detectSessionInUrl: false,
     // Store session in localStorage with a namespaced key to avoid collisions
-    storageKey: 'assetflow_auth_token',
+    storageKey: 'ararat_auth_token',
   },
   global: {
     headers: {
       // Custom header helps identify legitimate app requests server-side
-      'X-Client-Name': 'assetflow-web',
+      'X-Client-Name': 'ararat-web',
       'X-Client-Version': import.meta.env.VITE_APP_VERSION || '1.0.0',
     },
     fetch: (...args) =>

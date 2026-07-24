@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { getPasswordError } from '../../../utils/validation';
 import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const CreateAgentModal = ({ onClose, onCreate }) => {
@@ -18,6 +19,8 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
       setError('Full name, email and password are required.');
       return;
     }
+    const pwErr = getPasswordError(form.password);
+    if (pwErr) { setError(pwErr); return; }
     setLoading(true);
     setError('');
     try {
@@ -85,15 +88,6 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
               placeholder="e.g. 500000"
               className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground"
             />
-          </div>
-          <div className="p-3 rounded-lg bg-teal-50 border border-teal-200">
-            <div className="flex items-start gap-2">
-              <Icon name="Info" size={14} color="#0d9488" />
-              <p className="text-xs text-teal-700">
-                This agent will only be able to manage clients and assets under your company.
-                Commission rate determines their earnings per successful sale.
-              </p>
-            </div>
           </div>
         </div>
 

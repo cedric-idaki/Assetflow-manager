@@ -5,6 +5,7 @@ import RolesPermissionsTab from './components/RolesPermissionsTab';
 import MakerCheckerTab from './components/MakerCheckerTab';
 import AuditTrailTab from './components/AuditTrailTab';
 import MainLayout from '../../layouts/MainLayout';
+import ClosePageButton from '../../components/ui/ClosePageButton';
 import { useAuth } from '../../contexts/AuthContext';
 
 const SystemAdministration = () => {
@@ -54,25 +55,8 @@ const SystemAdministration = () => {
                   : 'Manage your staff, approval queue, and monitor activity'}
               </p>
             </div>
-
-            <div className="flex items-center gap-3 p-3 bg-card rounded-xl border border-border">
-              <div className="w-10 h-10 rounded-lg bg-primary bg-opacity-10 flex items-center justify-center">
-                <Icon name="Shield" size={20} color="var(--color-primary)" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">System Status</p>
-                <p className="text-sm font-medium text-success">All Systems Operational</p>
-              </div>
-            </div>
+            <ClosePageButton label="Close" />
           </div>
-
-          {/* Role scope notice for admin */}
-          {!isSuperAdmin && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs">
-              <Icon name="Info" size={14} color="currentColor" />
-              You are viewing your company scope. Only users in your account are visible.
-            </div>
-          )}
 
           <div className="bg-card rounded-lg border border-border overflow-hidden">
             <div className="border-b border-border overflow-x-auto scrollbar-custom">
@@ -83,7 +67,7 @@ const SystemAdministration = () => {
                     onClick={() => setActiveTab(tab.id)}
                     className={`flex items-center gap-2 px-4 md:px-6 py-4 text-sm font-medium transition-smooth whitespace-nowrap ${
                       safeTab === tab.id
-                        ? 'text-primary border-b-2 border-primary bg-primary bg-opacity-5'
+                        ? 'text-primary border-b-2 border-primary bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)]'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted'
                     }`}
                   >

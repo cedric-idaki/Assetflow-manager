@@ -1,13 +1,8 @@
 import React from 'react';
+import { PASSWORD_POLICY } from '../../../utils/validation';
 
 const PasswordStrengthMeter = ({ password }) => {
-  const checks = [
-    { label: 'At least 8 characters', test: (p) => p?.length >= 8 },
-    { label: 'Uppercase letter', test: (p) => /[A-Z]/?.test(p) },
-    { label: 'Lowercase letter', test: (p) => /[a-z]/?.test(p) },
-    { label: 'Number', test: (p) => /[0-9]/?.test(p) },
-    { label: 'Special character', test: (p) => /[^A-Za-z0-9]/?.test(p) },
-  ];
+  const checks = PASSWORD_POLICY;
 
   const passed = checks?.filter((c) => c?.test(password))?.length;
 

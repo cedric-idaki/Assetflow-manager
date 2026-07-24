@@ -42,6 +42,10 @@ const MembersTab = ({ ctx }) => {
   const [credentials, setCredentials] = useState(null); // { email, password } shown once
   const [emailStatus, setEmailStatus] = useState(null); // { state: 'sending'|'sent'|'failed', error? }
 
+  // Delete-member confirm state
+  const [deleteFor, setDeleteFor] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setOpen(true); };
@@ -162,6 +166,32 @@ const MembersTab = ({ ctx }) => {
     toast.success('Credentials copied to clipboard.');
   };
 
+  const confirmDelete = async () => {
+    setDeleting(true);
+    try {
+      if (deleteFor.user_id) {
+        // Members with a portal login go through the edge function so the
+        // auth account is removed together with the member row.
+        await callAuthFunction({ action: 'delete-member', sacco_member_id: deleteFor.id });
+      } else {
+        const { error } = await supabase.from('sacco_members').delete().eq('id', deleteFor.id);
+        if (error) {
+          if (error.code === '23503') {
+            throw new Error('This member is on a frozen election register or has cast ballots, records that must be kept for audit. Set their status to inactive instead.');
+          }
+          throw error;
+        }
+      }
+      toast.success('Member deleted.');
+      setDeleteFor(null);
+      refreshMembers();
+    } catch (e) {
+      toast.error(e.message || 'Could not delete the member.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const save = async () => {
     if (!form.full_name.trim()) { toast.error('Member name is required.'); return; }
     setSaving(true);
@@ -227,8 +257,9 @@ const MembersTab = ({ ctx }) => {
                 )}
               </td>
               <td className="py-2.5 pr-4 text-muted-foreground">{fmtDate(m.joined_at)}</td>
-              <td className="py-2.5 pr-0 text-right">
+              <td className="py-2.5 pr-0 text-right whitespace-nowrap">
                 <button onClick={() => openEdit(m)} className="text-xs text-primary font-semibold hover:underline">Edit</button>
+                <button onClick={() => setDeleteFor(m)} className="ml-3 text-xs text-red-600 font-semibold hover:underline">Delete</button>
               </td>
             </tr>
           ))}
@@ -344,6 +375,41 @@ const MembersTab = ({ ctx }) => {
             </Field>
           </div>
         )}
+      </Modal>
+
+      {/* Delete member confirm */}
+      <Modal
+        open={!!deleteFor} onClose={() => !deleting && setDeleteFor(null)}
+        title={`Delete member — ${deleteFor?.full_name || ''}`}
+        footer={<>
+          <GhostButton onClick={() => setDeleteFor(null)} disabled={deleting}>Cancel</GhostButton>
+          <PrimaryButton
+            icon="Trash2" onClick={confirmDelete} disabled={deleting}
+            className="!bg-none"
+            style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
+          >{deleting ? 'Deleting…' : 'Delete member'}</PrimaryButton>
+        </>}
+      >
+        <div className="space-y-3">
+          <div className="flex items-start gap-3 p-3 rounded-xl bg-red-50 border border-red-200">
+            <Icon name="AlertTriangle" size={20} color="#dc2626" />
+            <p className="text-sm text-foreground">
+              This <strong>permanently deletes</strong>{' '}
+              <strong>{deleteFor?.full_name}</strong> ({deleteFor?.member_no}) along with all their
+              contributions, loans, shares and votes. It cannot be undone.
+            </p>
+          </div>
+          {deleteFor?.user_id && (
+            <p className="text-sm text-muted-foreground">
+              Their <strong className="text-foreground">portal login is also removed</strong> — they
+              will no longer be able to sign in.
+            </p>
+          )}
+          <p className="text-sm text-muted-foreground">
+            If you only want to stop the member from being active, edit them and set their status
+            to <strong className="text-foreground">inactive</strong> instead — that keeps their history.
+          </p>
+        </div>
       </Modal>
     </Card>
   );

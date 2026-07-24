@@ -197,7 +197,7 @@ var Sidebar = function(props) {
         {!isCollapsed && (
           <div style={{ flex: 1, minWidth: 0 }}>
             <span style={{ fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: '16px', color: B.textBright, letterSpacing: '-0.01em' }}>
-              AssetFlow
+              Ararat
             </span>
             <p style={{ fontSize: '11px', color: B.accent, lineHeight: 1, marginTop: '2px', fontFamily: 'Open Sans, Arial, sans-serif' }}>
               {roleLabel(role)}

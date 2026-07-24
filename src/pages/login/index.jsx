@@ -145,7 +145,7 @@ const LoginPage = () => {
             <Icon name="Building2" size={24} color="#0c2037" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">AssetFlow</h1>
+            <h1 className="text-2xl font-bold text-white">Ararat</h1>
             <p className="text-xs" style={{ color: '#34c1dd' }}>Financial Management Platform</p>
           </div>
         </div>
@@ -201,7 +201,7 @@ const LoginPage = () => {
         {/* Footer */}
         <div className="relative z-10">
           <p className="text-xs" style={{ color: '#3a5a7a' }}>
-            &copy; {new Date().getFullYear()} AssetFlow. All rights reserved.
+            &copy; {new Date().getFullYear()} Ararat. All rights reserved.
           </p>
         </div>
       </div>
@@ -215,7 +215,7 @@ const LoginPage = () => {
             style={{ background: 'linear-gradient(135deg, #34c1dd, #1da8c5)', boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}>
             <Icon name="Building2" size={26} color="#0c2037" />
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: C.navy }}>AssetFlow</h1>
+          <h1 className="text-2xl font-bold" style={{ color: C.navy }}>Ararat</h1>
           <p className="text-xs mt-1" style={{ color: C.textMuted }}>Financial Management Platform</p>
         </div>
 

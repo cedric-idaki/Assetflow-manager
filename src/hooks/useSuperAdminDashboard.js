@@ -114,6 +114,8 @@ export const useSuperAdminDashboard = () => {
       const { data, error } = await supabase
         .from('agents')
         .select('*, user:user_id(id, full_name, email, is_active), admin:admin_id(id, full_name, email)')
+        // Sacco-side agents belong to /sacco-oversight, not the company dashboard.
+        .or('agent_type.is.null,agent_type.neq.sacco')
         .order('created_at', { ascending: false });
       if (error) throw error;
       setSalesAgents(data || []);
@@ -124,7 +126,10 @@ export const useSuperAdminDashboard = () => {
 
   const fetchSalesTarget = useCallback(async () => {
     try {
-      const { data: agents } = await supabase.from('agents').select('target_amount, total_sales');
+      const { data: agents } = await supabase
+        .from('agents')
+        .select('target_amount, total_sales')
+        .or('agent_type.is.null,agent_type.neq.sacco');
       const target = (agents || []).reduce((s, a) => s + parseFloat(a.target_amount || 0), 0);
       const achieved = (agents || []).reduce((s, a) => s + parseFloat(a.total_sales || 0), 0);
       const percentage = target > 0 ? Math.min(100, Math.round((achieved / target) * 100)) : 0;

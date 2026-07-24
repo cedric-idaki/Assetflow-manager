@@ -18,18 +18,18 @@ const buildPaymentReminderMessage = (data: any): string => {
 
   if (isOverdue) {
     const overdueDays = Math.abs(daysUntilDue);
-    return `AssetFlow Alert: Hi ${clientName}, your installment of ${amount} for ${assetName} is OVERDUE by ${overdueDays} day(s) (was due ${dueDate}). Please make payment immediately to avoid penalties. Contact us for assistance.`;
+    return `Ararat Alert: Hi ${clientName}, your installment of ${amount} for ${assetName} is OVERDUE by ${overdueDays} day(s) (was due ${dueDate}). Please make payment immediately to avoid penalties. Contact us for assistance.`;
   }
 
   if (daysUntilDue === 0) {
-    return `AssetFlow Reminder: Hi ${clientName}, your installment of ${amount} for ${assetName} is DUE TODAY. Please ensure payment is made before end of day. Ref: ${payment?.reference_number || 'N/A'}.`;
+    return `Ararat Reminder: Hi ${clientName}, your installment of ${amount} for ${assetName} is DUE TODAY. Please ensure payment is made before end of day. Ref: ${payment?.reference_number || 'N/A'}.`;
   }
 
   if (daysUntilDue <= 3) {
-    return `AssetFlow Reminder: Hi ${clientName}, your installment of ${amount} for ${assetName} is due in ${daysUntilDue} day(s) on ${dueDate}. Please arrange payment soon. Ref: ${payment?.reference_number || 'N/A'}.`;
+    return `Ararat Reminder: Hi ${clientName}, your installment of ${amount} for ${assetName} is due in ${daysUntilDue} day(s) on ${dueDate}. Please arrange payment soon. Ref: ${payment?.reference_number || 'N/A'}.`;
   }
 
-  return `AssetFlow Reminder: Hi ${clientName}, your upcoming installment of ${amount} for ${assetName} is due on ${dueDate} (${daysUntilDue} days away). Ref: ${payment?.reference_number || 'N/A'}.`;
+  return `Ararat Reminder: Hi ${clientName}, your upcoming installment of ${amount} for ${assetName} is due on ${dueDate} (${daysUntilDue} days away). Ref: ${payment?.reference_number || 'N/A'}.`;
 };
 
 const buildPaymentConfirmationMessage = (data: any): string => {
@@ -40,7 +40,7 @@ const buildPaymentConfirmationMessage = (data: any): string => {
   const txnId = transaction?.transactionId || transaction?.transaction_id || 'N/A';
   const method = transaction?.paymentMethod || transaction?.payment_method || 'N/A';
 
-  return `AssetFlow Confirmation: Hi ${clientName}, your payment of ${amount} for ${assetName} has been received successfully. Transaction ID: ${txnId}. Method: ${method}. Thank you!`;
+  return `Ararat Confirmation: Hi ${clientName}, your payment of ${amount} for ${assetName} has been received successfully. Transaction ID: ${txnId}. Method: ${method}. Thank you!`;
 };
 
 Deno.serve(async (req) => {

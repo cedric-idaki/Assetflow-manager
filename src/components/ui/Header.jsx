@@ -58,6 +58,12 @@ const mapAuditToNotif = (row) => {
   };
 };
 
+/* Portal roles that must NEVER see the company-wide activity trail — they only
+   ever get notifications about themselves. RLS enforces this too
+   (portal_view_own_audit_logs, 20260721090000); this is the client-side half so
+   the bell never even asks for rows it shouldn't render. */
+const PORTAL_ROLES = ['client', 'sacco_member'];
+
 const RoleBadge = ({ role }) => {
   const styles = {
     super_admin:         { bg: '#fef2f2', color: '#b91c1c', label: 'Super Admin' },
@@ -116,18 +122,48 @@ const Header = function (props) {
   const channelRef = useRef(null);
 
   // ✅ Use primitive — avoids user-object identity causing dep churn
-  const userId = user?.id;
+  const userId       = user?.id;
+  const userEmail    = user?.email;
+  const role         = userProfile?.role;
+  const isPortalUser = PORTAL_ROLES.includes(role);
 
   const unread = notifications.filter(n => !n.read).length;
 
-  /* ── fetchNotifs ──────────────────────────────────────── */
+  /* ── fetchNotifs ──────────────────────────────────────────
+     Staff see their tenant's activity trail. Portal users are
+     scoped to rows that name them: a client by their client
+     record, anyone by their own user_id. Without this a client
+     saw company-internal events (e.g. "staff user deleted").
+  ───────────────────────────────────────────────────────── */
   const fetchNotifs = useCallback(async function () {
-    if (!userId) return;
+    // Wait for the profile — role decides the scope, and querying before it
+    // lands would briefly show a portal user the tenant-wide feed.
+    if (!userId || !role) return;
     setLoadingNotif(true);
     try {
-      const { data } = await supabase
+      let query = supabase
         .from('audit_logs')
-        .select('id, action, description, severity, created_at')
+        .select('id, action, description, severity, created_at');
+
+      if (isPortalUser) {
+        // Resolve the caller's own client row (RLS: clients_read_own_row).
+        // Sacco members have none, so they fall back to their own actions.
+        let clientId = null;
+        if (role === 'client' && userEmail) {
+          const { data: own } = await supabase
+            .from('clients')
+            .select('id')
+            .eq('email', userEmail)
+            .maybeSingle();
+          clientId = own?.id || null;
+        }
+
+        query = clientId
+          ? query.or(`client_id.eq.${clientId},user_id.eq.${userId}`)
+          : query.eq('user_id', userId);
+      }
+
+      const { data } = await query
         .order('created_at', { ascending: false })
         .limit(15);
 
@@ -138,19 +174,25 @@ const Header = function (props) {
     } finally {
       setLoadingNotif(false);
     }
-  }, [userId]);
+  }, [userId, userEmail, role, isPortalUser]);
 
   // Keep a ref to fetchNotifs so the realtime callback always calls the latest version
   // without needing to recreate the channel subscription
   const fetchNotifsRef = useRef(fetchNotifs);
   useEffect(() => { fetchNotifsRef.current = fetchNotifs; }, [fetchNotifs]);
 
-  /* ── Realtime subscription + initial fetch ─────────────── */
+  /* ── Initial load ─────────────────────────────────────────
+     Keyed on role as well as user: the profile usually resolves
+     a tick after the session, and the scope depends on it.
+  ───────────────────────────────────────────────────────── */
+  useEffect(function () {
+    if (!userId || !role) return;
+    fetchNotifsRef.current();
+  }, [userId, role]);
+
+  /* ── Realtime subscription ─────────────────────────────── */
   useEffect(function () {
     if (!userId) return;
-
-    // Initial load
-    fetchNotifsRef.current();
 
     // Use a globally unique channel name — module-level counter ensures
     // StrictMode's double-invoke never reuses the same name on a still-subscribed channel

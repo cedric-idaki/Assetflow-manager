@@ -44,7 +44,7 @@ const Statements = ({ assets, payments, clientInfo }) => {
         </style>
       </head>
       <body>
-        <h1>AssetFlow</h1>
+        <h1>Ararat</h1>
         <div class="subtitle">${title}</div>
         <div class="meta">
           <div class="meta-item"><label>Client Name</label><span>${clientInfo?.full_name || 'N/A'}</span></div>
@@ -57,7 +57,7 @@ const Statements = ({ assets, payments, clientInfo }) => {
           <thead><tr>${rows?.headers?.map(h => `<th>${h}</th>`)?.join('')}</tr></thead>
           <tbody>${rows?.data?.map(row => `<tr>${row?.map(cell => `<td>${cell}</td>`)?.join('')}</tr>`)?.join('')}</tbody>
         </table>
-        <div class="footer">This statement was generated automatically by AssetFlow. For queries, contact your account manager.</div>
+        <div class="footer">This statement was generated automatically by Ararat. For queries, contact your account manager.</div>
       </body>
       </html>
     `;

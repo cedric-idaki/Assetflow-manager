@@ -1,13 +1,25 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { useToast } from '../../../components/Toast';
-import { Card, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput, Select, EmptyState, fmtDate } from './_shared';
+import {
+  Card, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput, NumberInput,
+  Select, EmptyState, fmtDate, DateTimeInput, CountdownPill, fromLocalInput,
+} from './_shared';
+
+// Default a fresh voting window to 3 days out, in the datetime-local format.
+const defaultVotingEnd = () => {
+  const d = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
 
 const VotingTab = ({ ctx }) => {
-  const { motions, members, votes, createMotion, secondMotion, openVoting, castVote, publishResults } = ctx;
+  const { motions, members, votes, createMotion, secondMotion, openVoting, castVote, publishResults, notifyMotion } = ctx;
   const toast = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [voteMotion, setVoteMotion] = useState(null);
+  const [openMotion, setOpenMotion] = useState(null);      // motion being opened for voting
+  const [votingEnd, setVotingEnd] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [form, setForm] = useState({ title: '', description: '', ballot_type: 'visible', proposer_id: '', quorum_percent: '' });
@@ -38,14 +50,34 @@ const VotingTab = ({ ctx }) => {
     try { await secondMotion(m.id, seconder.id); toast.success(`Seconded by ${seconder.full_name}.`); }
     catch (e) { toast.error(e.message || 'Could not second.'); }
   };
-  const doOpen = async (m) => {
-    const end = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
-    try { await openVoting(m.id, end); toast.success('Voting is now open (3-day window).'); }
-    catch (e) { toast.error(e.message || 'Could not open voting.'); }
+  const openOpenModal = (m) => { setOpenMotion(m); setVotingEnd(defaultVotingEnd()); };
+
+  const doConfirmOpen = async () => {
+    const endIso = fromLocalInput(votingEnd);
+    if (!endIso) { toast.error('Choose when voting should close.'); return; }
+    if (new Date(endIso) <= new Date()) { toast.error('The closing time must be in the future.'); return; }
+    setSaving(true);
+    try {
+      await openVoting(openMotion.id, endIso);
+      toast.success('Voting is open — members can now vote until the deadline.');
+      notifyMotion('sacco_motion_voting_open', openMotion, { votingEnd: endIso })
+        .then(({ sent, failed }) => {
+          if (sent === 0 && failed === 0) return;
+          if (failed) toast.warning(`Member emails: ${sent} sent, ${failed} failed.`);
+          else toast.success(`Notified ${sent} member${sent !== 1 ? 's' : ''} by email.`);
+        }).catch(() => {});
+      setOpenMotion(null);
+    } catch (e) { toast.error(e.message || 'Could not open voting.'); }
+    finally { setSaving(false); }
   };
+
   const doPublish = async (m) => {
-    try { await publishResults(m); toast.success('Results published.'); }
-    catch (e) { toast.error(e.message || 'Could not publish.'); }
+    try {
+      const r = await publishResults(m);
+      if (r?.status === 'passed') toast.success(`Motion passed (${r.yes} yes / ${r.no} no).`);
+      else if (r?.quorum_met === false) toast.warning(`Motion not carried — quorum not met (${r.total}/${r.eligible} voted).`);
+      else toast.success(`Motion not carried (${r?.yes ?? 0} yes / ${r?.no ?? 0} no).`);
+    } catch (e) { toast.error(e.message || 'Could not close the motion.'); }
   };
   const submitVote = async (choice) => {
     if (!voter) { toast.error('Choose the voting member.'); return; }
@@ -77,17 +109,21 @@ const VotingTab = ({ ctx }) => {
                           <Icon name={m.ballot_type === 'secret' ? 'EyeOff' : 'Eye'} size={12} color="currentColor" />
                           {m.ballot_type}
                         </span>
+                        {m.status === 'open' && m.voting_end && (
+                          <CountdownPill targetIso={m.voting_end} label="Closes in" endedLabel="Closing…" />
+                        )}
                       </div>
                       {m.description && <p className="text-sm text-muted-foreground mt-1">{m.description}</p>}
                       <p className="text-xs text-muted-foreground mt-1">
                         Proposer: {m.proposer?.full_name || memberName(m.proposer_id)}
                         {m.seconder_id && ` · Seconder: ${m.seconder?.full_name || memberName(m.seconder_id)}`}
+                        {m.quorum_percent > 0 && ` · Quorum ${m.quorum_percent}%`}
                         {m.voting_end && ` · Closes ${fmtDate(m.voting_end)}`}
                       </p>
                     </div>
                     <div className="flex flex-col gap-2 items-end flex-shrink-0">
                       {m.status === 'proposed' && <button onClick={() => doSecond(m)} className="text-xs text-indigo-600 font-semibold hover:underline">Second motion</button>}
-                      {m.status === 'seconded' && <button onClick={() => doOpen(m)} className="text-xs text-sky-600 font-semibold hover:underline">Open voting</button>}
+                      {m.status === 'seconded' && <button onClick={() => openOpenModal(m)} className="text-xs text-sky-600 font-semibold hover:underline">Open voting</button>}
                       {m.status === 'open' && <>
                         <button onClick={() => { setVoteMotion(m); setVoter(''); }} className="text-xs text-primary font-semibold hover:underline">Cast vote</button>
                         <button onClick={() => doPublish(m)} className="text-xs text-emerald-600 font-semibold hover:underline">Close & publish</button>
@@ -126,6 +162,9 @@ const VotingTab = ({ ctx }) => {
             <Field label="Ballot type"><Select value={form.ballot_type} onChange={(e) => set('ballot_type', e.target.value)}><option value="visible">Visible (open)</option><option value="secret">Secret (anonymous)</option></Select></Field>
             <Field label="Proposer"><Select value={form.proposer_id} onChange={(e) => set('proposer_id', e.target.value)}><option value="">Select member</option>{members.map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}</Select></Field>
           </div>
+          <Field label="Quorum % (minimum turnout for the motion to carry)">
+            <NumberInput min="0" max="100" value={form.quorum_percent} onChange={(e) => set('quorum_percent', e.target.value)} placeholder="e.g. 50 — leave 0 for no quorum rule" />
+          </Field>
         </div>
       </Modal>
 
@@ -151,6 +190,27 @@ const VotingTab = ({ ctx }) => {
                 : 'Visible ballot — the breakdown is shown to members after the vote closes.'}
             </p>
           </>
+        )}
+      </Modal>
+
+      {/* Open voting (set the deadline) */}
+      <Modal open={!!openMotion} onClose={() => !saving && setOpenMotion(null)} title={openMotion ? `Open voting · ${openMotion.title}` : ''}
+        footer={<><GhostButton onClick={() => setOpenMotion(null)} disabled={saving}>Cancel</GhostButton><PrimaryButton icon="Vote" onClick={doConfirmOpen} disabled={saving}>{saving ? 'Opening…' : 'Open voting'}</PrimaryButton></>}>
+        {openMotion && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Voting opens now and every active member is notified by email. Set the closing deadline — the
+              system stops accepting votes the moment it passes and closes the motion automatically.
+            </p>
+            <Field label="Voting closes *">
+              <DateTimeInput value={votingEnd} onChange={(e) => setVotingEnd(e.target.value)} />
+            </Field>
+            <p className="text-xs text-muted-foreground">
+              {openMotion.quorum_percent > 0
+                ? `The motion carries only if turnout reaches the ${openMotion.quorum_percent}% quorum and Yes beats No.`
+                : 'No quorum was set — the motion carries on a simple Yes-over-No majority.'}
+            </p>
+          </div>
         )}
       </Modal>
     </div>

@@ -6,6 +6,19 @@ import { Card, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput, Selec
 const DOC_TYPES = ['constitution', 'bylaws', 'policy', 'minutes', 'resolution', 'other'];
 const DOC_ICON = { constitution: 'ScrollText', bylaws: 'BookText', policy: 'FileText', minutes: 'ClipboardList', resolution: 'Gavel', other: 'File' };
 
+// Normalize a user-entered document link into an absolute URL. People routinely
+// paste "example.com/doc.pdf" or "www.…" without a scheme; left as-is the browser
+// treats it as a relative path and "Open" navigates nowhere. Returns '' when there
+// is no usable link so the row falls back to a draft badge.
+const docHref = (raw) => {
+  const s = (raw || '').trim();
+  if (!s) return '';
+  if (s.startsWith('//')) return `https:${s}`;        // protocol-relative
+  if (/^https?:\/\//i.test(s)) return s;              // already absolute http(s)
+  if (/^[a-z][a-z0-9+.-]+:/i.test(s)) return s;       // mailto:, tel:, data:, blob:, file: …
+  return `https://${s}`;                              // bare domain/path → assume https
+};
+
 const GovernanceTab = ({ ctx }) => {
   const { documents, uploadDocument, exportCSV } = ctx;
   const toast = useToast();
@@ -42,7 +55,9 @@ const GovernanceTab = ({ ctx }) => {
             <div key={g.type}>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 capitalize">{g.type}</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {g.docs.map((d) => (
+                {g.docs.map((d) => {
+                  const href = docHref(d.file_url);
+                  return (
                   <div key={d.id} className="flex items-center gap-3 p-3 rounded-xl border border-border">
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(52,193,221,0.12)' }}>
                       <Icon name={DOC_ICON[d.doc_type] || 'File'} size={18} color="#1da8c5" />
@@ -51,11 +66,12 @@ const GovernanceTab = ({ ctx }) => {
                       <p className="text-sm font-medium text-foreground truncate">{d.title}</p>
                       <p className="text-xs text-muted-foreground">{d.version} · effective {fmtDate(d.effective_date)}</p>
                     </div>
-                    {d.file_url
-                      ? <a href={d.file_url} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline flex-shrink-0">Open</a>
+                    {href
+                      ? <a href={href} target="_blank" rel="noreferrer" className="text-xs text-primary font-semibold hover:underline flex-shrink-0">Open</a>
                       : <Badge status="draft" />}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}

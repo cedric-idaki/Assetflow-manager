@@ -2,6 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, getAccessToken } from '../lib/supabase';
 import { emailLoginCredentials, generateTempPassword } from '../services/credentialsEmailService';
 
+// Account number (BRS 3.4 format, same as the client registration form):
+// AF-YYYY-000001. The column is UNIQUE NOT NULL so it must always be supplied.
+const generateAccountNumber = () => {
+  const year = new Date().getFullYear();
+  const seq  = String(Math.floor(Math.random() * 999999) + 1).padStart(6, '0');
+  return `AF-${year}-${seq}`;
+};
+
 // Upload a file to a Supabase Storage bucket with progress reporting via XHR,
 // falling back to the JS client (no progress) if the direct upload fails so
 // correctness is never sacrificed for the progress bar.
@@ -326,12 +334,22 @@ export const useAdminDashboard = () => {
     });
     if (profileErr) throw profileErr;
 
-    const { error: clientErr } = await supabase.from('clients').insert({
-      full_name: formData.fullName, email: formData.email, phone: formData.phone || '',
-      admin_id: adminId, created_by: adminId,
-      agent_id: formData.agentId || null,
-      client_status: 'active', kyc_status: 'unverified',
-    });
+    // account_number is UNIQUE NOT NULL — generate one, retrying on the (rare)
+    // chance the random sequence collides with an existing client.
+    let accountNumber = generateAccountNumber();
+    let clientErr     = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { error } = await supabase.from('clients').insert({
+        account_number: accountNumber,
+        full_name: formData.fullName, email: formData.email, phone: formData.phone || '',
+        admin_id: adminId, created_by: adminId,
+        agent_id: formData.agentId || null,
+        client_status: 'active', kyc_status: 'unverified',
+      });
+      clientErr = error;
+      if (!error || error.code !== '23505' || !`${error.message}`.includes('account_number')) break;
+      accountNumber = generateAccountNumber();
+    }
     if (clientErr) throw clientErr;
 
     // Auto-email the temp credentials to the client (non-fatal).
@@ -339,9 +357,10 @@ export const useAdminDashboard = () => {
       to: formData.email,
       type: 'client_welcome',
       data: {
-        fullName: formData.fullName,
-        email:    formData.email,
-        password: tempPassword,
+        fullName:      formData.fullName,
+        email:         formData.email,
+        password:      tempPassword,
+        accountNumber,
       },
     });
 

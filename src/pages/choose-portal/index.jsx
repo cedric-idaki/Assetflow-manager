@@ -47,7 +47,7 @@ const ChoosePortal = () => {
           <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: '#34c1dd' }}>
             <Icon name="Building2" size={18} color="#0c2037" />
           </div>
-          <span className="font-bold text-foreground" style={{ fontFamily: 'Georgia, serif' }}>AssetFlow</span>
+          <span className="font-bold text-foreground" style={{ fontFamily: 'Georgia, serif' }}>Ararat</span>
         </div>
         <button onClick={logout} className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-red-500 transition-colors">
           <Icon name="LogOut" size={14} color="currentColor" />

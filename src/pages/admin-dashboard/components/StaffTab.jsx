@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { getPasswordError } from '../../../utils/validation';
 import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const STAFF_ROLES = [
@@ -72,7 +73,7 @@ const InviteModal = ({ onClose, onInvite, subscription, currentStaffCount }) => 
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Invalid email address';
     if (!form.role) e.role = 'Role is required';
     if (!form.password) e.password = 'Password is required';
-    else if (form.password.length < 8) e.password = 'Minimum 8 characters';
+    else if (getPasswordError(form.password)) e.password = getPasswordError(form.password);
     if (form.password !== form.confirm_password) e.confirm_password = 'Passwords do not match';
     return e;
   };

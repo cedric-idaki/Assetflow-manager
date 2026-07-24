@@ -103,7 +103,7 @@ const buildKYCReminderEmail = (clientName: string, documentType: string, expiryD
   <p style="margin:0 0 20px;font-size:15px;color:#374151">Dear <strong>${clientName}</strong>,</p>
   <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
     This is an automated reminder that your <strong>${documentType}</strong> is expiring soon.
-    Please initiate the renewal process to maintain your KYC compliance and uninterrupted access to AssetFlow services.
+    Please initiate the renewal process to maintain your KYC compliance and uninterrupted access to Ararat services.
   </p>
 
   <div style="background:${urgencyBg};border:1px solid ${urgencyBorder};border-radius:10px;padding:20px;margin-bottom:24px;text-align:center">
@@ -122,7 +122,7 @@ const buildKYCReminderEmail = (clientName: string, documentType: string, expiryD
   <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin-bottom:20px">
     <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#065f46">📋 How to Renew:</p>
     <ol style="margin:0;padding-left:20px;font-size:13px;color:#374151;line-height:1.8">
-      <li>Log in to your AssetFlow Client Portal</li>
+      <li>Log in to your Ararat Client Portal</li>
       <li>Navigate to <strong>KYC Renewals</strong> section</li>
       <li>Upload your renewed document</li>
       <li>Submit for verification</li>
@@ -130,7 +130,7 @@ const buildKYCReminderEmail = (clientName: string, documentType: string, expiryD
   </div>
 
   <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
-    <p style="margin:0;font-size:13px;color:#6b7280">This is an automated reminder from <strong>AssetFlow Management</strong>. Please do not reply to this email.</p>
+    <p style="margin:0;font-size:13px;color:#6b7280">This is an automated reminder from <strong>Ararat Management</strong>. Please do not reply to this email.</p>
   </div>
 </div>
 </body></html>`;
@@ -141,7 +141,7 @@ const buildKYCReminderEmail = (clientName: string, documentType: string, expiryD
 const buildKYCSMSMessage = (clientName: string, documentType: string, expiryDate: string, daysLeft: number): string => {
   const urgency = daysLeft <= 7 ? 'CRITICAL' : daysLeft <= 14 ? 'URGENT' : 'REMINDER';
   const formattedDate = new Date(expiryDate).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
-  return `AssetFlow ${urgency}: Hi ${clientName}, your ${documentType} expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''} (${formattedDate}). Log in to renew your KYC documents immediately to avoid service interruption.`;
+  return `Ararat ${urgency}: Hi ${clientName}, your ${documentType} expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''} (${formattedDate}). Log in to renew your KYC documents immediately to avoid service interruption.`;
 };
 
 // ─── Send email via Resend ────────────────────────────────────────────────────

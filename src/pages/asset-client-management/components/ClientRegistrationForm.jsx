@@ -302,7 +302,7 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
       // `authenticated` RLS policy on storage.objects (see migration
       // 20260605010000_storage_image_buckets.sql). Keep the image inline so the admin
       // can still finish registering the client, and log the real reason loudly.
-      console.error('[AssetFlow] client-photos upload failed — saving photo inline instead:', err?.message || err);
+      console.error('[Ararat] client-photos upload failed — saving photo inline instead:', err?.message || err);
       setForm(p => ({ ...p, photo_url: dataUrl }));
       setErrors(p => ({ ...p, photo_url: '' }));
     } finally {

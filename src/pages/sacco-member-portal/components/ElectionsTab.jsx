@@ -12,7 +12,7 @@ import Icon from '../../../components/AppIcon';
 import { useToast } from '../../../components/Toast';
 import {
   Card, Badge, EmptyState, PrimaryButton, GhostButton,
-  Modal, Field, TextInput, Select, fmtDate,
+  Modal, Field, TextInput, Select, fmtDate, fmtDateTime, CountdownPill,
 } from '../../sacco-dashboard/components/_shared';
 import { TurnoutBar, ResultsView } from '../../sacco-dashboard/components/ElectionsTab';
 
@@ -170,6 +170,12 @@ const ElectionsTab = ({ ctx }) => {
                   {/* Nominations phase */}
                   {e.status === 'nominations_open' && (
                     <div className="mt-3">
+                      {e.nominations_close_scheduled_at && (
+                        <div className="flex items-center gap-2 flex-wrap text-xs mb-3">
+                          <CountdownPill targetIso={e.nominations_close_scheduled_at} label="Nominations close in" endedLabel="Nominations closed" />
+                          <span className="text-muted-foreground">Closes {fmtDateTime(e.nominations_close_scheduled_at)}</span>
+                        </div>
+                      )}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {positionsOf(e.id).map((p) => {
                           const cands = candidatesOf(e.id).filter((c) => c.position_id === p.id && ['pending', 'approved'].includes(c.status));
@@ -207,6 +213,12 @@ const ElectionsTab = ({ ctx }) => {
                   {/* Voting phase */}
                   {e.status === 'voting_open' && (
                     <div className="mt-3 space-y-3">
+                      {e.voting_close_scheduled_at && (
+                        <div className="flex items-center gap-2 flex-wrap text-xs">
+                          <CountdownPill targetIso={e.voting_close_scheduled_at} label="Voting closes in" endedLabel="Voting closed" />
+                          <span className="text-muted-foreground">Closes {fmtDateTime(e.voting_close_scheduled_at)}</span>
+                        </div>
+                      )}
                       <MemberTurnout election={e} getElectionTurnout={getElectionTurnout} refreshKey={voteBump} />
                       {!reg ? (
                         <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200">

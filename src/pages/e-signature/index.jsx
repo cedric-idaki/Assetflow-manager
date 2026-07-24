@@ -1,10 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "../../lib/supabase";
 import MainLayout from "../../layouts/MainLayout";
+import ClosePageButton from "../../components/ui/ClosePageButton";
 import Icon from "../../components/AppIcon";
 import SignatureCanvas from "../../components/esign/SignatureCanvas";
-import { applySignatureToPDF } from "../../utils/applySignatureToPDF";
-import { sendSigningOtp, sendSignatureAlert } from "../../services/emailService";
+import FieldEditor from "../../components/esign/FieldEditor";
+import FieldFiller from "../../components/esign/FieldFiller";
+import WalkInSigning from "../../components/esign/WalkInSigning";
+import { applySignatureToPDF, applyFieldsToPDF } from "../../utils/applySignatureToPDF";
+import { detectSignableAreas } from "../../utils/detectSignableAreas";
+import { sendSigningOtp, sendSignatureAlert, sendSigningInvite } from "../../services/emailService";
 
 // ── Audit event display mapping ─────────────────────────────────────────────────
 const AUDIT_ACTION_LABEL = {
@@ -58,21 +63,20 @@ const fmt = (n) => `KES ${(parseFloat(n) || 0).toLocaleString("en-KE", { maximum
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
-const MOCK_USER = { name: "Eric Nganga", role: "Administrator", email: "eric@assetflow.co.ke", initials: "EN", plan: "Gold" };
+// One-time token for an external signer's secure /sign/:token link (mirrors
+// the generator in admin-dashboard ContractsTab).
+const genSignToken = () =>
+  (typeof crypto !== "undefined" && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, "")
+    : Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-const MOCK_DOCS = [
-  { id: "SFP-20260428-1001", name: "Employment Contract — James M.", type: "PDF", pages: 4, status: "pending", signers: [{ name: "Eric Nganga", initials: "EN", signed: false, role: "Employer" }, { name: "James Mwangi", initials: "JM", signed: false, role: "Employee" }], sent: "2026-04-24", due: "2026-05-01", external: true, urgent: true },
-  { id: "SFP-20260420-9821", name: "Q2 Financial Report 2025", type: "XLSX", pages: 12, status: "completed", signers: [{ name: "Finance Dept", initials: "FD", signed: true }, { name: "Eric Nganga", initials: "EN", signed: true }, { name: "M. Ochieng", initials: "MD", signed: true }], sent: "2026-04-20", due: "2026-04-22", external: false },
-  { id: "SFP-20260418-0033", name: "Vendor Agreement — TechParts Ltd", type: "DOCX", pages: 8, status: "in_review", signers: [{ name: "V. Patel", initials: "VP", signed: false, role: "Vendor Rep" }], sent: "2026-04-18", due: "2026-05-05", external: true },
-  { id: "SFP-20260412-0055", name: "NDA — Startup Partnership", type: "PDF", pages: 2, status: "completed", signers: [{ name: "Eric Nganga", initials: "EN", signed: true }, { name: "S. Patel", initials: "SP", signed: true }], sent: "2026-04-12", due: "2026-04-20", external: true },
-  { id: "SFP-20260410-0071", name: "Board Resolution — Expansion", type: "PDF", pages: 3, status: "completed", signers: [{ name: "Dir 1", initials: "D1", signed: true }, { name: "Dir 2", initials: "D2", signed: true }, { name: "Dir 3", initials: "D3", signed: true }], sent: "2026-04-10", due: "2026-04-14", external: false },
-  { id: "SFP-20260405-0088", name: "Lease Agreement — Office Space", type: "PDF", pages: 20, status: "expired", signers: [{ name: "Landlord", initials: "LM", signed: false }], sent: "2026-04-05", due: "2026-04-15", external: true },
-  { id: "SFP-DRAFT-0099", name: "Purchase Order #4821", type: "DOCX", pages: 2, status: "draft", signers: [], sent: null, due: null, external: false },
-  { id: "SFP-20260426-0101", name: "IT Policy Update v3", type: "PDF", pages: 2, status: "pending", signers: [{ name: "IT Admin", initials: "IT", signed: true }, { name: "Eric Nganga", initials: "EN", signed: false }], sent: "2026-04-26", due: "2026-05-10", external: false },
-];
+const isPdfUrl = (u) => !!u && /\.pdf(\?|$)/i.test(u);
+const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || "").trim());
 
-const PLAN_LIMITS = { Bronze: { external: 15, addon: 1200 }, Silver: { external: 38, addon: 2200 }, Gold: { external: 56, addon: 3200 } };
-const CURRENT_EXTERNAL_USED = 23;
+// Per-signatory colours — kept in step with esign/FieldEditor's SIGNER_COLORS so
+// a signer's chip in allocation matches their field colour during placement.
+const SIGNER_PALETTE = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#db2777"];
+const signerColor = (i) => SIGNER_PALETTE[i % SIGNER_PALETTE.length];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function StatusBadge({ status }) {
@@ -226,9 +230,9 @@ function OTPModal({ signer, documentName, onVerified, onClose }) {
 function Dashboard({ docs, setActive, setSelectedDoc }) {
   const completed = docs.filter(d => d.status === "completed" || d.status === "signed").length;
   const pending = docs.filter(d => d.status === "pending").length;
+  const inReview = docs.filter(d => d.status === "in_review").length;
+  const drafts = docs.filter(d => d.status === "draft").length;
   const total = docs.length;
-  const planLimit = PLAN_LIMITS[MOCK_USER.plan].external;
-  const pct = Math.round((CURRENT_EXTERNAL_USED / planLimit) * 100);
   const recentDocs = docs.filter(d => d.status !== "draft").slice(0, 5);
 
   return (
@@ -236,10 +240,10 @@ function Dashboard({ docs, setActive, setSelectedDoc }) {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: "Total Documents", val: total, sub: "+12 this month", icon: "FileText", color: "bg-primary/10 text-primary" },
+          { label: "Total Documents", val: total, sub: "All document sources", icon: "FileText", color: "bg-primary/10 text-primary" },
           { label: "Completed", val: completed, sub: `${total ? Math.round((completed/total)*100) : 0}% completion rate`, icon: "CheckCircle", color: "bg-emerald-500/10 text-emerald-600" },
-          { label: "Awaiting", val: pending, sub: "2 urgent (expiring soon)", icon: "Clock", color: "bg-amber-500/10 text-amber-600" },
-          { label: "Team Signatories", val: 34, sub: "Active team members", icon: "Users", color: "bg-violet-500/10 text-violet-600" },
+          { label: "Awaiting", val: pending, sub: inReview ? `${inReview} partially signed` : "Pending signatures", icon: "Clock", color: "bg-amber-500/10 text-amber-600" },
+          { label: "Drafts", val: drafts, sub: "Not yet sent", icon: "Edit", color: "bg-violet-500/10 text-violet-600" },
         ].map(s => (
           <div key={s.label} className="bg-card border border-border rounded-xl p-5">
             <div className="flex items-start justify-between mb-3">
@@ -278,22 +282,14 @@ function Dashboard({ docs, setActive, setSelectedDoc }) {
                 <StatusBadge status={doc.status} />
               </div>
             ))}
+            {recentDocs.length === 0 && (
+              <div className="py-10 text-center text-sm text-muted-foreground">No documents yet — upload one to get started.</div>
+            )}
           </div>
         </div>
 
         {/* Right column */}
         <div className="space-y-4">
-          {/* External Signing Usage */}
-          <div className="bg-card border border-border rounded-xl p-5">
-            <h3 className="text-base font-semibold text-foreground mb-1">External Signing Usage</h3>
-            <p className="text-xs text-muted-foreground mb-3">{MOCK_USER.plan} Plan · {CURRENT_EXTERNAL_USED}/{planLimit} docs used</p>
-            <div className="h-2 bg-muted rounded-full overflow-hidden">
-              <div className={`h-full rounded-full transition-all ${pct > 85 ? "bg-red-500" : pct > 65 ? "bg-amber-500" : "bg-emerald-500"}`}
-                style={{ width: `${pct}%` }} />
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">{planLimit - CURRENT_EXTERNAL_USED} remaining · KES 25/doc overage</p>
-          </div>
-
           {/* Signing Progress */}
           <div className="bg-card border border-border rounded-xl p-5">
             <h3 className="text-base font-semibold text-foreground mb-3">Signing Progress</h3>
@@ -322,7 +318,7 @@ function Dashboard({ docs, setActive, setSelectedDoc }) {
               {[
                 { label: "Upload New Document", icon: "Upload", page: "upload" },
                 { label: "View Audit Trail", icon: "Search", page: "audit" },
-                { label: "Manage Team", icon: "Users", page: "settings" },
+                { label: "Settings", icon: "Settings", page: "settings" },
               ].map(a => (
                 <button key={a.label} onClick={() => setActive(a.page)}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-muted/50 hover:bg-muted text-sm text-foreground transition-colors text-left">
@@ -417,10 +413,22 @@ function Documents({ docs, setDocs, setActive, adminId }) {
             </div>
             <div className="text-xs text-muted-foreground">{doc.type} · {doc.pages}p</div>
             <StatusBadge status={doc.status} />
-            <div className="flex -space-x-1.5">
-              {doc.signers.slice(0,4).map((s,i) => (
-                <div key={i} className="border-2 border-card rounded-full" title={s.name}><Avatar initials={s.initials} size={24} /></div>
-              ))}
+            <div className="flex flex-col gap-1 min-w-0">
+              <div className="flex -space-x-1.5">
+                {doc.signers.slice(0,4).map((s,i) => (
+                  <div key={i} className="border-2 border-card rounded-full" title={s.name}><Avatar initials={s.initials} size={24} /></div>
+                ))}
+                {doc.signers.length === 0 && <span className="text-[11px] text-muted-foreground">—</span>}
+              </div>
+              {doc.signers.length > 0 && (() => {
+                const signed = doc.signers.filter(s => s.signed).length;
+                const all = signed === doc.signers.length;
+                return (
+                  <span className={`text-[10px] font-semibold ${all ? "text-emerald-600" : "text-muted-foreground"}`}>
+                    {signed}/{doc.signers.length} signed
+                  </span>
+                );
+              })()}
             </div>
             <div className={`text-xs ${doc.status === "expired" ? "text-red-500" : "text-muted-foreground"}`}>
               {doc.due ? fmtDate(doc.due) : "—"}
@@ -535,15 +543,19 @@ function SignDocument({ docs, onStartSigning }) {
   );
 }
 
-// ── Upload ─────────────────────────────────────────────────────────────────────
+// ── Upload / New Document ──────────────────────────────────────────────────────
 function Upload({ setActive, adminId, onUploaded }) {
   const [dragOver, setDragOver] = useState(false);
   const [file, setFile] = useState(null);
-  const [signers, setSigners] = useState([{ email: "", role: "Signer" }]);
+  const [signers, setSigners] = useState([{ name: "", email: "", role: "Signer" }]);
   const [order, setOrder] = useState("sequential");
-  const [sent, setSent] = useState(false);
+  const [message, setMessage] = useState("");
+  const [stage, setStage] = useState("setup"); // setup | fields | sent
+  const [docMeta, setDocMeta] = useState(null); // { docId, fileUrl, name, signerRows, expires }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  const isPdf = !!file && /\.pdf$/i.test(file.name);
 
   function handleDrop(e) {
     e.preventDefault(); setDragOver(false);
@@ -551,8 +563,20 @@ function Upload({ setActive, adminId, onUploaded }) {
     if (f) setFile(f);
   }
 
-  async function handleSend() {
+  const setS = (i, k, v) => setSigners(prev => prev.map((p, j) => j === i ? { ...p, [k]: v } : p));
+
+  // Step 1: upload the file, create the draft document + tokenized signer rows,
+  // then (for PDFs) move into field placement. Non-PDFs can't host placed
+  // fields, so they send immediately with the single-signature fallback.
+  async function handleContinue() {
+    const clean = signers.filter(s => s.email.trim());
     if (!file || !adminId || busy) return;
+    if (!clean.length) { setError("Add at least one signer email."); return; }
+    const bad = clean.find(s => !isEmail(s.email));
+    if (bad) { setError(`"${bad.email.trim()}" is not a valid email address.`); return; }
+    const emails = clean.map(s => s.email.trim().toLowerCase());
+    const dupe = emails.find((e, i) => emails.indexOf(e) !== i);
+    if (dupe) { setError(`Duplicate signatory email: ${dupe}. Each signatory must be unique.`); return; }
     setBusy(true); setError("");
     try {
       const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -564,9 +588,7 @@ function Upload({ setActive, adminId, onUploaded }) {
         .from("esign-documents")
         .upload(path, file, { upsert: true, contentType: file.type || undefined });
       if (upErr) throw new Error(upErr.message);
-
       const { data: pub } = supabase.storage.from("esign-documents").getPublicUrl(path);
-      const cleanSigners = signers.filter(s => s.email.trim());
 
       const { data: docRow, error: docErr } = await supabase
         .from("esign_documents")
@@ -575,42 +597,38 @@ function Upload({ setActive, adminId, onUploaded }) {
           name: baseName,
           file_url: pub?.publicUrl,
           file_type: ext.toUpperCase(),
-          status: cleanSigners.length ? "pending" : "draft",
+          status: "draft",
           signing_order: order,
+          message: message || null,
         })
         .select("id")
         .single();
       if (docErr) throw new Error(docErr.message);
 
-      if (cleanSigners.length) {
-        await supabase.from("esign_signers").insert(cleanSigners.map((s, i) => ({
-          admin_id: adminId,
-          esign_document_id: docRow.id,
-          name: s.email.split("@")[0],
-          email: s.email.trim(),
-          role: s.role,
-          signing_order: order === "sequential" ? i : 0,
-          status: "pending",
-        })));
-      }
+      const expires = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString(); // 14-day links
+      const { data: signerRows, error: sErr } = await supabase.from("esign_signers").insert(clean.map((s, i) => ({
+        admin_id: adminId,
+        esign_document_id: docRow.id,
+        source_type: "esign_doc",
+        name: s.name.trim() || s.email.split("@")[0],
+        email: s.email.trim(),
+        role: s.role,
+        signing_order: order === "sequential" ? i : 0,
+        status: "pending",
+        token: genSignToken(),
+        token_expires_at: expires,
+      }))).select("id, name, email, role, token");
+      if (sErr) throw new Error(sErr.message);
 
       await recordAudit(adminId, {
-        documentLabel: baseName, eventType: "created", actor: "You",
+        contractId: docRow.id, documentLabel: baseName, eventType: "created", actor: "You",
         detail: `Uploaded ${ext.toUpperCase()} for signature`, hash: btoa(path).slice(0, 16) + "…",
       });
-      if (cleanSigners.length) {
-        await recordAudit(adminId, {
-          documentLabel: baseName, eventType: "sent", actor: "You",
-          detail: `${order} order · ${cleanSigners.length} signer(s)`,
-        });
-        await pushNotification(adminId, {
-          type: "info", title: "Document sent for signature",
-          detail: `${baseName} · ${cleanSigners.length} signer(s) invited`,
-        });
-      }
 
-      if (onUploaded) await onUploaded();
-      setSent(true);
+      const meta = { docId: docRow.id, fileUrl: pub?.publicUrl, name: baseName, signerRows: signerRows || [], expires };
+      setDocMeta(meta);
+      if (isPdf) setStage("fields");
+      else await sendInvites([], meta);
     } catch (err) {
       setError(err.message || "Upload failed");
     } finally {
@@ -618,7 +636,67 @@ function Upload({ setActive, adminId, onUploaded }) {
     }
   }
 
-  if (sent) return (
+  // Step 2: persist placed fields, flip the doc live and email each signer
+  // their one-time signing link (same pattern as SendForSignatureModal).
+  async function sendInvites(fields, metaArg) {
+    const meta = metaArg || docMeta;
+    if (!meta) return;
+    setBusy(true); setError("");
+    try {
+      if (fields?.length) {
+        const { error: fErr } = await supabase.from("esign_fields").insert(fields.map(f => ({
+          admin_id: adminId,
+          source_type: "esign_doc",
+          esign_document_id: meta.docId,
+          signer_id: f.signer_id,
+          field_type: f.field_type,
+          page_index: f.page_index,
+          pos_x: f.pos_x, pos_y: f.pos_y, width: f.width, height: f.height,
+          required: f.required !== false,
+          mask: f.mask === true,
+        })));
+        if (fErr) throw new Error(fErr.message);
+      }
+
+      await supabase.from("esign_documents")
+        .update({ status: "pending", expires_at: meta.expires })
+        .eq("id", meta.docId);
+
+      await recordAudit(adminId, {
+        contractId: meta.docId, documentLabel: meta.name, eventType: "sent", actor: "You",
+        detail: `${order} order · ${meta.signerRows.length} signer(s)${fields?.length ? ` · ${fields.length} field(s)` : ""}`,
+      });
+      await pushNotification(adminId, {
+        type: "info", title: "Document sent for signature",
+        detail: `${meta.name} · ${meta.signerRows.length} signer(s) invited`, contractId: meta.docId,
+      });
+
+      const base = window.location.origin;
+      await Promise.all(meta.signerRows.filter(r => r.token).map(r =>
+        sendSigningInvite(r.email, {
+          signerName: r.name, documentName: meta.name,
+          link: `${base}/sign/${r.token}`, message, expiresAt: meta.expires,
+        }).catch(e => console.warn("invite email failed:", e.message))
+      ));
+
+      if (onUploaded) await onUploaded();
+      setStage("sent");
+    } catch (err) {
+      setError(err.message || "Failed to send invitations");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Back out of field placement: discard the draft (cascades to signers/fields).
+  async function discardDraft() {
+    if (docMeta?.docId) {
+      await supabase.from("esign_documents").delete().eq("id", docMeta.docId).then(() => {}, () => {});
+    }
+    setDocMeta(null); setStage("setup");
+  }
+
+  if (stage === "sent") return (
     <div className="flex items-center justify-center py-20">
       <div className="text-center max-w-sm">
         <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -627,7 +705,7 @@ function Upload({ setActive, adminId, onUploaded }) {
         <h2 className="text-2xl font-bold text-foreground mb-2">Document Sent!</h2>
         <p className="text-sm text-muted-foreground mb-6">Secure signing links have been dispatched to all signers. You'll be notified when each party signs.</p>
         <div className="flex gap-3 justify-center">
-          <button onClick={() => { setSent(false); setFile(null); setSigners([{ email: "", role: "Signer" }]); }}
+          <button onClick={() => { setStage("setup"); setFile(null); setSigners([{ name: "", email: "", role: "Signer" }]); setDocMeta(null); setMessage(""); }}
             className="px-4 py-2 border border-border rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
             Upload Another
           </button>
@@ -640,11 +718,16 @@ function Upload({ setActive, adminId, onUploaded }) {
     </div>
   );
 
+  if (stage === "fields" && docMeta) return (
+    <FieldEditor fileUrl={docMeta.fileUrl} signers={docMeta.signerRows} saving={busy}
+      onBack={discardDraft} onSave={sendInvites} />
+  );
+
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Upload & Send Document</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Upload a document, add signers, and send secure signing links.</p>
+        <h1 className="text-2xl font-bold text-foreground">New Document</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">Upload a document, add signers, place signature fields, and send secure signing links.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
@@ -676,44 +759,60 @@ function Upload({ setActive, adminId, onUploaded }) {
             )}
           </div>
 
-          {/* Convert tools */}
-          <div className="bg-card border border-border rounded-xl p-5">
-            <h3 className="text-base font-semibold text-foreground mb-3">Convert Document</h3>
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: "Word → PDF", icon: "FileText" },
-                { label: "PDF → Editable", icon: "Edit" },
-                { label: "Excel → PDF", icon: "Table" },
-                { label: "Merge PDFs", icon: "Layers" },
-              ].map(c => (
-                <button key={c.label} className="flex items-center gap-2 p-3 bg-muted/30 border border-border rounded-xl text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-left">
-                  <Icon name={c.icon} size={14} color="currentColor" />
-                  <span className="text-xs font-medium">{c.label}</span>
-                </button>
-              ))}
+          {file && !isPdf && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700 flex items-center gap-2">
+              <Icon name="Info" size={14} color="#d97706" />
+              Field placement is available for PDF documents. This file will be sent with a standard signature capture instead.
             </div>
+          )}
+
+          <div className="bg-card border border-border rounded-xl p-5">
+            <h3 className="text-base font-semibold text-foreground mb-2">Message to signers <span className="text-xs font-normal text-muted-foreground">(optional)</span></h3>
+            <textarea value={message} onChange={e => setMessage(e.target.value)} rows={3}
+              placeholder="e.g. Please review and sign before Friday."
+              className="w-full px-3 py-2 text-sm border border-border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none" />
           </div>
         </div>
 
         {/* Signer config */}
         <div className="space-y-4">
           <div className="bg-card border border-border rounded-xl p-5">
-            <h3 className="text-base font-semibold text-foreground mb-3">Add Signers</h3>
-            {signers.map((s, i) => (
-              <div key={i} className="mb-3">
-                <label className="block text-xs font-semibold text-muted-foreground mb-1">Signer {i+1} email</label>
-                <input value={s.email} onChange={e => setSigners(prev => prev.map((p,j) => j===i ? {...p,email:e.target.value} : p))}
-                  placeholder={`signer${i+1}@example.com`}
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-base font-semibold text-foreground">Add Signatories</h3>
+              <span className="text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2 py-0.5">
+                {signers.filter(s => s.email.trim()).length} added
+              </span>
+            </div>
+            {signers.map((s, i) => {
+              const invalid = s.email.trim() && !isEmail(s.email);
+              return (
+              <div key={i} className="mb-3 pb-3 border-b border-border last:border-0 last:pb-0">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: signerColor(i) }} />
+                    Signatory {i+1}
+                  </label>
+                  {signers.length > 1 && (
+                    <button onClick={() => setSigners(p => p.filter((_, j) => j !== i))}
+                      className="text-xs text-red-500 hover:text-red-600">Remove</button>
+                  )}
+                </div>
+                <input value={s.name} onChange={e => setS(i, "name", e.target.value)}
+                  placeholder="Full name"
                   className="w-full px-3 py-2 text-sm border border-border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 mb-1.5" />
-                <select value={s.role} onChange={e => setSigners(prev => prev.map((p,j) => j===i ? {...p,role:e.target.value} : p))}
-                  className="w-full px-3 py-2 text-xs border border-border rounded-xl bg-background text-muted-foreground focus:outline-none">
+                <input value={s.email} onChange={e => setS(i, "email", e.target.value)}
+                  placeholder={`signer${i+1}@example.com`}
+                  className={`w-full px-3 py-2 text-sm border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 mb-1 ${invalid ? "border-red-300 focus:ring-red-200" : "border-border focus:ring-primary/30"}`} />
+                {invalid && <p className="text-[11px] text-red-500 mb-1">Enter a valid email address.</p>}
+                <select value={s.role} onChange={e => setS(i, "role", e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-border rounded-xl bg-background text-muted-foreground focus:outline-none mt-0.5">
                   {["Signer","Approver","Witness","Final Authority"].map(r => <option key={r}>{r}</option>)}
                 </select>
               </div>
-            ))}
-            <button onClick={() => setSigners(p => [...p, { email: "", role: "Signer" }])}
+            );})}
+            <button onClick={() => setSigners(p => [...p, { name: "", email: "", role: "Signer" }])}
               className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
-              <Icon name="Plus" size={11} color="currentColor" /> Add Signer
+              <Icon name="Plus" size={11} color="currentColor" /> Add Signatory
             </button>
           </div>
 
@@ -733,85 +832,9 @@ function Upload({ setActive, adminId, onUploaded }) {
               <Icon name="AlertCircle" size={13} color="currentColor" /> {error}
             </div>
           )}
-          <button onClick={handleSend} disabled={!file || busy}
+          <button onClick={handleContinue} disabled={!file || busy}
             className="w-full py-3 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-            {busy ? "Uploading…" : "Send for Signature"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Approval Chains ────────────────────────────────────────────────────────────
-function Workflow() {
-  const [chains, setChains] = useState([
-    { id: 1, name: "Vendor Agreement Approval", type: "sequential", steps: ["Eric N.","Janet K.","Finance Dept.","Director"], active: 1 },
-    { id: 2, name: "HR Document Flow", type: "parallel", steps: ["HR Manager","Legal","MD Office"], active: 0 },
-  ]);
-  const [newName, setNewName] = useState("");
-  const [newType, setNewType] = useState("sequential");
-
-  return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Approval Chains</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Build multi-step signing workflows with sequential, parallel, or delegated approvals.</p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-5">
-        <div className="space-y-4">
-          {chains.map(chain => (
-            <div key={chain.id} className="bg-card border border-border rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <p className="text-base font-semibold text-foreground">{chain.name}</p>
-                  <span className="text-xs font-semibold bg-primary/10 text-primary px-2 py-0.5 rounded-full capitalize">{chain.type}</span>
-                </div>
-                <span className="text-xs text-muted-foreground">In Progress</span>
-              </div>
-              <div className="flex items-center gap-0 overflow-x-auto">
-                {chain.steps.map((step, i) => (
-                  <div key={i} className="flex items-center">
-                    <div className="text-center">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold mx-auto mb-1 border-2 ${
-                        i < chain.active ? "bg-emerald-500 border-emerald-500 text-white" :
-                        i === chain.active ? "bg-primary border-primary text-white" :
-                        "bg-muted border-border text-muted-foreground"
-                      }`}>
-                        {i < chain.active ? <Icon name="Check" size={14} color="white" /> : i + 1}
-                      </div>
-                      <p className={`text-xs max-w-[60px] text-center ${i === chain.active ? "text-primary font-semibold" : "text-muted-foreground"}`}>{step}</p>
-                    </div>
-                    {i < chain.steps.length - 1 && (
-                      <div className={`w-8 h-0.5 flex-shrink-0 mx-1 mb-4 ${i < chain.active ? "bg-emerald-500" : "bg-border"}`} />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-          <h3 className="text-base font-semibold text-foreground">Create New Chain</h3>
-          <div>
-            <label className="block text-xs font-semibold text-muted-foreground mb-1">Chain Name</label>
-            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Purchase Order Flow"
-              className="w-full px-3 py-2 text-sm border border-border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-muted-foreground mb-2">Type</label>
-            {["sequential","parallel","delegated"].map(t => (
-              <label key={t} className="flex items-center gap-2 mb-1.5 cursor-pointer">
-                <input type="radio" name="chaintype" value={t} checked={newType===t} onChange={() => setNewType(t)} />
-                <span className="text-sm text-foreground capitalize">{t}</span>
-              </label>
-            ))}
-          </div>
-          <button onClick={() => { if (newName) { setChains(p => [...p, { id: Date.now(), name: newName, type: newType, steps: ["Step 1","Step 2","Step 3"], active: 0 }]); setNewName(""); }}}
-            className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:bg-primary/90 transition-colors">
-            Create Chain
+            {busy ? "Uploading…" : isPdf ? "Continue — Place Fields" : "Send for Signature"}
           </button>
         </div>
       </div>
@@ -872,7 +895,7 @@ function NotificationsPage({ notifs, setNotifs, onMarkRead }) {
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 function Settings({ currentUser }) {
-  const user = currentUser || MOCK_USER;
+  const user = currentUser || { name: "User", role: "", email: "", initials: "U" };
   const [pinEnabled, setPinEnabled] = useState(true);
   const [otpEnabled, setOtpEnabled] = useState(true);
   const [sigAlert, setSigAlert] = useState(true);
@@ -940,7 +963,7 @@ function Settings({ currentUser }) {
               <p className="text-xs text-muted-foreground">{user.role} · {user.email}</p>
             </div>
           </div>
-          {[["Full Name", user.name], ["Email", user.email], ["Organization", "AssetFlow Ltd"]].map(([label, val]) => (
+          {[["Full Name", user.name], ["Email", user.email], ["Organization", "Ararat Ltd"]].map(([label, val]) => (
             <div key={label}>
               <label className="block text-xs font-semibold text-muted-foreground mb-1">{label}</label>
               <input defaultValue={val} className="w-full px-3 py-2 text-sm border border-border rounded-xl bg-muted/30 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
@@ -948,31 +971,6 @@ function Settings({ currentUser }) {
           ))}
         </div>
 
-        {/* Team */}
-        <div className="bg-card border border-border rounded-xl p-5">
-          <h3 className="text-base font-semibold text-foreground mb-4">Team Members</h3>
-          {[
-            { name: "Janet Kamau", role: "Finance", initials: "JK" },
-            { name: "M. Ochieng", role: "Director", initials: "MD" },
-            { name: "HR Department", role: "HR Admin", initials: "HR" },
-          ].map(m => (
-            <div key={m.name} className="flex items-center gap-3 py-3 border-b border-border last:border-0">
-              <Avatar initials={m.initials} size={34} />
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-foreground">{m.name}</p>
-                <p className="text-xs text-muted-foreground">{m.role}</p>
-              </div>
-              <select className="text-xs border border-border rounded-lg px-2 py-1 bg-background text-muted-foreground focus:outline-none">
-                <option>Internal Signer</option>
-                <option>Administrator</option>
-                <option>Viewer</option>
-              </select>
-            </div>
-          ))}
-          <button className="mt-3 w-full py-2 border border-dashed border-border rounded-xl text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center justify-center gap-1">
-            <Icon name="Plus" size={12} color="currentColor" /> Invite Team Member
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -1018,91 +1016,6 @@ function AuditPage({ docs, adminId }) {
   );
 }
 
-// ── Co-Sign ────────────────────────────────────────────────────────────────────
-function CoSign({ docs }) {
-  const pending = [
-    { doc: "Vendor Agreement", from: "Procurement", due: "May 2", waiting: "Janet K." },
-    { doc: "NDA Amendment", from: "Legal Dept", due: "May 10", waiting: "Legal Dept." },
-  ];
-
-  return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Co-Signing</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Manage parallel signing and co-signatory invitations.</p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-base font-semibold text-foreground mb-3">Pending Co-Sign Requests</h3>
-            {pending.map(p => (
-              <div key={p.doc} className="bg-card border border-border rounded-xl p-5 mb-3 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{p.doc}</p>
-                  <p className="text-xs text-muted-foreground mt-1">Awaiting {p.waiting} · Expires {p.due}</p>
-                </div>
-                <button className="px-3 py-1.5 bg-amber-100 text-amber-700 rounded-xl text-xs font-semibold hover:bg-amber-200 transition-colors">Remind</button>
-              </div>
-            ))}
-          </div>
-
-          <div>
-            <h3 className="text-base font-semibold text-foreground mb-3">Awaiting Your Signature</h3>
-            {[
-              { doc: "Employment Contract — James M.", from: "HR Dept.", due: "May 1", role: "Employer", urgent: true },
-              { doc: "Vendor Agreement — TechParts", from: "Procurement", due: "May 5", role: "Approver" },
-            ].map(d => (
-              <div key={d.doc} className={`bg-card border rounded-xl p-5 mb-3 flex items-center justify-between ${d.urgent ? "border-amber-200 bg-amber-50/50 dark:bg-amber-900/10" : "border-border"}`}>
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{d.doc}</p>
-                  <p className="text-xs text-muted-foreground mt-1">From: {d.from} · Role: {d.role} · Due: {d.due} {d.urgent && "⚠️"}</p>
-                </div>
-                <button className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-xl text-xs font-semibold hover:bg-primary/90 transition-colors">
-                  <Icon name="PenTool" size={12} color="currentColor" /> Sign Now
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-          <h3 className="text-base font-semibold text-foreground">Invite Co-Signers</h3>
-          {[
-            { email: "james@co.ke", initials: "JM", role: "Signer 1 · Approver" },
-            { email: "finance@co.ke", initials: "FD", role: "Signer 2 · Witness" },
-            { email: "md@co.ke", initials: "MD", role: "Signer 3 · Final Auth." },
-          ].map(s => (
-            <div key={s.email} className="flex items-center gap-3 py-2.5 border-b border-border last:border-0">
-              <Avatar initials={s.initials} size={30} />
-              <div className="flex-1">
-                <p className="text-xs font-semibold text-foreground">{s.email}</p>
-                <p className="text-xs text-muted-foreground">{s.role}</p>
-              </div>
-              <button className="text-muted-foreground hover:text-red-500 transition-colors">
-                <Icon name="X" size={14} color="currentColor" />
-              </button>
-            </div>
-          ))}
-          <button className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
-            <Icon name="Plus" size={11} color="currentColor" /> Add Co-Signer
-          </button>
-          <div>
-            <label className="block text-xs font-semibold text-muted-foreground mb-1.5">Signing Order</label>
-            <select className="w-full px-3 py-2 text-sm border border-border rounded-xl bg-background text-foreground focus:outline-none">
-              <option>Sequential A→B→C</option>
-              <option>Parallel (all at once)</option>
-            </select>
-          </div>
-          <button className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:bg-primary/90 transition-colors">
-            Send Invitations
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Main Page ──────────────────────────────────────────────────────────────────
 export default function ESignaturePage() {
   const [active, setActive]           = useState("dashboard");
@@ -1119,6 +1032,11 @@ export default function ESignaturePage() {
   const [currentUser, setCurrentUser] = useState(null);
   const [esignDocs, setEsignDocs]     = useState([]);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const [signFields, setSignFields]   = useState([]);   // the current user's placed fields on the doc being signed
+  const [signSignerId, setSignSignerId] = useState(null);
+  const [fieldValues, setFieldValues] = useState(null); // filled values awaiting OTP confirmation
+  const [signMode, setSignMode]       = useState("single"); // single | walkin (in-person multi-signatory)
+  const [walkInDoc, setWalkInDoc]     = useState(null);     // { refId, source, fileUrl, name, label }
 
   const dbDocs = dbContracts.map(c => ({
     id: c.invoice_number || c.id,
@@ -1172,9 +1090,7 @@ export default function ESignaturePage() {
     sent: d.created_at, due: d.expires_at, external: true, file_url: d.file_url,
   }));
 
-  // Real data wins; mock docs only seed an empty workspace.
-  const realDocs = [...dbDocs, ...companyDocs, ...uploadedDocs];
-  const docs = realDocs.length > 0 ? realDocs : MOCK_DOCS;
+  const docs = [...dbDocs, ...companyDocs, ...uploadedDocs];
   const unread = notifs.filter(n => !n.read).length;
 
   useEffect(() => {
@@ -1285,17 +1201,74 @@ export default function ESignaturePage() {
     if (adminId) await fetchContracts(adminId);
   };
 
-  const startSigning = (doc) => {
+  const startSigning = async (doc) => {
     const refId = doc._dbId || doc._companyId || doc._esignId;
+    const source = doc._source || "generated";
     setSelected({
       ...(doc._raw || doc),
       _dbId: doc._dbId, _companyId: doc._companyId, _esignId: doc._esignId,
-      _source: doc._source || "generated", _label: doc.id, _name: doc.name,
+      _source: source, _label: doc.id, _name: doc.name,
       file_url: doc.file_url,
     });
     setSigningStep(2);
     setSignature(null);
+    setFieldValues(null);
+    setSignFields([]);
+    setSignSignerId(null);
+    setSignMode("single");
+    setWalkInDoc(null);
     setActive("sign");
+
+    // Multi-signatory documents (allocated signatories + placed fields) run the
+    // in-person walk-in session, where each person signs here in turn.
+    try {
+      let rq = supabase.from("esign_signers").select("id").eq("admin_id", adminId);
+      rq = source === "esign_doc" ? rq.eq("esign_document_id", refId) : rq.eq("contract_id", refId).eq("source_type", source);
+      let cq = supabase.from("esign_fields").select("id", { count: "exact", head: true }).eq("admin_id", adminId);
+      cq = source === "esign_doc" ? cq.eq("esign_document_id", refId) : cq.eq("contract_id", refId).eq("source_type", source);
+      const [{ data: roster }, { count: fieldCount }] = await Promise.all([rq, cq]);
+      if ((roster?.length || 0) >= 1 && (fieldCount || 0) > 0) {
+        setWalkInDoc({ refId, source, fileUrl: doc.file_url, name: doc.name, label: doc.id });
+        setSignMode("walkin");
+        recordAudit(adminId, {
+          contractId: refId, documentLabel: doc.id, eventType: "viewed",
+          actor: currentUser?.name || "User", actorEmail: currentUser?.email,
+          ip: "in-person", device: navigator.userAgent.slice(0, 60),
+          detail: "Opened for in-person signing", hash: btoa(doc.id || "x").slice(0, 16) + "…",
+        });
+        return;
+      }
+    } catch (err) { console.error("walk-in check:", err.message); }
+
+    // If this document has placed fields assigned to the logged-in user, load
+    // them so the sign step renders the field-fill experience.
+    let loadedAssigned = false;
+    try {
+      if (currentUser?.email && refId) {
+        let q = supabase.from("esign_signers").select("id, status").eq("email", currentUser.email).neq("status", "signed");
+        q = source === "esign_doc" ? q.eq("esign_document_id", refId) : q.eq("contract_id", refId).eq("source_type", source);
+        const { data: srows } = await q;
+        const sid = srows?.[0]?.id;
+        if (sid) {
+          const { data: flds } = await supabase.from("esign_fields").select("*").eq("signer_id", sid).order("page_index", { ascending: true });
+          if (flds?.length) { setSignFields(flds); setSignSignerId(sid); loadedAssigned = true; }
+        }
+      }
+    } catch (err) { console.error("load sign fields:", err.message); }
+
+    // No assigned fields? Auto-detect the document's own signature areas
+    // (ruled lines with labels, {{tags}}, underscore runs) so signing happens
+    // directly on the document instead of a detached signature pad.
+    if (!loadedAssigned && isPdfUrl(doc.file_url)) {
+      try {
+        const det = await detectSignableAreas(doc.file_url);
+        if (det.length) {
+          setSignFields(det.map((d, i) => ({ ...d, id: `adhoc-${i}`, required: d.field_type === "signature" })));
+          setSignSignerId(null); // marker: these fields have no DB rows
+        }
+      } catch (err) { console.error("auto-detect fields:", err.message); }
+    }
+
     // Persist the "viewed/opened" event to the real audit trail.
     recordAudit(adminId, {
       contractId: refId, documentLabel: doc.id,
@@ -1305,9 +1278,25 @@ export default function ESignaturePage() {
     });
   };
 
+  // FieldFiller finished: stash values, derive the representative signature
+  // (first signature/initials field) and move to OTP verification.
+  const handleFieldsComplete = (vals) => {
+    const typeById = Object.fromEntries(signFields.map(f => [f.id, f.field_type]));
+    let sig = null;
+    for (const v of vals) {
+      if ((typeById[v.id] === "signature" || typeById[v.id] === "initials") && v.value) {
+        try { sig = JSON.parse(v.value); } catch { sig = { type: "typed", data: String(v.value) }; }
+        break;
+      }
+    }
+    setFieldValues(vals);
+    setSignature(sig || { type: "typed", data: currentUser?.name || "Signed" });
+    setShowOTP(true);
+  };
+
   const handleOTPVerified = async (otpData) => {
     setShowOTP(false);
-    if (!signature || !selectedContract) return;
+    if (!selectedContract || (!signature && !fieldValues)) return;
     const source      = selectedContract._source || "generated";
     // The parent record to update + the loose id used for audit/notifications.
     const contractId  = source === "company"   ? selectedContract._companyId
@@ -1316,64 +1305,133 @@ export default function ESignaturePage() {
     const label       = selectedContract.invoice_number || selectedContract._label || selectedContract.id;
     const docName     = selectedContract._name || label;
     const signedAt    = new Date().toISOString();
-    const hashInput   = label + otpData.verifiedAt + (signature.data || "");
+    const hashInput   = label + otpData.verifiedAt + (signature?.data || "");
     const hash        = btoa(hashInput).slice(0, 16) + "…" + btoa(hashInput).slice(-8);
     const actor       = currentUser?.name || "Authorized Officer";
+    let   sealedAll   = true; // legacy single-officer flow seals immediately
 
-    // Update the correct source table for this document.
-    try {
-      if (source === "company") {
-        await supabase.from("company_contracts")
-          .update({ esign_status: "signed", signed_at: signedAt, signature_hash: hash, signature_type: signature.type, signature_data: signature.data })
-          .eq("id", contractId);
-      } else if (source === "esign_doc") {
-        // esign_documents has no signature columns; the signature lives on the
-        // signer row. Mark the document completed.
-        await supabase.from("esign_documents")
-          .update({ status: "completed", updated_at: signedAt })
-          .eq("id", contractId);
-      } else {
-        await supabase.from("generated_contracts")
-          .update({ esign_status: "signed", signed_at: signedAt, signature_hash: hash, signature_type: signature.type, signature_data: signature.data })
-          .eq("id", contractId);
-      }
-    } catch (err) { console.error(err); }
-
-    // Stamp the signature into the actual PDF so the signed document *contains*
-    // the signature (+ a certificate page), then point the record at the signed
-    // file. Best-effort — a failure here never blocks the signing itself.
-    if (selectedContract.file_url && /\.pdf(\?|$)/i.test(selectedContract.file_url)) {
+    if (fieldValues && signSignerId) {
+      // ── Field-based signing: persist values, mark this signer, seal if last ──
       try {
-        const blob = await applySignatureToPDF(selectedContract.file_url, {
-          signatureType: signature.type, signatureData: signature.data, font: signature.font,
-          signerName: actor, role: "Authorized Officer", documentName: docName,
-          signedAt: fmtDateTime(signedAt), hash, ip: otpData.ip, device: otpData.device,
-        });
-        const bucket = source === "esign_doc" ? "esign-documents" : "contracts";
-        const path   = `${adminId}/signed_${contractId}.pdf`;
-        const { error: upErr } = await supabase.storage.from(bucket).upload(path, blob, { upsert: true, contentType: "application/pdf" });
-        if (!upErr) {
-          const url = supabase.storage.from(bucket).getPublicUrl(path).data?.publicUrl;
-          const tbl = source === "company" ? "company_contracts" : source === "esign_doc" ? "esign_documents" : "generated_contracts";
-          if (url) await supabase.from(tbl).update({ file_url: url }).eq("id", contractId);
+        for (const fv of fieldValues) {
+          await supabase.from("esign_fields")
+            .update({ value: fv.value ?? null, filled_at: signedAt })
+            .eq("id", fv.id);
         }
-      } catch (e) { console.warn("applySignatureToPDF:", e.message); }
+        await supabase.from("esign_signers").update({
+          status: "signed", signed_at: signedAt, ip: otpData.ip, device: otpData.device,
+          signature_type: signature?.type, signature_data: signature?.data, signature_hash: hash,
+          token: null, token_expires_at: null,
+        }).eq("id", signSignerId);
+
+        let sq = supabase.from("esign_signers").select("status, name, email, role, signed_at, ip");
+        sq = source === "esign_doc" ? sq.eq("esign_document_id", contractId) : sq.eq("contract_id", contractId).eq("source_type", source);
+        const { data: sibs } = await sq;
+        sealedAll = (sibs || []).every(s => s.status === "signed");
+
+        if (source === "company") {
+          await supabase.from("company_contracts").update({
+            esign_status: sealedAll ? "signed" : "pending",
+            ...(sealedAll ? { signed_at: signedAt, signature_hash: hash } : {}),
+          }).eq("id", contractId);
+        } else if (source === "esign_doc") {
+          await supabase.from("esign_documents").update({ status: sealedAll ? "completed" : "in_review", updated_at: signedAt }).eq("id", contractId);
+        } else {
+          await supabase.from("generated_contracts").update({
+            esign_status: sealedAll ? "signed" : "pending",
+            ...(sealedAll ? { signed_at: signedAt, signature_hash: hash } : {}),
+          }).eq("id", contractId);
+        }
+
+        // Last signer done → burn every placed field into the sealed PDF.
+        if (sealedAll && isPdfUrl(selectedContract.file_url)) {
+          try {
+            let fq = supabase.from("esign_fields").select("*");
+            fq = source === "esign_doc" ? fq.eq("esign_document_id", contractId) : fq.eq("contract_id", contractId).eq("source_type", source);
+            const { data: allFields } = await fq;
+            const blob = await applyFieldsToPDF(selectedContract.file_url, allFields || [], {
+              documentName: docName, hash,
+              signers: (sibs || []).map(s => ({ name: s.name || s.email, role: s.role, signedAt: s.signed_at ? fmtDateTime(s.signed_at) : null, ip: s.ip })),
+            });
+            const bucket = source === "esign_doc" ? "esign-documents" : "contracts";
+            const path   = `${adminId}/signed_${contractId}.pdf`;
+            const { error: upErr } = await supabase.storage.from(bucket).upload(path, blob, { upsert: true, contentType: "application/pdf" });
+            if (!upErr) {
+              const url = supabase.storage.from(bucket).getPublicUrl(path).data?.publicUrl;
+              const tbl = source === "company" ? "company_contracts" : source === "esign_doc" ? "esign_documents" : "generated_contracts";
+              if (url) await supabase.from(tbl).update({ file_url: url }).eq("id", contractId);
+            }
+          } catch (e) { console.warn("applyFieldsToPDF:", e.message); }
+        }
+      } catch (err) { console.error(err); }
+    } else {
+      // ── Legacy single-signature flow (documents without placed fields) ──
+      try {
+        if (source === "company") {
+          await supabase.from("company_contracts")
+            .update({ esign_status: "signed", signed_at: signedAt, signature_hash: hash, signature_type: signature.type, signature_data: signature.data })
+            .eq("id", contractId);
+        } else if (source === "esign_doc") {
+          // esign_documents has no signature columns; the signature lives on the
+          // signer row. Mark the document completed.
+          await supabase.from("esign_documents")
+            .update({ status: "completed", updated_at: signedAt })
+            .eq("id", contractId);
+        } else {
+          await supabase.from("generated_contracts")
+            .update({ esign_status: "signed", signed_at: signedAt, signature_hash: hash, signature_type: signature.type, signature_data: signature.data })
+            .eq("id", contractId);
+        }
+      } catch (err) { console.error(err); }
+
+      // Stamp the signed PDF (+ certificate page), then point the record at it.
+      // With auto-detected fields the ink lands exactly on the document's own
+      // signature areas; otherwise fall back to the corner stamp.
+      // Best-effort — a failure here never blocks the signing itself.
+      if (isPdfUrl(selectedContract.file_url)) {
+        try {
+          let blob;
+          if (fieldValues && signFields.length) {
+            const valMap = Object.fromEntries(fieldValues.map(v => [v.id, v.value]));
+            blob = await applyFieldsToPDF(selectedContract.file_url, signFields.map(f => ({ ...f, value: valMap[f.id] })), {
+              documentName: docName, hash,
+              signers: [{ name: actor, role: "Authorized Officer", signedAt: fmtDateTime(signedAt), ip: otpData.ip, device: otpData.device }],
+            });
+          } else {
+            blob = await applySignatureToPDF(selectedContract.file_url, {
+              signatureType: signature.type, signatureData: signature.data, font: signature.font,
+              signerName: actor, role: "Authorized Officer", documentName: docName,
+              signedAt: fmtDateTime(signedAt), hash, ip: otpData.ip, device: otpData.device,
+            });
+          }
+          const bucket = source === "esign_doc" ? "esign-documents" : "contracts";
+          const path   = `${adminId}/signed_${contractId}.pdf`;
+          const { error: upErr } = await supabase.storage.from(bucket).upload(path, blob, { upsert: true, contentType: "application/pdf" });
+          if (!upErr) {
+            const url = supabase.storage.from(bucket).getPublicUrl(path).data?.publicUrl;
+            const tbl = source === "company" ? "company_contracts" : source === "esign_doc" ? "esign_documents" : "generated_contracts";
+            if (url) await supabase.from(tbl).update({ file_url: url }).eq("id", contractId);
+          }
+        } catch (e) { console.warn("stamp signed PDF:", e.message); }
+      }
     }
 
-    // Real audit trail: signed → completed (internal single-officer flow).
+    // Real audit trail: signed (→ completed once everyone has signed).
     await recordAudit(adminId, {
       contractId, documentLabel: label, eventType: "signed", actor, actorEmail: currentUser?.email,
       ip: otpData.ip, device: otpData.device, detail: "Signature applied — OTP verified by email", hash,
     });
-    await recordAudit(adminId, {
-      contractId, documentLabel: label, eventType: "completed", actor: "System",
-      detail: "All signatures verified. Document sealed.", hash,
-    });
+    if (sealedAll) {
+      await recordAudit(adminId, {
+        contractId, documentLabel: label, eventType: "completed", actor: "System",
+        detail: "All signatures verified. Document sealed.", hash,
+      });
+    }
 
     // In-app notifications: completion + mandatory security alert on signature use.
     await pushNotification(adminId, {
-      userId: currentUser?.id, type: "success", title: `${docName} signed`,
-      detail: "Signature applied and document sealed.", contractId,
+      userId: currentUser?.id, type: "success", title: sealedAll ? `${docName} signed` : `${docName} — your signature was applied`,
+      detail: sealedAll ? "Signature applied and document sealed." : "Waiting for the remaining signer(s).", contractId,
     });
     await pushNotification(adminId, {
       userId: currentUser?.id, type: "warning", title: "Security: your signature was used",
@@ -1390,6 +1448,7 @@ export default function ESignaturePage() {
       } catch (err) { console.error("sendSignatureAlert:", err.message); }
     }
 
+    setFieldValues(null); setSignFields([]); setSignSignerId(null);
     setSigningStep(3);
     if (adminId) await Promise.all([fetchContracts(adminId), fetchCompanyContracts(adminId), fetchEsignDocs(adminId), loadNotifications(adminId)]);
   };
@@ -1398,9 +1457,7 @@ export default function ESignaturePage() {
     { id: "dashboard", icon: "LayoutDashboard", label: "Dashboard" },
     { id: "documents", icon: "FileText",        label: "All Documents" },
     { id: "sign",      icon: "PenTool",         label: "Sign a Document" },
-    { id: "upload",    icon: "Upload",          label: "Upload & Convert" },
-    { id: "workflow",  icon: "GitBranch",       label: "Approval Chains" },
-    { id: "cosign",    icon: "Users",           label: "Co-Signing" },
+    { id: "upload",    icon: "Upload",          label: "New Document" },
     { id: "audit",     icon: "Search",          label: "Audit Trail" },
   ];
 
@@ -1436,6 +1493,7 @@ export default function ESignaturePage() {
               className="flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:bg-primary/90 transition-colors">
               <Icon name="Plus" size={14} color="currentColor" /> New Document
             </button>
+            <ClosePageButton label="Close E-Signature" />
           </div>
         </div>
 
@@ -1461,50 +1519,75 @@ export default function ESignaturePage() {
           {active === "sign" && (
             <>
               {signingStep === 1 && <SignDocument docs={docs} onStartSigning={startSigning} />}
-              {signingStep === 2 && selectedContract && (
+              {signingStep === 2 && signMode === "walkin" && walkInDoc && (
+                <div className="max-w-3xl mx-auto">
+                  <WalkInSigning
+                    doc={walkInDoc}
+                    adminId={adminId}
+                    currentUser={currentUser}
+                    onRecordAudit={(p) => recordAudit(adminId, p)}
+                    onNotify={(p) => pushNotification(adminId, p)}
+                    onBack={() => setSigningStep(1)}
+                    onSealed={async () => {
+                      setSignMode("single"); setWalkInDoc(null);
+                      if (adminId) await Promise.all([fetchContracts(adminId), fetchCompanyContracts(adminId), fetchEsignDocs(adminId), loadNotifications(adminId)]);
+                      setSigningStep(3);
+                    }}
+                  />
+                </div>
+              )}
+              {signingStep === 2 && signMode !== "walkin" && selectedContract && (
                 <div className="space-y-5 max-w-3xl mx-auto">
                   <button onClick={() => setSigningStep(1)} className="text-xs text-primary font-medium flex items-center gap-1 hover:underline">
                     <Icon name="ArrowLeft" size={12} color="currentColor" /> Back
                   </button>
                   <div>
-                    <h2 className="text-2xl font-bold text-foreground">Sign Contract</h2>
+                    <h2 className="text-2xl font-bold text-foreground">Sign Document</h2>
                     <p className="text-sm text-muted-foreground mt-0.5">
                       {selectedContract._name || selectedContract.invoice_number || "Document"}
                       {selectedContract.client_name ? ` — ${selectedContract.client_name}` : ""}
                     </p>
                   </div>
 
-                  {/* Document viewer — review before signing */}
-                  <div className="bg-card border border-border rounded-xl overflow-hidden">
-                    <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-                      <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-                        <Icon name="FileText" size={15} color="currentColor" /> Review Document
-                      </h3>
-                      {selectedContract.file_url && (
-                        <a href={selectedContract.file_url} target="_blank" rel="noopener noreferrer"
-                          className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
-                          <Icon name="ExternalLink" size={12} color="currentColor" /> Open in new tab
-                        </a>
-                      )}
-                    </div>
-                    {selectedContract.file_url ? (
-                      <iframe title="Contract document" src={selectedContract.file_url}
-                        className="w-full h-[420px] bg-muted/20" />
-                    ) : (
-                      <div className="px-5 py-10 text-center">
-                        <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center mx-auto mb-3">
-                          <Icon name="FileText" size={20} color="var(--color-muted-foreground)" />
+                  {signFields.length > 0 && isPdfUrl(selectedContract.file_url) ? (
+                    /* Field-based signing — the document renders inside the filler */
+                    <FieldFiller fileUrl={selectedContract.file_url} fields={signFields}
+                      signerName={currentUser?.name} onComplete={handleFieldsComplete} />
+                  ) : (
+                    <>
+                      {/* Document viewer — review before signing */}
+                      <div className="bg-card border border-border rounded-xl overflow-hidden">
+                        <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+                          <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                            <Icon name="FileText" size={15} color="currentColor" /> Review Document
+                          </h3>
+                          {selectedContract.file_url && (
+                            <a href={selectedContract.file_url} target="_blank" rel="noopener noreferrer"
+                              className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
+                              <Icon name="ExternalLink" size={12} color="currentColor" /> Open in new tab
+                            </a>
+                          )}
                         </div>
-                        <p className="text-sm font-semibold text-foreground">No file attached to this document</p>
-                        <p className="text-xs text-muted-foreground mt-1">You can still apply your signature below. Re-generate the contract to attach a viewable PDF.</p>
+                        {selectedContract.file_url ? (
+                          <iframe title="Contract document" src={selectedContract.file_url}
+                            className="w-full h-[420px] bg-muted/20" />
+                        ) : (
+                          <div className="px-5 py-10 text-center">
+                            <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center mx-auto mb-3">
+                              <Icon name="FileText" size={20} color="var(--color-muted-foreground)" />
+                            </div>
+                            <p className="text-sm font-semibold text-foreground">No file attached to this document</p>
+                            <p className="text-xs text-muted-foreground mt-1">You can still apply your signature below. Re-generate the contract to attach a viewable PDF.</p>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
 
-                  <div className="bg-card border border-border rounded-xl p-5">
-                    <h3 className="text-base font-semibold text-foreground mb-4">Your Signature</h3>
-                    <SignatureCanvas onCapture={(sig) => { setSignature(sig); setShowOTP(true); }} />
-                  </div>
+                      <div className="bg-card border border-border rounded-xl p-5">
+                        <h3 className="text-base font-semibold text-foreground mb-4">Your Signature</h3>
+                        <SignatureCanvas onCapture={(sig) => { setSignature(sig); setShowOTP(true); }} />
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               {signingStep === 3 && (
@@ -1525,8 +1608,6 @@ export default function ESignaturePage() {
             </>
           )}
           {active === "upload"        && <Upload setActive={setActive} adminId={adminId} onUploaded={() => fetchEsignDocs(adminId)} />}
-          {active === "workflow"      && <Workflow />}
-          {active === "cosign"        && <CoSign docs={docs} />}
           {active === "audit"         && <AuditPage docs={docs} adminId={adminId} />}
           {active === "notifications" && <NotificationsPage notifs={notifs} setNotifs={setNotifs} onMarkRead={markNotificationsRead} />}
           {active === "settings"      && <Settings currentUser={currentUser} />}
@@ -1538,7 +1619,7 @@ export default function ESignaturePage() {
           signer={{ name: currentUser?.name || "Authorized Officer", email: currentUser?.email }}
           documentName={selectedContract?._name || selectedContract?.invoice_number}
           onVerified={handleOTPVerified}
-          onClose={() => { setShowOTP(false); setSignature(null); }}
+          onClose={() => { setShowOTP(false); setSignature(null); setFieldValues(null); }}
         />
       )}
     </MainLayout>

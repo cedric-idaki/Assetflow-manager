@@ -1,8 +1,8 @@
 import React, { useEffect } from 'react';
 import Icon from './AppIcon';
 
-// Google Drive preview of the AssetFlow Terms & Conditions / Privacy Policy.
-export const TERMS_DOC_URL = 'https://drive.google.com/file/d/1xKuwpqByoANSrOrcz5qSOFzGKfwokkSg/preview';
+// Google Drive preview of the Ararat Terms & Conditions / Privacy Policy.
+export const TERMS_DOC_URL = 'https://drive.google.com/file/d/19p9vOz4-XwcIdxglQIM6WN7edi-vXIzF/preview';
 
 // Full-screen overlay that shows the Terms & Privacy Policy document in the
 // same tab (no new window). Used during account registration.
@@ -71,7 +71,7 @@ const TermsModal = ({ open, onClose }) => {
         <div className="flex-1 bg-slate-50">
           <iframe
             src={TERMS_DOC_URL}
-            title="AssetFlow Terms and Privacy Policy"
+            title="Ararat Terms and Privacy Policy"
             className="w-full h-full border-0"
             allow="autoplay"
           />

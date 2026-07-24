@@ -3,6 +3,7 @@ import Icon from '../../components/AppIcon';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import MainLayout from '../../layouts/MainLayout';
+import ClosePageButton from '../../components/ui/ClosePageButton';
 import { auditLogsService } from '../../services/supabaseService';
 import { supabase } from '../../lib/supabase';
 
@@ -441,11 +442,14 @@ const KycManagementScreen = () => {
     <MainLayout>
       <div className="space-y-5">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">KYC Management</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Review and approve client identity documents · {counts.under_review} pending review
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">KYC Management</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Review and approve client identity documents · {counts.under_review} pending review
+            </p>
+          </div>
+          <ClosePageButton label="Close KYC Management" />
         </div>
 
         {/* Stats */}

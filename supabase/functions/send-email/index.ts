@@ -2,10 +2,10 @@
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-// Set EMAIL_FROM to a verified-domain sender (e.g. "AssetFlow <noreply@yourco.com>")
+// Set EMAIL_FROM to a verified-domain sender (e.g. "Ararat <noreply@yourco.com>")
 // so emails deliver to any recipient. The onboarding@resend.dev fallback only
 // delivers to the Resend account owner's own address (test mode).
-const EMAIL_FROM = Deno.env.get("EMAIL_FROM") || "AssetFlow <onboarding@resend.dev>";
+const EMAIL_FROM = Deno.env.get("EMAIL_FROM") || "Ararat <onboarding@resend.dev>";
 
 const formatCurrency = (val: number, currency = "KES") =>
   new Intl.NumberFormat("en-KE", { style: "currency", currency, minimumFractionDigits: 0 }).format(val || 0);
@@ -91,7 +91,7 @@ const buildPaymentConfirmationEmail = (data: any) => {
     </table>` : ""}
 
     <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center;margin-top:8px">
-      <p style="margin:0;font-size:13px;color:#6b7280">Thank you for your payment. This is an automated receipt from <strong>AssetFlow Management</strong>.</p>
+      <p style="margin:0;font-size:13px;color:#6b7280">Thank you for your payment. This is an automated receipt from <strong>Ararat Management</strong>.</p>
     </div>
   </div>
 </div>
@@ -165,7 +165,7 @@ const buildInvoiceEmail = (data: any) => {
     </table>
 
     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;text-align:center">
-      <p style="margin:0;font-size:13px;color:#1e40af">Please ensure payment is made by the due date. For queries, contact <strong>AssetFlow Management</strong>.</p>
+      <p style="margin:0;font-size:13px;color:#1e40af">Please ensure payment is made by the due date. For queries, contact <strong>Ararat Management</strong>.</p>
     </div>
   </div>
 </div>
@@ -242,7 +242,7 @@ const buildStatementEmail = (data: any) => {
     <p style="margin:0 0 16px;font-size:13px;color:#6b7280">${assets.length} asset(s) in portfolio</p>` : ""}
 
     <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
-      <p style="margin:0;font-size:13px;color:#6b7280">This statement was generated automatically by <strong>AssetFlow Management</strong>.</p>
+      <p style="margin:0;font-size:13px;color:#6b7280">This statement was generated automatically by <strong>Ararat Management</strong>.</p>
     </div>
   </div>
 </div>
@@ -295,7 +295,7 @@ const buildReminderEmail = (data: any) => {
     </table>
 
     <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
-      <p style="margin:0;font-size:13px;color:#6b7280">If you have already made this payment, please disregard this reminder. Contact <strong>AssetFlow Management</strong> for assistance.</p>
+      <p style="margin:0;font-size:13px;color:#6b7280">If you have already made this payment, please disregard this reminder. Contact <strong>Ararat Management</strong> for assistance.</p>
     </div>
   </div>
 </div>
@@ -313,13 +313,13 @@ const buildCredentialsEmail = (data: any) => {
     <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
       <span style="font-size:28px">🔑</span>
     </div>
-    <h1 style="margin:0;font-size:22px;font-weight:700">Welcome to AssetFlow</h1>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Welcome to Ararat</h1>
     <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Your client portal account is ready</p>
   </div>
   <div style="padding:28px 0 0">
     <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Client"}</strong>,</p>
     <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
-      An account has been created for you on the AssetFlow client portal. Use the credentials below to sign in. For your security, please change your password after your first login.
+      An account has been created for you on the Ararat client portal. Use the credentials below to sign in. For your security, please change your password after your first login.
     </p>
     <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">
       <table style="width:100%;border-collapse:collapse">
@@ -351,7 +351,7 @@ const buildStaffCredentialsEmail = (data: any) => {
     <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
       <span style="font-size:28px">🔑</span>
     </div>
-    <h1 style="margin:0;font-size:22px;font-weight:700">Welcome to ${companyName || "AssetFlow"}</h1>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Welcome to ${companyName || "Ararat"}</h1>
     <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Your staff portal account is ready</p>
   </div>
   <div style="padding:28px 0 0">
@@ -547,6 +547,132 @@ const buildElectionResultsEmail = (data: any) => {
 </body></html>`;
 };
 
+const buildElectionVotingClosedEmail = (data: any) => {
+  const { fullName, saccoName, electionTitle, portalUrl } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">⏳</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Voting has closed</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${electionTitle || "Sacco election"}${saccoName ? ` · ${saccoName}` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      The voting window for <strong>${electionTitle || "your sacco's election"}</strong> has now closed and no
+      further ballots can be cast. The results are being finalised and will be published shortly — you'll be
+      notified as soon as they are available.
+    </p>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Open the member portal</a>
+    </div>` : ""}
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#6b7280">Voted? You can verify your ballot any time with your receipt code in the portal.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
+const buildMotionVotingOpenEmail = (data: any) => {
+  const { fullName, saccoName, motionTitle, ballotType, votingEnd, portalUrl } = data;
+  const secret = ballotType === "secret";
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🗳️</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">A motion is open for voting</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${motionTitle || "Sacco motion"}${saccoName ? ` · ${saccoName}` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      Voting is now open on the motion <strong>${motionTitle || "before the sacco"}</strong>.
+      Sign in to the member portal to cast your Yes / No / Abstain vote.
+    </p>
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px;margin-bottom:24px">
+      <p style="margin:0;font-size:13px;color:#1e40af;line-height:1.6">
+        ${secret
+          ? "This is a <strong>secret ballot</strong> — only aggregate totals are published, never individual votes."
+          : "This is a <strong>visible ballot</strong> — the full breakdown is shown to members after voting closes."}
+        ${votingEnd ? `<br>Voting closes on <strong>${formatDate(votingEnd)}</strong>.` : ""}
+      </p>
+    </div>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Cast your vote</a>
+    </div>` : ""}
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#6b7280">You are receiving this because you are a member of <strong>${saccoName || "your sacco"}</strong>.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
+const buildMotionClosedEmail = (data: any) => {
+  const { fullName, saccoName, motionTitle, status, yes, no, abstain, quorumMet, ballotType, portalUrl } = data;
+  const passed = status === "passed";
+  const secret = ballotType === "secret";
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,${passed ? "#0e9f6e 0%,#059669" : "#dc2626 0%,#b91c1c"} 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#fff">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">${passed ? "✅" : "❌"}</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Motion ${passed ? "passed" : "not carried"}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${motionTitle || "Sacco motion"}${saccoName ? ` · ${saccoName}` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${fullName || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      Voting has closed on <strong>${motionTitle || "the motion"}</strong>. The motion was
+      <strong style="color:${passed ? "#059669" : "#dc2626"}">${passed ? "carried" : "not carried"}</strong>.
+    </p>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+      <tr>
+        <td style="padding:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;text-align:center">
+          <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase">Yes</p>
+          <p style="margin:0;font-size:20px;font-weight:800;color:#059669">${yes ?? 0}</p>
+        </td>
+        <td style="width:8px"></td>
+        <td style="padding:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;text-align:center">
+          <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase">No</p>
+          <p style="margin:0;font-size:20px;font-weight:800;color:#dc2626">${no ?? 0}</p>
+        </td>
+        <td style="width:8px"></td>
+        <td style="padding:12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;text-align:center">
+          <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase">Abstain</p>
+          <p style="margin:0;font-size:20px;font-weight:800;color:#64748b">${abstain ?? 0}</p>
+        </td>
+      </tr>
+    </table>
+    <div style="background:${quorumMet ? "#f0fdf4" : "#fffbeb"};border:1px solid ${quorumMet ? "#bbf7d0" : "#fde68a"};border-radius:8px;padding:14px;text-align:center;margin-bottom:24px">
+      <p style="margin:0;font-size:13px;color:${quorumMet ? "#065f46" : "#92400e"}">
+        Quorum was <strong>${quorumMet ? "met" : "not met"}</strong>.${!quorumMet && !passed ? " A motion cannot carry without quorum." : ""}
+      </p>
+    </div>
+    ${secret ? `<p style="margin:0 0 20px;font-size:12px;color:#9ca3af;text-align:center">Secret ballot — only aggregate totals are shown.</p>` : ""}
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">View in the portal</a>
+    </div>` : ""}
+  </div>
+</div>
+</body></html>`;
+};
+
 const buildSigningOtpEmail = (data: any) => {
   const { signerName, code, documentName, expiresMinutes } = data;
   const digits = String(code || "").split("").map((d: string) =>
@@ -678,7 +804,7 @@ serve(async (req) => {
         html = buildPaymentConfirmationEmail(data);
         break;
       case "invoice":
-        subject = `Invoice ${data?.invoice?.invoiceNumber || data?.invoice?.invoice_number || ""} – AssetFlow Management`;
+        subject = `Invoice ${data?.invoice?.invoiceNumber || data?.invoice?.invoice_number || ""} – Ararat Management`;
         html = buildInvoiceEmail(data);
         break;
       case "statement":
@@ -692,7 +818,7 @@ serve(async (req) => {
         html = buildReminderEmail(data);
         break;
       case "client_welcome":
-        subject = "Your AssetFlow client portal login";
+        subject = "Your Ararat client portal login";
         html = buildCredentialsEmail(data);
         break;
       case "sacco_member_welcome":
@@ -710,6 +836,18 @@ serve(async (req) => {
       case "sacco_election_results":
         subject = `Results published – ${data?.electionTitle || "sacco election"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
         html = buildElectionResultsEmail(data);
+        break;
+      case "sacco_election_voting_closed":
+        subject = `⏳ Voting closed – ${data?.electionTitle || "sacco election"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
+        html = buildElectionVotingClosedEmail(data);
+        break;
+      case "sacco_motion_voting_open":
+        subject = `🗳️ Vote now – ${data?.motionTitle || "sacco motion"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
+        html = buildMotionVotingOpenEmail(data);
+        break;
+      case "sacco_motion_closed":
+        subject = `${data?.status === "passed" ? "✅ Motion passed" : "❌ Motion not carried"} – ${data?.motionTitle || "sacco motion"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
+        html = buildMotionClosedEmail(data);
         break;
       case "staff_welcome":
         subject = `Your ${data?.companyName ? `${data.companyName} ` : ""}staff portal login`;

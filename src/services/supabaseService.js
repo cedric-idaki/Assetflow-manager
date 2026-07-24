@@ -363,7 +363,7 @@ export var paymentsService = {
     return safeQuery(async function() {
      var query = supabase
   .from('payments')
-  .select('*, client:clients(full_name, account_number), asset:assets(description, asset_code), processor:user_profiles!payments_processed_by_fkey(full_name)')
+  .select('*, client:clients(full_name, account_number, email, phone), asset:assets(description, asset_code), processor:user_profiles!payments_processed_by_fkey(full_name)')
   .order('payment_date', { ascending: false });
 
       if (f.status) query = query.eq('payment_status', f.status);

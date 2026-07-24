@@ -38,6 +38,36 @@ const uploadAssetImage = async (file) => {
   }
 };
 
+// ── Vehicle dropdown option lists ─────────────────────────────────────────────
+// Make → common models in the Kenyan market. SelectWithOther appends an
+// "Other…" free-text option, so unlisted makes/models remain possible.
+const VEHICLE_MODELS = {
+  'Toyota':        ['Corolla', 'Axio', 'Fielder', 'Premio', 'Allion', 'Vitz', 'Passo', 'Belta', 'Probox', 'Succeed', 'Aqua', 'Prius', 'Ractis', 'Wish', 'Isis', 'Sienta', 'Noah', 'Voxy', 'Alphard', 'Vellfire', 'Hiace', 'Harrier', 'RAV4', 'Vanguard', 'C-HR', 'Rush', 'Fortuner', 'Prado', 'Land Cruiser', 'Hilux', 'Mark X', 'Crown', 'Camry', 'Avensis', 'Auris'],
+  'Nissan':        ['Note', 'March', 'Tiida', 'Latio', 'Sylphy', 'Bluebird', 'Teana', 'Wingroad', 'AD Van', 'Juke', 'Qashqai', 'Dualis', 'X-Trail', 'Murano', 'Patrol', 'Navara', 'Serena', 'NV200', 'Caravan', 'Leaf', 'Skyline'],
+  'Mazda':         ['Demio', 'Axela', 'Atenza', 'Verisa', 'Premacy', 'Biante', 'CX-3', 'CX-5', 'CX-7', 'CX-8', 'CX-9', 'Bongo', 'BT-50', 'MX-5'],
+  'Mitsubishi':    ['Lancer', 'Colt', 'Mirage', 'Attrage', 'Galant', 'Outlander', 'ASX', 'RVR', 'Pajero', 'Pajero Sport', 'L200', 'Delica', 'Canter', 'Fuso'],
+  'Subaru':        ['Impreza', 'Legacy', 'Forester', 'Outback', 'XV', 'Levorg', 'Exiga', 'Tribeca', 'WRX', 'BRZ'],
+  'Honda':         ['Fit', 'Fit Shuttle', 'Vezel', 'CR-V', 'HR-V', 'Civic', 'Accord', 'Insight', 'Freed', 'Stream', 'StepWGN', 'Odyssey'],
+  'Suzuki':        ['Alto', 'Swift', 'Baleno', 'Celerio', 'Wagon R', 'Vitara', 'Escudo', 'Jimny', 'Ertiga', 'S-Cross', 'Every'],
+  'Isuzu':         ['D-Max', 'MU-X', 'NPR', 'NQR', 'FRR', 'FSR', 'FVR', 'ELF', 'Trooper'],
+  'Mercedes-Benz': ['A-Class', 'B-Class', 'C-Class', 'E-Class', 'S-Class', 'CLA', 'GLA', 'GLC', 'GLE', 'GLS', 'G-Class', 'ML', 'Vito', 'Sprinter', 'Actros'],
+  'BMW':           ['1 Series', '2 Series', '3 Series', '5 Series', '7 Series', 'X1', 'X3', 'X5', 'X6', 'Z4'],
+  'Volkswagen':    ['Golf', 'Polo', 'Passat', 'Jetta', 'Tiguan', 'Touareg', 'Amarok', 'Caddy', 'Transporter'],
+  'Audi':          ['A3', 'A4', 'A6', 'Q3', 'Q5', 'Q7'],
+  'Land Rover':    ['Defender', 'Discovery', 'Discovery Sport', 'Freelander', 'Range Rover', 'Range Rover Sport', 'Range Rover Evoque', 'Range Rover Velar'],
+  'Ford':          ['Ranger', 'Everest', 'Focus', 'Fiesta', 'Escape', 'EcoSport', 'Explorer'],
+  'Hyundai':       ['Tucson', 'Santa Fe', 'Creta', 'Elantra', 'Accent', 'i10', 'i20', 'H-1'],
+  'Kia':           ['Sportage', 'Sorento', 'Seltos', 'Rio', 'Picanto', 'Cerato'],
+  'Peugeot':       ['208', '301', '308', '508', '2008', '3008', '5008', 'Partner'],
+  'Lexus':         ['IS', 'ES', 'LS', 'UX', 'NX', 'RX', 'GX', 'LX'],
+  'Volvo':         ['S60', 'S90', 'V40', 'XC40', 'XC60', 'XC90'],
+  'Daihatsu':      ['Mira', 'Move', 'Terios', 'Rocky', 'Hijet'],
+};
+const VEHICLE_MAKES  = Object.keys(VEHICLE_MODELS);
+const VEHICLE_COLORS = ['White', 'Pearl White', 'Silver', 'Grey', 'Black', 'Blue', 'Dark Blue', 'Sky Blue', 'Red', 'Wine Red', 'Maroon', 'Green', 'Dark Green', 'Gold', 'Beige', 'Champagne', 'Brown', 'Orange', 'Yellow', 'Purple'];
+const FUEL_TYPES     = ['Petrol', 'Diesel', 'Hybrid', 'Plug-in Hybrid', 'Electric', 'LPG'];
+const GEARBOX_TYPES  = ['Automatic', 'Manual', 'CVT', 'Semi-Automatic'];
+
 // ── Asset-type smart field configs ────────────────────────────────────────────
 const ASSET_CONFIGS = {
   vehicle: {
@@ -46,16 +76,16 @@ const ASSET_CONFIGS = {
     color: 'bg-blue-50 border-blue-200',
     iconColor: '#1d4ed8',
     fields: [
-      { key: 'vehicleMake',    label: 'Make',           placeholder: 'e.g. Toyota',          required: true,  col: 1 },
-      { key: 'vehicleModel',   label: 'Model',          placeholder: 'e.g. Land Cruiser',    required: true,  col: 1 },
+      { key: 'vehicleMake',    label: 'Make',           placeholder: 'e.g. Toyota',          required: true,  col: 1, selectOther: VEHICLE_MAKES },
+      { key: 'vehicleModel',   label: 'Model',          placeholder: 'e.g. Land Cruiser',    required: true,  col: 1, modelsOf: 'vehicleMake' },
       { key: 'vehicleYear',    label: 'Year',           placeholder: '2023',                 required: true,  col: 1, type: 'number' },
-      { key: 'vehicleColor',   label: 'Color',          placeholder: 'e.g. Pearl White',     required: false, col: 1 },
+      { key: 'vehicleColor',   label: 'Color',          placeholder: 'e.g. Pearl White',     required: false, col: 1, selectOther: VEHICLE_COLORS },
       { key: 'vehiclePlate',   label: 'Plate Number',   placeholder: 'e.g. KAA 123B',        required: true,  col: 1, upper: true },
       { key: 'vehicleChassis', label: 'Chassis Number', placeholder: 'Enter chassis no.',    required: true,  col: 1, upper: true },
       { key: 'vehicleEngine',  label: 'Engine CC',      placeholder: 'e.g. 2000',            required: false, col: 1 },
-      { key: 'vehicleFuel',    label: 'Fuel Type',      placeholder: 'Petrol/Diesel/Hybrid', required: false, col: 1 },
+      { key: 'vehicleFuel',    label: 'Fuel Type',      placeholder: 'Petrol/Diesel/Hybrid', required: false, col: 1, selectOther: FUEL_TYPES },
       { key: 'vehicleMileage', label: 'Mileage (km)',   placeholder: 'e.g. 45000',           required: false, col: 1, type: 'number' },
-      { key: 'vehicleGearbox', label: 'Gearbox',        placeholder: 'Automatic / Manual',   required: false, col: 1 },
+      { key: 'vehicleGearbox', label: 'Gearbox',        placeholder: 'Automatic / Manual',   required: false, col: 1, selectOther: GEARBOX_TYPES },
     ],
   },
   property: {
@@ -215,6 +245,31 @@ const ic = (err) =>
   `w-full px-3 py-2.5 text-sm bg-background border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground placeholder:text-muted-foreground transition-colors ${
     err ? 'border-red-400 bg-red-50' : 'border-border'
   }`;
+
+// ── Select with "Other…" free-text fallback ──────────────────────────────────
+// Picking "Other…" (or editing a record whose stored value isn't in the list)
+// swaps in a text input, so any value remains enterable.
+const OTHER_SENTINEL = '__other__';
+const SelectWithOther = ({ value, onChange, options, error, placeholder, otherPlaceholder }) => {
+  const [otherMode, setOtherMode] = useState(() => value !== '' && !options.includes(value));
+  return (
+    <div className="space-y-2">
+      <select value={otherMode ? OTHER_SENTINEL : value} className={ic(error)}
+        onChange={e => {
+          if (e.target.value === OTHER_SENTINEL) { setOtherMode(true); onChange(''); }
+          else { setOtherMode(false); onChange(e.target.value); }
+        }}>
+        <option value="">{placeholder}</option>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+        <option value={OTHER_SENTINEL}>Other…</option>
+      </select>
+      {otherMode && (
+        <input type="text" value={value} onChange={e => onChange(e.target.value)}
+          placeholder={otherPlaceholder || 'Type your own…'} className={ic(error)} />
+      )}
+    </div>
+  );
+};
 
 // ── Live pricing preview ──────────────────────────────────────────────────────
 const PricingPreview = ({ pricing }) => {
@@ -382,12 +437,19 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
 
   // ── Real-time field setters ───────────────────────────────────────────────
   const set = (field, value) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    setFormData(prev => {
+      const next = { ...prev, [field]: value };
+      // Model options are keyed by make, so a make change invalidates the model
+      if (field === 'vehicleMake' && value !== prev.vehicleMake) next.vehicleModel = '';
+      return next;
+    });
     // Real-time validation
     let err = '';
     if (field === 'description' && (!value || value.trim().length < 3)) err = 'Description must be at least 3 characters';
     if (field === 'assetType'   && !value) err = 'Asset type is required';
-    setErrors(prev => ({ ...prev, [field]: err }));
+    setErrors(prev => field === 'vehicleMake'
+      ? { ...prev, [field]: err, vehicleModel: '' }
+      : { ...prev, [field]: err });
   };
 
   const setP = (field, value) => {
@@ -524,22 +586,50 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
         </div>
         {pairs.map((row, ri) => (
           <div key={ri} className={`grid grid-cols-1 ${row.length > 1 ? 'md:grid-cols-2' : ''} gap-4`}>
-            {row.map(f => f.select ? (
-              <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]}>
-                <select value={formData[f.key] || ''} onChange={e => set(f.key, e.target.value)}
-                  className={ic(errors[f.key])}>
-                  <option value="">Select {f.label}</option>
-                  {f.select.map(opt => (
-                    <option key={opt} value={opt}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</option>
-                  ))}
-                </select>
-              </Field>
-            ) : (
-              <Input key={f.key} label={`${f.label}${f.required ? ' *' : ''}`}
-                type={f.type || 'text'} value={formData[f.key] || ''}
-                onChange={e => set(f.key, f.upper ? e.target.value.toUpperCase() : e.target.value)}
-                error={errors[f.key]} placeholder={f.placeholder} />
-            ))}
+            {row.map(f => {
+              if (f.selectOther || f.modelsOf) {
+                const parentVal = f.modelsOf ? formData[f.modelsOf] : null;
+                if (f.modelsOf && !parentVal) {
+                  return (
+                    <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]}>
+                      <select disabled value="" className={ic(errors[f.key])}>
+                        <option value="">Select Make first</option>
+                      </select>
+                    </Field>
+                  );
+                }
+                const opts = f.selectOther || VEHICLE_MODELS[parentVal];
+                if (opts) {
+                  return (
+                    <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]}>
+                      {/* key remounts the model select when make changes, resetting "Other" mode */}
+                      <SelectWithOther key={parentVal || 'static'}
+                        value={formData[f.key] || ''} onChange={v => set(f.key, v)}
+                        options={opts} error={errors[f.key]}
+                        placeholder={`Select ${f.label}`} otherPlaceholder={f.placeholder} />
+                    </Field>
+                  );
+                }
+                // custom make entered via "Other…" — no model list, fall through to free text
+              }
+              if (f.select) return (
+                <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]}>
+                  <select value={formData[f.key] || ''} onChange={e => set(f.key, e.target.value)}
+                    className={ic(errors[f.key])}>
+                    <option value="">Select {f.label}</option>
+                    {f.select.map(opt => (
+                      <option key={opt} value={opt}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</option>
+                    ))}
+                  </select>
+                </Field>
+              );
+              return (
+                <Input key={f.key} label={`${f.label}${f.required ? ' *' : ''}`}
+                  type={f.type || 'text'} value={formData[f.key] || ''}
+                  onChange={e => set(f.key, f.upper ? e.target.value.toUpperCase() : e.target.value)}
+                  error={errors[f.key]} placeholder={f.placeholder} />
+              );
+            })}
           </div>
         ))}
         {fullCols.map(f => (

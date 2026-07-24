@@ -25,12 +25,15 @@ export const SaccoMemberProvider = ({ children }) => {
   const [sacco,         setSacco]         = useState(null);
   const [members,       setMembers]       = useState([]);     // names only, for marketplace/voting
   const [contributions, setContributions] = useState([]);
+  const [contributionTypes, setContributionTypes] = useState([]); // active types = expected contributions
   const [loanProducts,  setLoanProducts]  = useState([]);
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
   const [shares,        setShares]        = useState([]);
   const [listings,      setListings]      = useState([]);
   const [transfers,     setTransfers]     = useState([]);
+  const [sharePrices,   setSharePrices]   = useState([]);
+  const [saccoTotals,   setSaccoTotals]   = useState({ totalShares: 0, totalMarketValue: 0, shareholders: 0 });
   const [motions,       setMotions]       = useState([]);
   const [votes,         setVotes]         = useState([]);
   const [elections,          setElections]          = useState([]);
@@ -71,6 +74,14 @@ export const SaccoMemberProvider = ({ children }) => {
     setContributions(data || []);
   }, []);
 
+  // Active types the admin has published — what the member is expected to pay.
+  const fetchContributionTypes = useCallback(async () => {
+    const { data } = await supabase.from('sacco_contribution_types').select('*')
+      .eq('is_active', true)
+      .order('due_date', { ascending: true, nullsFirst: false });
+    setContributionTypes(data || []);
+  }, []);
+
   const fetchLoanProducts = useCallback(async () => {
     const { data } = await supabase.from('sacco_loan_products').select('*')
       .eq('is_active', true).order('name');
@@ -106,6 +117,24 @@ export const SaccoMemberProvider = ({ children }) => {
     const { data } = await supabase.from('sacco_share_transfers').select('*')
       .order('created_at', { ascending: false });
     setTransfers(data || []);
+  }, []);
+
+  // Sacco-wide daily market value (RLS: members read their own sacco's prices).
+  const fetchSharePrices = useCallback(async () => {
+    const { data } = await supabase.from('sacco_share_prices').select('*')
+      .order('effective_date', { ascending: false });
+    setSharePrices(data || []);
+  }, []);
+
+  // Privacy-preserving aggregate (own sacco only) → drives "% of total shares".
+  const fetchSaccoTotals = useCallback(async () => {
+    const { data } = await supabase.rpc('sacco_member_share_totals');
+    const row = Array.isArray(data) ? data[0] : data;
+    setSaccoTotals({
+      totalShares: parseInt(row?.total_shares, 10) || 0,
+      totalMarketValue: parseFloat(row?.total_market_value || 0),
+      shareholders: parseInt(row?.shareholders, 10) || 0,
+    });
   }, []);
 
   const fetchMotions = useCallback(async () => {
@@ -165,15 +194,15 @@ export const SaccoMemberProvider = ({ children }) => {
     const meRow = await fetchMe();
     await Promise.all([
       fetchSacco(meRow?.sacco_id),
-      fetchMembers(), fetchContributions(), fetchLoanProducts(), fetchLoans(),
-      fetchSchedules(), fetchShares(), fetchListings(), fetchTransfers(),
+      fetchMembers(), fetchContributions(), fetchContributionTypes(), fetchLoanProducts(), fetchLoans(),
+      fetchSchedules(), fetchShares(), fetchListings(), fetchTransfers(), fetchSharePrices(), fetchSaccoTotals(),
       fetchMotions(), fetchVotes(), fetchDocuments(), fetchContracts(meRow?.id),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(), fetchMyVoterRows(),
     ]);
     setLoading(false);
   }, [
-    fetchMe, fetchSacco, fetchMembers, fetchContributions, fetchLoanProducts,
-    fetchLoans, fetchSchedules, fetchShares, fetchListings, fetchTransfers,
+    fetchMe, fetchSacco, fetchMembers, fetchContributions, fetchContributionTypes, fetchLoanProducts,
+    fetchLoans, fetchSchedules, fetchShares, fetchListings, fetchTransfers, fetchSharePrices, fetchSaccoTotals,
     fetchMotions, fetchVotes, fetchDocuments, fetchContracts,
     fetchElections, fetchElectionPositions, fetchElectionCandidates, fetchMyVoterRows,
   ]);
@@ -188,7 +217,8 @@ export const SaccoMemberProvider = ({ children }) => {
     .filter((r) => r.due_date)
     .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0]?.due_date || null;
   const myShares = shares[0] || null;
-  const shareValue = (parseInt(myShares?.shares_held, 10) || 0) * parseFloat(myShares?.par_value || 0);
+  const currentMarketValue = parseFloat(sharePrices[0]?.market_value || 0);
+  const shareValue = (parseInt(myShares?.shares_held, 10) || 0) * (currentMarketValue || parseFloat(myShares?.par_value || 0));
   const openMotions = motions.filter((m) => m.status === 'open').length;
   // Elections needing my attention: open nominations, or an open ballot I'm
   // registered for and haven't cast yet.
@@ -241,6 +271,18 @@ export const SaccoMemberProvider = ({ children }) => {
     const { error } = await supabase.from('sacco_share_listings')
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('id', listing.id);
+    if (error) throw error;
+    await fetchListings();
+  }, [fetchListings]);
+
+  // Seller edits their own OPEN listing (price/qty/expiry). RLS keeps it open
+  // and pins ownership; settlement stays admin-only.
+  const updateListing = useCallback(async (listing, patch) => {
+    const body = { updated_at: new Date().toISOString() };
+    if (patch.price_per_share !== undefined) body.price_per_share = parseFloat(patch.price_per_share) || 0;
+    if (patch.shares !== undefined) body.shares = parseInt(patch.shares, 10) || 0;
+    if (patch.expiry_date !== undefined) body.expiry_date = patch.expiry_date || null;
+    const { error } = await supabase.from('sacco_share_listings').update(body).eq('id', listing.id);
     if (error) throw error;
     await fetchListings();
   }, [fetchListings]);
@@ -385,6 +427,7 @@ export const SaccoMemberProvider = ({ children }) => {
       mk('contribs', 'sacco_contributions', fetchContributions),
       mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); }),
       mk('shares', 'sacco_shares', fetchShares),
+      mk('share_prices', 'sacco_share_prices', fetchSharePrices),
       mk('listings', 'sacco_share_listings', fetchListings),
       mk('motions', 'sacco_motions', fetchMotions),
       mk('votes', 'sacco_votes', fetchVotes),
@@ -400,13 +443,13 @@ export const SaccoMemberProvider = ({ children }) => {
   }, [isMember]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
-    me, sacco, members, contributions, loanProducts, loans, schedules,
-    shares: myShares, listings, transfers, motions, votes, documents, contracts,
+    me, sacco, members, contributions, contributionTypes, loanProducts, loans, schedules,
+    shares: myShares, sharePrices, currentMarketValue, saccoTotals, listings, transfers, motions, votes, documents, contracts,
     elections, electionPositions, electionCandidates, myVoterRows,
     stats, loading,
     refetch: fetchAll,
     updateProfile, applyLoan,
-    createListing, cancelListing, buyListing,
+    createListing, cancelListing, updateListing, buyListing,
     proposeMotion, secondMotion, castVote, getMotionResults,
     nominateCandidate, withdrawCandidacy, castBallot,
     getElectionTally, getElectionTurnout, verifyReceipt,

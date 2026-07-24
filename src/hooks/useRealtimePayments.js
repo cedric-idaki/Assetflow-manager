@@ -41,11 +41,18 @@ export const useRealtimePayments = () => {
         transactionId: p?.transaction_id,
         clientName: p?.client?.full_name || 'Unknown',
         accountNumber: p?.client?.account_number || '-',
+        clientEmail: p?.client?.email || '',
+        clientPhone: p?.client?.phone || '',
+        assetName: p?.asset?.description || '',
+        assetCode: p?.asset?.asset_code || '',
         paymentMethod: p?.payment_method,
         amount: parseFloat(p?.amount || 0),
         status: p?.payment_status,
+        rawDate: p?.payment_date,
         date: new Date(p.payment_date)?.toLocaleDateString(),
+        time: new Date(p.payment_date)?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         reference: p?.reference_number,
+        notes: p?.notes || '',
       }));
       setTransactions(mapped);
 

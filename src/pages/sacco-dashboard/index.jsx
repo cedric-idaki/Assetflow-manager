@@ -14,7 +14,6 @@ import VotingTab        from './components/VotingTab';
 import ElectionsTab     from './components/ElectionsTab';
 import GovernanceTab    from './components/GovernanceTab';
 import SaccoContractsTab from './components/SaccoContractsTab';
-import BillingTab       from './components/BillingTab';
 
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-lg ${className}`} />;
 
@@ -65,7 +64,6 @@ const SaccoDashboard = () => {
     { id: 'elections',     label: 'Elections',     icon: 'Award',      badge: (stats.activeElections || 0) + (stats.pendingCandidates || 0) },
     { id: 'governance',    label: 'Governance',    icon: 'ScrollText' },
     { id: 'contracts',     label: 'Contracts',     icon: 'FileText' },
-    { id: 'billing',       label: 'Billing',       icon: 'CreditCard' },
   ];
 
   return (
@@ -132,8 +130,7 @@ const SaccoDashboard = () => {
             {activeTab === 'voting'        && <VotingTab ctx={ctx} />}
             {activeTab === 'elections'     && <ElectionsTab ctx={ctx} />}
             {activeTab === 'governance'    && <GovernanceTab ctx={ctx} />}
-            {activeTab === 'contracts'     && <SaccoContractsTab />}
-            {activeTab === 'billing'       && <BillingTab ctx={ctx} />}
+            {activeTab === 'contracts'     && <SaccoContractsTab ctx={ctx} />}
           </>
         )}
       </div>

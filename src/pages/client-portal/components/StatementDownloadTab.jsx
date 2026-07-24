@@ -66,7 +66,7 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
         <body>
           <div class="header">
             <div>
-              <div class="company-name">${co.company_name || 'AssetFlow'}</div>
+              <div class="company-name">${co.company_name || 'Ararat'}</div>
               <div style="font-size:11px; color:#64748b; margin-top:4px">${co.physical_address || ''}</div>
               <div style="font-size:11px; color:#64748b">KRA PIN: ${co.kra_pin || 'N/A'}</div>
             </div>

@@ -117,7 +117,7 @@ export const generateReceiptPDF = async ({
   // Company name
   setFont('bold', 18);
   setColor(WHITE);
-  text(companyProfile?.company_name || 'AssetFlow', M, 18);
+  text(companyProfile?.company_name || 'Ararat', M, 18);
 
   // Tagline
   setFont('normal', 9);
@@ -402,7 +402,7 @@ export const generateReceiptPDF = async ({
   setFont('normal', 7);
   setColor([180, 210, 255]);
   text(
-    `${companyProfile?.company_name || 'AssetFlow'} · Generated ${fmtDate(new Date())} · ${invoiceNo}`,
+    `${companyProfile?.company_name || 'Ararat'} · Generated ${fmtDate(new Date())} · ${invoiceNo}`,
     W / 2, 293, { align: 'center' }
   );
 

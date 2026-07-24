@@ -41,7 +41,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
       <body>
         <div class="header">
           <div>
-            <div class="company-name">${co.company_name || 'AssetFlow'}</div>
+            <div class="company-name">${co.company_name || 'Ararat'}</div>
             <div style="font-size:11px; color:#555; margin-top:4px">${co.physical_address || ''}</div>
             <div style="font-size:11px; color:#555">Tel: ${co.phone || ''} | Email: ${co.email || ''}</div>
             <div style="font-size:11px; color:#555">KRA PIN: ${co.kra_pin || 'N/A'}</div>
@@ -99,7 +99,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
         <div class="section">
           <div class="body-text">
             This is to certify that <strong>${client?.full_name || 'the above-named client'}</strong> has fully and finally settled all hire purchase obligations 
-            under Plan Reference <strong>${plan?.plan_name}</strong> with <strong>${co.company_name || 'AssetFlow'}</strong>. 
+            under Plan Reference <strong>${plan?.plan_name}</strong> with <strong>${co.company_name || 'Ararat'}</strong>. 
             A total of <strong>${plan?.total_installments} installments</strong> amounting to <strong>${fmt(plan?.total_amount)}</strong> 
             have been received in full.
           </div>
@@ -122,7 +122,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
           <div>
             <div class="sig-line">
               <strong>Authorized Signatory</strong><br>
-              ${co.company_name || 'AssetFlow'}<br>
+              ${co.company_name || 'Ararat'}<br>
               <span style="color:#555">Name: ________________________</span><br>
               <span style="color:#555">Designation: ________________________</span><br>
               <span style="color:#555">Date: ________________________</span>
@@ -140,7 +140,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
         </div>
 
         <div class="footer">
-          <p>This is an official document issued by ${co.company_name || 'AssetFlow'}. Letter Reference: ${letterRef}</p>
+          <p>This is an official document issued by ${co.company_name || 'Ararat'}. Letter Reference: ${letterRef}</p>
           <p>Generated on ${fmtDate(new Date().toISOString())} | ${co.email || ''} | ${co.phone || ''}</p>
         </div>
       </body>

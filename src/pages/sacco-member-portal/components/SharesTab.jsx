@@ -6,30 +6,47 @@ import {
 } from '../../sacco-dashboard/components/_shared';
 
 const emptySell = { shares: '', price_per_share: '', expiry_date: '' };
+const pct = (n) => `${(Math.round(n * 100) / 100).toLocaleString()}%`;
 
 const SharesTab = ({ ctx }) => {
-  const { me, shares, listings, transfers, createListing, cancelListing, buyListing, exportCSV } = ctx;
+  const {
+    me, shares, sharePrices = [], currentMarketValue = 0, saccoTotals = { totalShares: 0 },
+    listings, transfers, createListing, cancelListing, updateListing, buyListing, exportCSV,
+  } = ctx;
   const toast = useToast();
   const [sellOpen, setSellOpen] = useState(false);
   const [sellForm, setSellForm] = useState(emptySell);
+  const [editing, setEditing] = useState(null);       // listing being edited
+  const [editForm, setEditForm] = useState(emptySell);
   const [saving, setSaving] = useState(false);
-  const [buying, setBuying] = useState(null); // listing pending confirm
+  const [buying, setBuying] = useState(null);          // listing pending confirm
 
   const held = parseInt(shares?.shares_held, 10) || 0;
   const par = parseFloat(shares?.par_value || 0);
+  const mv = currentMarketValue > 0 ? currentMarketValue : par;   // effective per-share value
+  const totalValue = held * mv;
+  const ownership = saccoTotals.totalShares > 0 ? (held / saccoTotals.totalShares) * 100 : 0;
+  const asOf = sharePrices[0]?.effective_date;
 
   const set = (k, v) => setSellForm((p) => ({ ...p, [k]: v }));
+  const setE = (k, v) => setEditForm((p) => ({ ...p, [k]: v }));
 
-  // Shares currently locked in my open/pending listings.
-  const listedShares = listings
-    .filter((l) => l.seller_member_id === me?.id && ['open', 'pending_approval'].includes(l.status))
+  // Shares locked in my open/pending listings (optionally excluding one being edited).
+  const listedShares = (exceptId) => listings
+    .filter((l) => l.seller_member_id === me?.id && ['open', 'pending_approval'].includes(l.status) && l.id !== exceptId)
     .reduce((s, l) => s + (parseInt(l.shares, 10) || 0), 0);
+
+  const openSell = () => {
+    setSellForm({ ...emptySell, price_per_share: currentMarketValue > 0 ? String(currentMarketValue) : '' });
+    setSellOpen(true);
+  };
 
   const sell = async () => {
     const qty = parseInt(sellForm.shares, 10) || 0;
     const price = parseFloat(sellForm.price_per_share) || 0;
+    const available = held - listedShares();
     if (qty <= 0) { toast.error('Enter the number of shares to sell.'); return; }
-    if (qty > held - listedShares) { toast.error(`You can list at most ${held - listedShares} shares (you hold ${held}, ${listedShares} already listed).`); return; }
+    if (qty > available) { toast.error(`You can list at most ${available} shares (you hold ${held}, ${listedShares()} already listed).`); return; }
     if (price < par) { toast.error(`Price may not be below par value (${KES(par)}).`); return; }
     setSaving(true);
     try {
@@ -39,6 +56,30 @@ const SharesTab = ({ ctx }) => {
       setSellForm(emptySell);
     } catch (e) {
       toast.error(e.message || 'Could not create the listing.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openEdit = (l) => {
+    setEditForm({ shares: String(l.shares), price_per_share: String(l.price_per_share), expiry_date: l.expiry_date || '' });
+    setEditing(l);
+  };
+
+  const saveEdit = async () => {
+    const qty = parseInt(editForm.shares, 10) || 0;
+    const price = parseFloat(editForm.price_per_share) || 0;
+    const available = held - listedShares(editing?.id);
+    if (qty <= 0) { toast.error('Enter the number of shares.'); return; }
+    if (qty > available) { toast.error(`You can list at most ${available} shares here.`); return; }
+    if (price < par) { toast.error(`Price may not be below par value (${KES(par)}).`); return; }
+    setSaving(true);
+    try {
+      await updateListing(editing, editForm);
+      toast.success('Listing updated.');
+      setEditing(null);
+    } catch (e) {
+      toast.error(e.message || 'Could not update the listing.');
     } finally {
       setSaving(false);
     }
@@ -63,17 +104,22 @@ const SharesTab = ({ ctx }) => {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Shares Held" value={held.toLocaleString()} icon="PieChart" tone="primary" />
-        <StatCard label="Par Value" value={KES(par)} icon="Tag" tone="muted" />
-        <StatCard label="Total Value" value={KES(held * par)} icon="Wallet" tone="success" />
-        <StatCard label="Listed for Sale" value={listedShares.toLocaleString()} icon="Store" tone="warning" />
+        <StatCard label="Market Value / Share" value={mv > 0 ? KES(mv) : '—'} icon="TrendingUp" tone="success" />
+        <StatCard label="My Total Value" value={KES(totalValue)} icon="Wallet" tone="success" />
+        <StatCard label="My Ownership" value={saccoTotals.totalShares > 0 ? pct(ownership) : '—'} icon="Percent" tone="muted" />
       </div>
+
+      <p className="text-xs text-muted-foreground -mt-2">
+        Market value is set by your SACCO{asOf ? ` (as of ${fmtDate(asOf)})` : ''} and updates over time — your total value moves with it.
+        {' '}Par value {KES(par)} is the floor for any sale. You hold {held.toLocaleString()} of {saccoTotals.totalShares.toLocaleString()} shares in issue.
+      </p>
 
       <Card
         title="Marketplace"
         subtitle="Shares offered by other members — purchases settle after administrator approval"
-        actions={<PrimaryButton icon="Store" onClick={() => setSellOpen(true)} disabled={held - listedShares <= 0}>Sell my shares</PrimaryButton>}
+        actions={<PrimaryButton icon="Store" onClick={openSell} disabled={held - listedShares() <= 0}>Sell my shares</PrimaryButton>}
       >
         {marketListings.length === 0 ? (
           <EmptyState icon="Store" title="No shares on offer right now" hint="Listings from fellow members appear here." />
@@ -109,8 +155,11 @@ const SharesTab = ({ ctx }) => {
                   <td className="py-2.5 pr-4"><Badge status={l.status} /></td>
                   <td className="py-2.5 pr-0 text-right">
                     {l.status === 'open' && (
-                      <button onClick={() => cancelListing(l).then(() => toast.success('Listing cancelled.')).catch((e) => toast.error(e.message))}
-                        className="text-xs text-red-600 font-semibold hover:underline">Cancel</button>
+                      <span className="inline-flex items-center gap-3">
+                        <button onClick={() => openEdit(l)} className="text-xs text-primary font-semibold hover:underline">Edit</button>
+                        <button onClick={() => cancelListing(l).then(() => toast.success('Listing cancelled.')).catch((e) => toast.error(e.message))}
+                          className="text-xs text-red-600 font-semibold hover:underline">Cancel</button>
+                      </span>
                     )}
                   </td>
                 </tr>
@@ -151,12 +200,31 @@ const SharesTab = ({ ctx }) => {
         </>}
       >
         <p className="text-sm text-muted-foreground mb-4">
-          You hold {held.toLocaleString()} shares ({listedShares} already listed). Sales settle only after administrator approval.
+          You hold {held.toLocaleString()} shares ({listedShares()} already listed). Current market value is {mv > 0 ? KES(mv) : '—'} per share. Sales settle only after administrator approval.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Number of shares *"><NumberInput value={sellForm.shares} onChange={(e) => set('shares', e.target.value)} /></Field>
           <Field label={`Price per share (min ${KES(par)}) *`}><NumberInput value={sellForm.price_per_share} onChange={(e) => set('price_per_share', e.target.value)} /></Field>
           <Field label="Listing expiry"><TextInput type="date" value={sellForm.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} /></Field>
+        </div>
+      </Modal>
+
+      {/* Edit listing modal */}
+      <Modal
+        open={!!editing} onClose={() => setEditing(null)}
+        title="Edit listing"
+        footer={<>
+          <GhostButton onClick={() => setEditing(null)}>Cancel</GhostButton>
+          <PrimaryButton icon="Check" onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</PrimaryButton>
+        </>}
+      >
+        <p className="text-sm text-muted-foreground mb-4">
+          Adjust your asking price or quantity while the listing is still open. Market value is {mv > 0 ? KES(mv) : '—'} per share; par floor is {KES(par)}.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Number of shares *"><NumberInput value={editForm.shares} onChange={(e) => setE('shares', e.target.value)} /></Field>
+          <Field label={`Price per share (min ${KES(par)}) *`}><NumberInput value={editForm.price_per_share} onChange={(e) => setE('price_per_share', e.target.value)} /></Field>
+          <Field label="Listing expiry"><TextInput type="date" value={editForm.expiry_date} onChange={(e) => setE('expiry_date', e.target.value)} /></Field>
         </div>
       </Modal>
 

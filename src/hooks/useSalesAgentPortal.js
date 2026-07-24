@@ -6,7 +6,9 @@ import { auditLogsService } from '../services/supabaseService';
 export const useSalesAgentPortal = () => {
   const { user, userProfile } = useAuth();
   const [agentProfile, setAgentProfile] = useState(null);
-  // What this agent registers, decided by WHO created the agent:
+  // What this agent registers:
+  //   • agents.agent_type 'sacco'  → 'sacco'  (registers saccos — created from /sacco-oversight)
+  //   otherwise decided by WHO created the agent:
   //   • created by a super_admin → 'company' (registers companies / admin accounts)
   //   • created by an admin      → 'client'  (registers clients for that admin)
   const [agentMode, setAgentMode] = useState('company');
@@ -242,10 +244,14 @@ export const useSalesAgentPortal = () => {
     try {
       const agent = await fetchAgentProfile();
 
-      // Resolve what this agent registers from the role of whoever created them.
-      // An admin-created agent (creator role 'admin') registers clients for that
-      // admin; a super-admin-created agent registers companies / admin accounts.
-      try {
+      // Resolve what this agent registers. Sacco-side agents are tagged on the
+      // agents row itself (agent_type 'sacco', set from /sacco-oversight); for
+      // the rest it comes from the role of whoever created them: an
+      // admin-created agent registers clients for that admin, a
+      // super-admin-created agent registers companies / admin accounts.
+      if (agent?.agent_type === 'sacco') {
+        setAgentMode('sacco');
+      } else try {
         const creatorId = agent?.admin_id || userProfile?.admin_id;
         if (creatorId) {
           const { data: creator } = await supabase

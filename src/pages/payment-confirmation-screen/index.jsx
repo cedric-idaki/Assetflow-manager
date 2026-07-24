@@ -213,7 +213,7 @@ const PaymentConfirmationScreen = () => {
     const t = transaction;
     const lines = [
       '========================================',
-      '         ASSETFLOW MANAGEMENT           ',
+      '         ARARAT MANAGEMENT           ',
       '           PAYMENT RECEIPT              ',
       '========================================',
       '',
