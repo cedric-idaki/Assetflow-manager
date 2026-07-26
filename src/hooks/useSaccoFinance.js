@@ -129,47 +129,51 @@ export const useSaccoFinance = (sacco) => {
     }));
     setEntries(rows);
     return rows;
-  }, []);
+  }, [adminId]);
 
   const fetchPolicies = useCallback(async () => {
+    const aId = await adminId();
     const [{ data: prov }, { data: appr }] = await Promise.all([
-      supabase.from('sacco_provision_policy').select('*').order('sort_order'),
-      supabase.from('sacco_appropriation_rules').select('*').order('sort_order'),
+      supabase.from('sacco_provision_policy').select('*').eq('admin_id', aId).order('sort_order'),
+      supabase.from('sacco_appropriation_rules').select('*').eq('admin_id', aId).order('sort_order'),
     ]);
     setProvisionPolicy(prov || []);
     setAppropriationRules(appr || []);
     return { prov: prov || [], appr: appr || [] };
-  }, []);
+  }, [adminId]);
 
   const fetchClassifications = useCallback(async () => {
     const { data } = await supabase.from('sacco_loan_classifications')
       .select('*, member:sacco_members(full_name, member_no)')
+      .eq('admin_id', await adminId())
       .order('created_at', { ascending: false }).limit(1000);
     setClassifications(data || []);
     return data || [];
-  }, []);
+  }, [adminId]);
 
   const fetchFixedAssets = useCallback(async () => {
     const { data } = await supabase.from('sacco_fixed_assets').select('*')
+      .eq('admin_id', await adminId())
       .order('acquisition_date', { ascending: false });
     setFixedAssets(data || []);
     return data || [];
-  }, []);
+  }, [adminId]);
 
   const fetchChama = useCallback(async () => {
+    const aId = await adminId();
     const [{ data: cycles }, { data: contribs }, { data: claims }] = await Promise.all([
       supabase.from('sacco_mgr_cycles')
         .select('*, beneficiary:sacco_members!beneficiary_member_id(full_name, member_no)')
-        .order('cycle_no', { ascending: false }),
-      supabase.from('sacco_mgr_contributions').select('*'),
+        .eq('admin_id', aId).order('cycle_no', { ascending: false }),
+      supabase.from('sacco_mgr_contributions').select('*').eq('admin_id', aId),
       supabase.from('sacco_welfare_claims')
         .select('*, member:sacco_members(full_name, member_no)')
-        .order('claim_date', { ascending: false }),
+        .eq('admin_id', aId).order('claim_date', { ascending: false }),
     ]);
     setMgrCycles(cycles || []);
     setMgrContributions(contribs || []);
     setWelfareClaims(claims || []);
-  }, []);
+  }, [adminId]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);

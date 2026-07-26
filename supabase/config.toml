@@ -40,6 +40,14 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/sacco-governance-tick/index.ts"
 
+# Sales-agent follow-up reminders. Invoked by the scheduler with the service-role
+# key (no user JWT), so verify_jwt must be false — same shape as
+# sacco-governance-tick. Run it every ~15 minutes.
+[functions.agent-followup-reminders]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/agent-followup-reminders/index.ts"
+
 # Website → Ararat vehicle sync. Authenticated by a per-dealer API key in the
 # x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the caller
 # is the dealer's website, not a logged-in user. The function resolves the tenant

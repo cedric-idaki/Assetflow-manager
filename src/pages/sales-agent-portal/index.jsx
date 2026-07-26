@@ -9,9 +9,11 @@ import CreateClientModal from './components/CreateClientModal';
 import CreateCompanyModal from './components/CreateCompanyModal';
 import CreateSaccoModal from './components/CreateSaccoModal';
 import AssistModal from './components/AssistModal';
+import AssistRequestsPanel from './components/AssistRequestsPanel';
 import AgentActivityTrail from './components/AgentActivityTrail';
 import SalesCostTracker from './components/SalesCostTracker';
-import UpcomingAppointments from './components/UpcomingAppointments';
+import FollowUpsPanel from './components/FollowUpsPanel';
+import ScheduleFollowUpModal from './components/ScheduleFollowUpModal';
 import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
 
 // ── Export Modal ─────────────────────────────────────────────────────────────
@@ -296,9 +298,10 @@ const KPICard = ({ label, value, icon, colorClass, loading, subtext }) => (
 );
 
 // ── Lead Detail Modal ─────────────────────────────────────────────────────────
-const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isClientMode, isSaccoMode }) => {
+const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onScheduleFollowUp, isClientMode, isSaccoMode }) => {
   const [newStage, setNewStage] = useState(lead?.stage || 'new_lead');
   const [saving, setSaving]     = useState(false);
+  const isConverted = Boolean(lead?.converted_at);
 
   const stages = [
     { value: 'new_lead',      label: 'New Lead' },
@@ -347,7 +350,7 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isCl
               { label: 'Source',    value: lead?.source },
               { label: 'Priority',  value: lead?.priority },
               { label: 'Created',   value: fmt(lead?.created_at) },
-              { label: 'Follow-up', value: fmt(lead?.follow_up_date) },
+              { label: 'Next follow-up', value: lead?.next_follow_up_at ? fmt(lead.next_follow_up_at) : null },
             ].filter(r => r.value).map(row => (
               <div key={row.label}>
                 <p className="text-xs text-muted-foreground">{row.label}</p>
@@ -374,22 +377,46 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, isCl
             </select>
           </div>
 
-          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
-            <p className="text-xs font-semibold text-emerald-800 mb-1">🎯 Ready to convert this lead?</p>
-            <p className="text-xs text-emerald-700 mb-2">
-              {isClientMode
-                ? 'Convert them into a client with a portal login. Their details are prefilled.'
-                : isSaccoMode
-                ? 'Register them as a sacco with a sacco admin portal account. Their details are prefilled.'
-                : 'Register them as a company with an admin portal account. Their details are prefilled.'}
-            </p>
+          {/* Not ready yet — park it as a dated follow-up instead of losing it. */}
+          {!isConverted && (
             <button
-              onClick={() => { onClose(); onConvertToClient(lead); }}
-              className="w-full py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
+              onClick={() => { onClose(); onScheduleFollowUp(lead); }}
+              className="w-full flex items-center justify-center gap-2 py-2.5 border border-border text-sm font-semibold text-foreground rounded-xl hover:bg-muted transition-colors"
             >
-              {isClientMode ? 'Convert to Client →' : isSaccoMode ? 'Register as Sacco →' : 'Register as Company →'}
+              <Icon name="CalendarPlus" size={14} color="currentColor" />
+              {lead?.next_follow_up_at ? 'Schedule another follow-up' : 'Schedule a follow-up'}
             </button>
-          </div>
+          )}
+
+          {isConverted ? (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+              <Icon name="BadgeCheck" size={22} color="#059669" />
+              <p className="text-xs font-semibold text-emerald-800 mt-1">
+                Already converted to a {lead?.converted_entity || 'client'} account
+              </p>
+              <p className="text-xs text-emerald-700 mt-0.5">
+                {fmt(lead?.converted_at)} — no further action needed.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+              <p className="text-xs font-semibold text-emerald-800 mb-1">🎯 They said yes — ready to onboard?</p>
+              <p className="text-xs text-emerald-700 mb-2">
+                {isClientMode
+                  ? 'Convert them into a client with a portal login. Their details are prefilled.'
+                  : isSaccoMode
+                  ? 'Register them as a sacco with a sacco admin portal account. Their details are prefilled.'
+                  : 'Register them as a company with an admin portal account. Their details are prefilled.'}
+                {' '}The lead closes automatically once the account exists.
+              </p>
+              <button
+                onClick={() => { onClose(); onConvertToClient(lead); }}
+                className="w-full py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
+              >
+                {isClientMode ? 'Convert to Client →' : isSaccoMode ? 'Register as Sacco →' : 'Register as Company →'}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex gap-3 px-5 pb-5">
@@ -473,14 +500,22 @@ const MyClientsSection = ({ leads, onCreateClient, isClientMode, isSaccoMode }) 
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">
-                  Converted
+                  {lead.converted_at ? `${lead.converted_entity || 'Account'} created` : 'Closed'}
                 </span>
-                <button
-                  onClick={() => onCreateClient(lead)}
-                  className="text-xs text-blue-600 hover:underline"
-                >
-                  Register {registerNoun}
-                </button>
+                {/* Once the account exists, offering "Register" again would
+                    create a duplicate — show the date instead. */}
+                {lead.converted_at ? (
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(lead.converted_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => onCreateClient(lead)}
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    Register {registerNoun}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -498,9 +533,12 @@ const MyClientsSection = ({ leads, onCreateClient, isClientMode, isSaccoMode }) 
 // ── Main Component ────────────────────────────────────────────────────────────
 const SalesAgentPortal = () => {
   const {
-    agentProfile, agentMode, goldAgents, leads, walletTransactions, expenses, followUps,
+    agentProfile, agentMode, goldAgents, leads, walletTransactions, expenses,
+    completedFollowUps, followUpBuckets, assistBuckets,
     activityFeed, kpis, loading, connected,
-    registerLead, updateLeadStage, requestWithdrawal, logExpense, assignAssist, refetch,
+    registerLead, updateLeadStage, markLeadConverted, requestWithdrawal, logExpense, assignAssist, refetch,
+    respondToAssist, completeAssist, cancelAssist,
+    scheduleFollowUp, rescheduleFollowUp, completeFollowUp, cancelFollowUp,
     activeView, setActiveView, modals, openModal, closeModal,
   } = useSalesAgentContext();
 
@@ -508,8 +546,15 @@ const SalesAgentPortal = () => {
   // companies; sacco-oversight-created agents (agent_type 'sacco') register saccos.
   const isClientMode = agentMode === 'client';
   const isSaccoMode  = agentMode === 'sacco';
-  // Only super-admin BRONZE agents can hand an admin to a gold agent for onboarding.
+  // Only super-admin BRONZE agents can ask a gold agent to onboard an admin.
   const isBronzeCompanyAgent = agentMode === 'company' && (agentProfile?.agent_plan || 'bronze') === 'bronze';
+  // Gold agents are on the receiving end — they get the request inbox.
+  const isGoldAgent = (agentProfile?.agent_plan || '') === 'gold';
+  // Show the panel to gold agents, and to anyone who has an assist either way.
+  const showAssistPanel = isGoldAgent
+    || isBronzeCompanyAgent
+    || (assistBuckets?.incoming?.length || 0) > 0
+    || (assistBuckets?.outgoing?.length || 0) > 0;
 
   const [toast, setToast] = useState(null);
 
@@ -534,17 +579,94 @@ const SalesAgentPortal = () => {
     openModal('createClient');
   };
 
-  const handleAssign = async ({ goldAgentId, adminName }) => {
+  const handleAssign = async ({ goldAgentId, adminName, note }) => {
     // The AssistModal shows its own success state; just persist + refresh here.
-    await assignAssist({ goldAgentId, adminName });
+    await assignAssist({ goldAgentId, adminName, note });
     refetch();
   };
 
+  const handleRespondToAssist = async (assist, decision, reason) => {
+    try {
+      await respondToAssist(assist, decision, reason);
+      showToast(decision === 'accepted'
+        ? 'Assist accepted — the bronze agent has been notified.'
+        : 'Request declined — the bronze agent has been notified.');
+    } catch (err) {
+      showToast(err?.message || 'Could not update the request.', 'error');
+    }
+  };
+
+  const handleCompleteAssist = async (assist, outcome) => {
+    try {
+      const row = await completeAssist(assist, outcome);
+      showToast(`Onboarding complete — ${fmt(row?.amount || 1000)} credited to your wallet.`);
+    } catch (err) {
+      showToast(err?.message || 'Could not complete the assist.', 'error');
+    }
+  };
+
+  const handleCancelAssist = async (assist) => {
+    try {
+      await cancelAssist(assist);
+      showToast('Assist request cancelled.');
+    } catch (err) {
+      showToast(err?.message || 'Could not cancel the request.', 'error');
+    }
+  };
+
+  const handleScheduleFollowUp = (lead) => {
+    closeModal('leadDetail');
+    openModal('prefillFollowUpLead', lead);
+    openModal('scheduleFollowUp');
+  };
+
+  const handleFollowUpSubmit = async (payload) => {
+    await scheduleFollowUp(payload);
+    closeModal('prefillFollowUpLead');
+    showToast(`Follow-up set for ${new Date(payload.scheduledAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} — you'll get an email reminder.`);
+  };
+
+  const handleCompleteFollowUp = async (id, outcome) => {
+    try {
+      await completeFollowUp(id, outcome);
+      showToast('Follow-up marked done.');
+    } catch (err) {
+      showToast(err?.message || 'Could not update the follow-up.', 'error');
+    }
+  };
+
+  const handleSnoozeFollowUp = async (id, newDate) => {
+    try {
+      await rescheduleFollowUp(id, newDate);
+      showToast(`Moved to ${newDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.`);
+    } catch (err) {
+      showToast(err?.message || 'Could not reschedule.', 'error');
+    }
+  };
+
+  const handleCancelFollowUp = async (id) => {
+    try {
+      await cancelFollowUp(id);
+      showToast('Appointment removed.');
+    } catch (err) {
+      showToast(err?.message || 'Could not remove the appointment.', 'error');
+    }
+  };
+
   const handleClientCreated = async (account) => {
-    // If this client was converted from a lead, close that lead so it moves
-    // into the "My Clients" list. The modal shows its own success popup.
+    // Stamp the lead as converted so it moves into "My Clients" and can never
+    // be registered a second time. Every create modal (client / company / sacco)
+    // returns leadId when it was opened from a lead.
     if (account?.leadId) {
-      try { await updateLeadStage(account.leadId, 'closed'); } catch (err) {}
+      try {
+        await markLeadConverted(account.leadId, {
+          entity: isClientMode ? 'client' : isSaccoMode ? 'sacco' : 'company',
+          refId:  account.clientId || account.adminId || account.saccoId || null,
+        });
+      } catch (err) {
+        // Never block the success popup — the account itself already exists.
+        console.error('markLeadConverted failed:', err?.message);
+      }
     }
     refetch();
   };
@@ -628,6 +750,40 @@ const SalesAgentPortal = () => {
               </button>
             )}
 
+            {/* Assist inbox — the gold agent's jump to who needs help */}
+            {isGoldAgent && (
+              <a
+                href="#assist-requests"
+                className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+              >
+                <Icon name="LifeBuoy" size={15} color="currentColor" />
+                Assists
+                {assistBuckets?.actionable > 0 && (
+                  <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center ${
+                    assistBuckets.pending.length > 0 ? 'bg-amber-500' : 'bg-blue-500'
+                  }`}>
+                    {assistBuckets.actionable}
+                  </span>
+                )}
+              </a>
+            )}
+
+            {/* Schedule a follow-up — badge shows what is due or overdue */}
+            <button
+              onClick={() => { closeModal('prefillFollowUpLead'); openModal('scheduleFollowUp'); }}
+              className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+            >
+              <Icon name="CalendarClock" size={15} color="currentColor" />
+              Follow-ups
+              {followUpBuckets?.actionable > 0 && (
+                <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center ${
+                  followUpBuckets.overdue.length > 0 ? 'bg-red-600' : 'bg-amber-500'
+                }`}>
+                  {followUpBuckets.actionable}
+                </span>
+              )}
+            </button>
+
             {/* Export */}
             <button
               onClick={() => openModal('showExport')}
@@ -655,6 +811,55 @@ const SalesAgentPortal = () => {
         {/* ── Portal View ── */}
         {activeView === 'portal' && (
           <div className="space-y-5">
+
+            {/* Assist alert — a bronze agent is waiting on this gold agent. */}
+            {!loading && assistBuckets?.pending?.length > 0 && (
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border bg-amber-50 border-amber-200">
+                <Icon name="LifeBuoy" size={17} color="#d97706" />
+                <p className="text-sm font-semibold text-amber-800">
+                  {assistBuckets.pending.length} bronze agent{assistBuckets.pending.length !== 1 ? 's' : ''} asked
+                  for your help onboarding an admin
+                </p>
+                <a href="#assist-requests" className="ml-auto text-xs font-semibold text-amber-700 hover:underline">
+                  View requests →
+                </a>
+              </div>
+            )}
+
+            {/* Due-follow-up alert — the in-portal half of the reminder. The
+                email half is sent by the agent-followup-reminders worker. */}
+            {!loading && followUpBuckets?.actionable > 0 && (
+              <div className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border ${
+                followUpBuckets.overdue.length > 0
+                  ? 'bg-red-50 border-red-200'
+                  : 'bg-amber-50 border-amber-200'
+              }`}>
+                <Icon
+                  name={followUpBuckets.overdue.length > 0 ? 'AlertTriangle' : 'Bell'}
+                  size={17}
+                  color={followUpBuckets.overdue.length > 0 ? '#dc2626' : '#d97706'}
+                />
+                <p className={`text-sm font-semibold ${
+                  followUpBuckets.overdue.length > 0 ? 'text-red-800' : 'text-amber-800'
+                }`}>
+                  {followUpBuckets.overdue.length > 0 && (
+                    <>{followUpBuckets.overdue.length} follow-up{followUpBuckets.overdue.length !== 1 ? 's' : ''} overdue</>
+                  )}
+                  {followUpBuckets.overdue.length > 0 && followUpBuckets.today.length > 0 && ' · '}
+                  {followUpBuckets.today.length > 0 && (
+                    <>{followUpBuckets.today.length} due today</>
+                  )}
+                </p>
+                <a
+                  href="#follow-ups"
+                  className={`ml-auto text-xs font-semibold hover:underline ${
+                    followUpBuckets.overdue.length > 0 ? 'text-red-700' : 'text-amber-700'
+                  }`}
+                >
+                  View follow-ups →
+                </a>
+              </div>
+            )}
 
             {/* KPI Row */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -736,9 +941,37 @@ const SalesAgentPortal = () => {
               />
             </div>
 
-            {/* Upcoming + Activity + Cost Tracker */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <UpcomingAppointments followUps={followUps} loading={loading} />
+            {/* Follow-ups & Appointments */}
+            <div id="follow-ups" className="scroll-mt-24">
+              <FollowUpsPanel
+                buckets={followUpBuckets}
+                completedFollowUps={completedFollowUps}
+                loading={loading}
+                onSchedule={() => { closeModal('prefillFollowUpLead'); openModal('scheduleFollowUp'); }}
+                onComplete={handleCompleteFollowUp}
+                onSnooze={handleSnoozeFollowUp}
+                onCancel={handleCancelFollowUp}
+              />
+            </div>
+
+            {/* Assist requests — gold agents work their inbox here, bronze
+                agents track what they asked for */}
+            {showAssistPanel && (
+              <div id="assist-requests" className="scroll-mt-24">
+                <AssistRequestsPanel
+                  buckets={assistBuckets}
+                  loading={loading}
+                  isGoldAgent={isGoldAgent}
+                  onRespond={handleRespondToAssist}
+                  onComplete={handleCompleteAssist}
+                  onCancel={handleCancelAssist}
+                  onRequestAssist={isBronzeCompanyAgent ? () => openModal('assist') : null}
+                />
+              </div>
+            )}
+
+            {/* Activity + Cost Tracker */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <ActivityFeed activities={activityFeed} loading={loading} />
               <SalesCostTracker
                 expenses={expenses}
@@ -793,8 +1026,20 @@ const SalesAgentPortal = () => {
           onClose={() => closeModal('leadDetail')}
           onStageChange={updateLeadStage}
           onConvertToClient={handleConvertToClient}
+          onScheduleFollowUp={handleScheduleFollowUp}
           isClientMode={isClientMode}
           isSaccoMode={isSaccoMode}
+        />
+      )}
+
+      {/* ── Schedule Follow-up Modal ── */}
+      {modals.scheduleFollowUp && (
+        <ScheduleFollowUpModal
+          isOpen={modals.scheduleFollowUp}
+          leads={leads}
+          prefillLead={typeof modals.prefillFollowUpLead === 'object' ? modals.prefillFollowUpLead : null}
+          onSubmit={handleFollowUpSubmit}
+          onClose={() => { closeModal('scheduleFollowUp'); closeModal('prefillFollowUpLead'); }}
         />
       )}
 

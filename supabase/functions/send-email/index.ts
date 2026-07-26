@@ -775,6 +775,152 @@ const buildSigningInviteEmail = (data: any) => {
 </body></html>`;
 };
 
+// Sales-agent follow-up reminder. Sent by the agent-followup-reminders worker
+// when a scheduled follow-up comes due, and addressed to the AGENT (not the
+// lead) — it is the agent's own diary nudge.
+const buildFollowUpReminderEmail = (data: any) => {
+  const { agentName, leadName, leadPhone, leadEmail, appointmentType, scheduledAt, location, notes, portalUrl, isOverdue } = data;
+
+  const accent      = isOverdue ? "#dc2626" : "#1a56db";
+  const accentDark  = isOverdue ? "#b91c1c" : "#1e429f";
+  const bannerBg    = isOverdue ? "#fef2f2" : "#eff6ff";
+  const bannerLine  = isOverdue ? "#fecaca" : "#bfdbfe";
+  const typeLabel   = (appointmentType || "follow_up").replace(/_/g, " ");
+  const when = scheduledAt
+    ? new Date(scheduledAt).toLocaleString("en-KE", {
+        weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
+      })
+    : "—";
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,${accent} 0%,${accentDark} 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">${isOverdue ? "⏰" : "🔔"}</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${isOverdue ? "Overdue follow-up" : "Follow-up reminder"}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${isOverdue ? "This one has already passed" : "Coming up on your schedule"}</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${agentName || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    You scheduled a <strong>${typeLabel}</strong> with <strong>${leadName || "a lead"}</strong>.
+    ${isOverdue ? "It was due and is still open — close it out or push it to a new date." : "Here are the details so you're ready."}
+  </p>
+
+  <div style="background:${bannerBg};border:1px solid ${bannerLine};border-radius:10px;padding:20px;text-align:center;margin-bottom:24px">
+    <p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">When</p>
+    <p style="margin:0;font-size:20px;font-weight:800;color:${accent}">${when}</p>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Lead</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadName || "—"}</td></tr>
+    ${leadPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadPhone}</td></tr>` : ""}
+    ${leadEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadEmail}</td></tr>` : ""}
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Type</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;text-transform:capitalize">${typeLabel}</td></tr>
+    ${location ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Location</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${location}</td></tr>` : ""}
+  </table>
+
+  ${notes ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Your notes</p><p style="margin:0;font-size:13px;color:#374151">${notes}</p></div>` : ""}
+
+  ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:${accent};color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open my portal</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
+// ─── Assist requests (bronze agent → gold agent) ──────────────────────────────
+// Sent when a bronze agent asks a gold agent to onboard an admin. The portal
+// already shows this in realtime; the email is for the gold agent who is not
+// logged in, which is most of the time.
+const buildAssistRequestEmail = (data: any) => {
+  const { goldName, bronzeName, bronzeCode, bronzePhone, bronzeEmail, adminName, note, amount, portalUrl } = data;
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">🛟</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">An agent needs your help</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${bronzeName || "A bronze agent"} has asked you to onboard an admin</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${goldName || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    <strong>${bronzeName || "A bronze agent"}</strong>${bronzeCode ? ` (${bronzeCode})` : ""} would like you to take
+    <strong>${adminName || "an admin"}</strong> through the system. Accept it in your portal, then mark it complete
+    when the onboarding is done.
+  </p>
+
+  ${note ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#92400e;text-transform:uppercase;letter-spacing:0.05em">What they need</p><p style="margin:0;font-size:14px;color:#374151;line-height:1.5">${note}</p></div>` : ""}
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Admin / company</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${adminName || "—"}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Requested by</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${bronzeName || "—"}</td></tr>
+    ${bronzePhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Their phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${bronzePhone}</td></tr>` : ""}
+    ${bronzeEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Their email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${bronzeEmail}</td></tr>` : ""}
+  </table>
+
+  <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:20px;text-align:center;margin-bottom:24px">
+    <p style="margin:0 0 4px;font-size:12px;color:#065f46;text-transform:uppercase;letter-spacing:0.05em">You earn on completion</p>
+    <p style="margin:0;font-size:22px;font-weight:800;color:#047857">${formatCurrency(amount || 1000)}</p>
+  </div>
+
+  ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:#d97706;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open my portal</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
+// Sent to the other party when an assist changes hands: the gold agent accepted,
+// declined or finished it, or the bronze agent withdrew it.
+const ASSIST_UPDATE_COPY: Record<string, { emoji: string; title: string; accent: string; accentDark: string }> = {
+  accepted:  { emoji: "🤝", title: "Your assist was accepted", accent: "#1a56db", accentDark: "#1e429f" },
+  declined:  { emoji: "🚫", title: "Your assist was declined",  accent: "#dc2626", accentDark: "#b91c1c" },
+  completed: { emoji: "✅", title: "Onboarding complete",       accent: "#059669", accentDark: "#047857" },
+  cancelled: { emoji: "↩️", title: "An assist was cancelled",   accent: "#6b7280", accentDark: "#4b5563" },
+};
+
+const buildAssistUpdateEmail = (data: any) => {
+  const { recipientName, actorName, actorCode, status, adminName, outcome, declineReason, amount, portalUrl } = data;
+  const copy = ASSIST_UPDATE_COPY[status] || ASSIST_UPDATE_COPY.accepted;
+
+  const lead = {
+    accepted:  `<strong>${actorName || "A gold agent"}</strong> has taken on <strong>${adminName || "the admin"}</strong> and will run the onboarding. They can reach you directly if they need anything.`,
+    declined:  `<strong>${actorName || "The gold agent"}</strong> can't take <strong>${adminName || "this admin"}</strong> right now. Ask another gold agent from your portal.`,
+    completed: `<strong>${actorName || "The gold agent"}</strong> has finished onboarding <strong>${adminName || "the admin"}</strong>.`,
+    cancelled: `<strong>${actorName || "The bronze agent"}</strong> has withdrawn the request to onboard <strong>${adminName || "an admin"}</strong>. No action needed.`,
+  }[status as string] || "";
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,${copy.accent} 0%,${copy.accentDark} 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">${copy.emoji}</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${copy.title}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${adminName || "An admin"}</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${recipientName || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">${lead}</p>
+
+  ${declineReason ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#991b1b;text-transform:uppercase;letter-spacing:0.05em">Reason</p><p style="margin:0;font-size:14px;color:#374151">${declineReason}</p></div>` : ""}
+  ${outcome ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#065f46;text-transform:uppercase;letter-spacing:0.05em">What was done</p><p style="margin:0;font-size:14px;color:#374151">${outcome}</p></div>` : ""}
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Admin / company</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${adminName || "—"}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">${status === "cancelled" ? "Withdrawn by" : "Gold agent"}</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${actorName || "—"}${actorCode ? ` (${actorCode})` : ""}</td></tr>
+    ${status === "completed" && amount ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Commission paid</td><td style="padding:8px 0;color:#047857;font-size:13px;font-weight:600;text-align:right">${formatCurrency(amount)}</td></tr>` : ""}
+  </table>
+
+  ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:${copy.accent};color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open my portal</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -861,10 +1007,31 @@ serve(async (req) => {
         subject = `🛡️ Your signature was used${data?.documentName ? ` on ${data.documentName}` : ""}`;
         html = buildSignatureAlertEmail(data);
         break;
+      case "agent_follow_up_reminder":
+        subject = data?.isOverdue
+          ? `⏰ Overdue follow-up – ${data?.leadName || "a lead"}`
+          : `🔔 Follow-up reminder – ${data?.leadName || "a lead"}`;
+        html = buildFollowUpReminderEmail(data);
+        break;
       case "signing_invite":
         subject = `Signature requested${data?.documentName ? `: ${data.documentName}` : ""}`;
         html = buildSigningInviteEmail(data);
         break;
+      case "assist_request":
+        subject = `🛟 ${data?.bronzeName || "An agent"} needs help onboarding ${data?.adminName || "an admin"}`;
+        html = buildAssistRequestEmail(data);
+        break;
+      case "assist_update": {
+        const assistSubjects: Record<string, string> = {
+          accepted:  `🤝 ${data?.actorName || "A gold agent"} accepted your assist – ${data?.adminName || "an admin"}`,
+          declined:  `🚫 Your assist was declined – ${data?.adminName || "an admin"}`,
+          completed: `✅ Onboarding complete – ${data?.adminName || "an admin"}`,
+          cancelled: `↩️ Assist cancelled – ${data?.adminName || "an admin"}`,
+        };
+        subject = assistSubjects[data?.status] || `Assist update – ${data?.adminName || "an admin"}`;
+        html = buildAssistUpdateEmail(data);
+        break;
+      }
       default:
         throw new Error(`Unknown email type: ${type}`);
     }

@@ -19,6 +19,9 @@ export const SalesAgentProvider = ({ children }) => {
     showExport: false,
     selectedLead: null,
     prefillLead: null,
+    scheduleFollowUp: false,
+    prefillFollowUpLead: null,
+    assist: false,
     successPopup: null,
   });
 

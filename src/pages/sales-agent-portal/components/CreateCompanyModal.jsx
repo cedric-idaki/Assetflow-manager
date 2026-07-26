@@ -392,6 +392,10 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
         plan_name:    form.plan,
         commission,
         agent_plan:   planKey,
+        // Without these the portal cannot tell the lead was converted, so the
+        // lead stayed in the pipeline forever and could be registered twice.
+        leadId:       prefillLead?.id || null,
+        adminId:      newUserId,
       };
 
       setCreatedAccount(accountDetails);

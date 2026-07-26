@@ -341,6 +341,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
         loginError:     provision.error,
         emailStatus,
         leadId:         prefillLead?.id || null,
+        clientId:       newClient.id,
       };
 
       setCreatedAccount(accountDetails);

@@ -68,6 +68,25 @@ export const sendSignatureAlert = async (toEmail, { ownerName, documentName, act
 };
 
 /**
+ * Tell a gold agent that a bronze agent has asked them for onboarding help.
+ * @param {string} toEmail - The gold agent's email
+ * @param {{ goldName, bronzeName, bronzeCode, bronzePhone, bronzeEmail, adminName, note, amount, portalUrl }} data
+ */
+export const sendAssistRequest = async (toEmail, data) => {
+  return callEmailFunction('assist_request', toEmail, data);
+};
+
+/**
+ * Tell the other party an assist changed hands — accepted, declined, completed
+ * or cancelled.
+ * @param {string} toEmail - The counterparty's email
+ * @param {{ recipientName, actorName, actorCode, status, adminName, outcome, declineReason, amount, portalUrl }} data
+ */
+export const sendAssistUpdate = async (toEmail, data) => {
+  return callEmailFunction('assist_update', toEmail, data);
+};
+
+/**
  * Invite an external signer with their secure one-time signing link.
  * @param {string} toEmail - Recipient email
  * @param {{ signerName, documentName, link, message, expiresAt }} data

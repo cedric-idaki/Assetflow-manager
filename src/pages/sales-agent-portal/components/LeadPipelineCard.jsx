@@ -46,6 +46,22 @@ const LeadPipelineCard = ({ lead, onDragStart, onLeadClick }) => {
           <span className="text-xs text-muted-foreground">{lead?.budget_range}</span>
         </div>
       )}
+      {/* Next open follow-up — kept current by the leads_sync_next_follow_up
+          trigger, so no join is needed to know a card is due. */}
+      {lead?.next_follow_up_at && (
+        <div className={`flex items-center gap-1.5 mb-1 ${
+          new Date(lead.next_follow_up_at) < new Date() ? 'text-red-600' : 'text-primary'
+        }`}>
+          <Icon name="CalendarClock" size={11} color="currentColor" />
+          <span className="text-xs font-medium">
+            {new Date(lead.next_follow_up_at) < new Date() ? 'Overdue · ' : ''}
+            {new Date(lead.next_follow_up_at).toLocaleDateString('en-GB', {
+              day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+            })}
+          </span>
+        </div>
+      )}
+
       <div className="flex items-center justify-between pt-2 border-t border-border/50 mt-1">
         <span className="text-xs text-muted-foreground">
           {new Date(lead?.created_at)?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
