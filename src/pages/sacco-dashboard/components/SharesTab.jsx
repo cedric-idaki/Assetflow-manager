@@ -1,37 +1,57 @@
 import React, { useState, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useToast } from '../../../components/Toast';
+import { TREASURY_BUYER } from '../../../contexts/SaccoDashboardContext';
 import { Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput, NumberInput, Select, EmptyState, KES, fmtDate } from './_shared';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
 const SharesTab = ({ ctx }) => {
   const {
-    shares, sharePrices = [], listings, transfers, members,
+    shares, sharePrices = [], listings, transfers, members, treasury,
     currentMarketValue = 0, marketCap = 0,
-    saveShares, setMarketValue, createListing, requestTransfer, approveTransfer, exportCSV,
+    saveShares, setMarketValue, createListing, requestTransfer, approveTransfer,
+    saveTreasury, treasuryBuyBack, exportCSV,
   } = ctx;
   const toast = useToast();
   const [holdOpen, setHoldOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
+  const [treasOpen, setTreasOpen] = useState(false);
+  const [houseSellOpen, setHouseSellOpen] = useState(false);
+  const [buyBackOpen, setBuyBackOpen] = useState(false);
   const [buyListing, setBuyListing] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const [holdForm, setHoldForm] = useState({ member_id: '', shares_held: '', par_value: '' });
   const [listForm, setListForm] = useState({ seller_member_id: '', shares: '', price_per_share: '', expiry_date: '' });
   const [priceForm, setPriceForm] = useState({ market_value: '', effective_date: today(), note: '' });
+  const [treasForm, setTreasForm] = useState({ authorized_shares: '', treasury_shares: '', par_value: '' });
+  const [houseSellForm, setHouseSellForm] = useState({ shares: '', price_per_share: '', expiry_date: '' });
+  const [buyBackForm, setBuyBackForm] = useState({ seller_member_id: '', shares: '', price_per_share: '' });
   const [buyer, setBuyer] = useState('');
   const setHF = (k, v) => setHoldForm((p) => ({ ...p, [k]: v }));
   const setLF = (k, v) => setListForm((p) => ({ ...p, [k]: v }));
   const setPF = (k, v) => setPriceForm((p) => ({ ...p, [k]: v }));
+  const setTF = (k, v) => setTreasForm((p) => ({ ...p, [k]: v }));
+  const setHSF = (k, v) => setHouseSellForm((p) => ({ ...p, [k]: v }));
+  const setBBF = (k, v) => setBuyBackForm((p) => ({ ...p, [k]: v }));
 
   const memberName = (id) => members.find((m) => m.id === id)?.full_name || '—';
+  const partyName = (id, isTreasury) => (isTreasury ? 'SACCO Treasury' : memberName(id));
   const totalParValue = shares.reduce((s, r) => s + (parseInt(r.shares_held, 10) || 0) * parseFloat(r.par_value || 0), 0);
   const totalShares = shares.reduce((s, r) => s + (parseInt(r.shares_held, 10) || 0), 0);
   const currentEffective = sharePrices[0]?.effective_date;
   const prevValue = parseFloat(sharePrices[1]?.market_value || 0);
   const delta = currentMarketValue - prevValue;
+
+  // The house: treasury pool the sacco itself trades on the same exchange.
+  const pool = parseInt(treasury?.treasury_shares, 10) || 0;
+  const authorized = parseInt(treasury?.authorized_shares, 10) || 0;
+  const totalInIssue = totalShares + pool;
+  const houseListed = listings
+    .filter((l) => l.seller_is_treasury && ['open', 'pending_approval'].includes(l.status))
+    .reduce((s, l) => s + (parseInt(l.shares, 10) || 0), 0);
 
   // Settled trades power the trading report (open marketplace, immutable record).
   const settled = transfers.filter((t) => t.status === 'settled');
@@ -74,14 +94,69 @@ const SharesTab = ({ ctx }) => {
   };
 
   const doApprove = async (t) => {
-    try { await approveTransfer(t); toast.success('Transfer settled — shares moved.'); }
+    try {
+      const res = await approveTransfer(t);
+      const houseTrade = !!t.seller_is_treasury !== !!t.buyer_is_treasury;
+      toast.success(`Transfer settled — shares moved.${houseTrade
+        ? (res?.ledgerPosted ? ' Share capital posted to the ledger.' : ' Ledger not posted (Finance Hub books not initialised).')
+        : ''}`);
+    }
     catch (e) { toast.error(e.message || 'Could not settle.'); }
+  };
+
+  const openTreasury = () => {
+    setTreasForm({
+      authorized_shares: treasury ? String(treasury.authorized_shares ?? '') : '',
+      treasury_shares: treasury ? String(treasury.treasury_shares ?? '') : '',
+      par_value: treasury ? String(treasury.par_value ?? '') : '',
+    });
+    setTreasOpen(true);
+  };
+
+  const saveTreasurySettings = async () => {
+    const cap = parseInt(treasForm.authorized_shares, 10) || 0;
+    const poolNext = parseInt(treasForm.treasury_shares, 10) || 0;
+    if (cap > 0 && cap < totalShares + poolNext) {
+      toast.error(`Authorized shares (${cap.toLocaleString()}) cannot be below member-held + treasury (${(totalShares + poolNext).toLocaleString()}).`);
+      return;
+    }
+    setSaving(true);
+    try { await saveTreasury(treasForm); toast.success('Treasury updated.'); setTreasOpen(false); }
+    catch (e) { toast.error(e.message || 'Could not save.'); } finally { setSaving(false); }
+  };
+
+  const sellFromHouse = async () => {
+    const qty = parseInt(houseSellForm.shares, 10) || 0;
+    const available = pool - houseListed;
+    if (qty <= 0) { toast.error('Enter a share quantity.'); return; }
+    if (qty > available) { toast.error(`The house can list at most ${available} shares (${pool} in the pool, ${houseListed} already listed).`); return; }
+    setSaving(true);
+    try {
+      await createListing({ ...houseSellForm, seller_is_treasury: true });
+      toast.success('Treasury listing created — everyone in the sacco can now buy from the house.');
+      setHouseSellOpen(false); setHouseSellForm({ shares: '', price_per_share: '', expiry_date: '' });
+    } catch (e) { toast.error(e.message || 'Could not list.'); } finally { setSaving(false); }
+  };
+
+  const submitBuyBack = async () => {
+    if (!buyBackForm.seller_member_id) { toast.error('Choose the selling member.'); return; }
+    const qty = parseInt(buyBackForm.shares, 10) || 0;
+    const holding = parseInt(shares.find((s) => s.member_id === buyBackForm.seller_member_id)?.shares_held, 10) || 0;
+    if (qty <= 0) { toast.error('Enter a share quantity.'); return; }
+    if (qty > holding) { toast.error(`That member holds only ${holding} shares.`); return; }
+    setSaving(true);
+    try {
+      const res = await treasuryBuyBack(buyBackForm);
+      toast.success(`Bought back ${qty} shares into the treasury.${res?.ledgerPosted ? ' Share capital posted to the ledger.' : ''}`);
+      setBuyBackOpen(false); setBuyBackForm({ seller_member_id: '', shares: '', price_per_share: '' });
+    } catch (e) { toast.error(e.message || 'Could not buy back.'); } finally { setSaving(false); }
   };
 
   const exportTrades = () => exportCSV(
     settled.map((t) => ({
       date: String(t.created_at || '').slice(0, 10),
-      seller: memberName(t.seller_member_id), buyer: memberName(t.buyer_member_id),
+      seller: partyName(t.seller_member_id, t.seller_is_treasury),
+      buyer: partyName(t.buyer_member_id, t.buyer_is_treasury),
       shares: t.shares, price: t.price, status: t.status,
     })),
     'share_trades',
@@ -90,7 +165,7 @@ const SharesTab = ({ ctx }) => {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total shares" value={totalShares.toLocaleString()} icon="PieChart" />
+        <StatCard label="Total shares in issue" value={totalInIssue.toLocaleString()} icon="PieChart" />
         <StatCard label="Market value / share" value={currentMarketValue > 0 ? KES(currentMarketValue) : '—'} icon="TrendingUp" tone="primary" />
         <StatCard label="Market capitalisation" value={KES(marketCap)} icon="Landmark" tone="success" />
         <StatCard label="Open listings" value={listings.filter((l) => l.status === 'open').length} icon="Store" tone="muted" />
@@ -117,6 +192,49 @@ const SharesTab = ({ ctx }) => {
         </div>
       </Card>
 
+      {/* The house — the sacco trades its own treasury pool on the exchange */}
+      <Card
+        title="Share exchange — the house"
+        subtitle={treasury ? 'The sacco itself sells from and buys back into its treasury pool' : 'Set up a treasury pool so the sacco itself can trade shares'}
+        actions={(
+          <div className="flex items-center gap-2">
+            <GhostButton icon="Settings" onClick={openTreasury}>Treasury settings</GhostButton>
+            <GhostButton
+              icon="Undo2"
+              disabled={!treasury}
+              onClick={() => { setBuyBackForm({ seller_member_id: '', shares: '', price_per_share: currentMarketValue > 0 ? String(currentMarketValue) : '' }); setBuyBackOpen(true); }}
+            >
+              Buy back
+            </GhostButton>
+            <PrimaryButton
+              icon="Store"
+              disabled={!treasury || pool - houseListed <= 0}
+              onClick={() => { setHouseSellForm({ shares: '', price_per_share: currentMarketValue > 0 ? String(currentMarketValue) : '', expiry_date: '' }); setHouseSellOpen(true); }}
+            >
+              Sell from treasury
+            </PrimaryButton>
+          </div>
+        )}
+      >
+        {!treasury ? (
+          <EmptyState icon="Landmark" title="No treasury yet" hint="Open Treasury settings to record the authorized share cap and the pool the house trades from." />
+        ) : (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <StatCard label="Shares in issue" value={totalInIssue.toLocaleString()} icon="Layers" tone="muted" />
+              <StatCard label="Member-held" value={totalShares.toLocaleString()} icon="Users" tone="muted" />
+              <StatCard label="Treasury pool (house)" value={pool.toLocaleString()} icon="Landmark" tone="primary" />
+              <StatCard label="Authorized cap" value={authorized > 0 ? authorized.toLocaleString() : 'No cap'} icon="Shield" tone="muted" />
+            </div>
+            <p className="text-sm text-muted-foreground mt-4">
+              The house pool is worth {KES(pool * (currentMarketValue || parseFloat(treasury.par_value || 0)))} at the current value.
+              {houseListed > 0 && <> {houseListed.toLocaleString()} treasury shares are already listed on the marketplace.</>}
+              {' '}Treasury sales and buy-backs settle like any other trade and post share capital to the Finance Hub ledger.
+            </p>
+          </>
+        )}
+      </Card>
+
       {/* Holdings */}
       <Card title="Share holdings" subtitle={`${shares.length} shareholders`}
         actions={<PrimaryButton icon="Plus" onClick={() => setHoldOpen(true)}>Set holding</PrimaryButton>}>
@@ -140,15 +258,19 @@ const SharesTab = ({ ctx }) => {
       </Card>
 
       {/* Marketplace */}
-      <Card title="Internal marketplace" subtitle="Member-to-member share transfers (admin-approved)"
+      <Card title="Internal marketplace" subtitle="Share trades between members and the house (admin-approved)"
         actions={<PrimaryButton icon="Tag" onClick={() => setListOpen(true)}>List shares</PrimaryButton>}>
         {listings.length === 0 ? (
-          <EmptyState icon="Store" title="No active listings" hint="A member can list shares for sale; another member buys, then you approve the transfer." />
+          <EmptyState icon="Store" title="No active listings" hint="Members — or the house — list shares for sale; a buyer takes the listing, then you approve the transfer." />
         ) : (
           <Table columns={['Seller', 'Shares', 'Price/share', 'Total', 'Status', '']}>
             {listings.map((l) => (
               <tr key={l.id} className="border-b border-border/60">
-                <td className="py-2.5 pr-4 font-medium text-foreground">{l.seller?.full_name || memberName(l.seller_member_id)}</td>
+                <td className="py-2.5 pr-4 font-medium text-foreground">
+                  {l.seller_is_treasury
+                    ? <span className="text-primary">SACCO Treasury</span>
+                    : (l.seller?.full_name || memberName(l.seller_member_id))}
+                </td>
                 <td className="py-2.5 pr-4 text-foreground">{l.shares}</td>
                 <td className="py-2.5 pr-4 text-muted-foreground">{KES(l.price_per_share)}</td>
                 <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(l.shares * l.price_per_share)}</td>
@@ -168,8 +290,8 @@ const SharesTab = ({ ctx }) => {
           <Table columns={['Seller', 'Buyer', 'Shares', 'Price', '']}>
             {transfers.filter((t) => t.status === 'pending').map((t) => (
               <tr key={t.id} className="border-b border-border/60">
-                <td className="py-2.5 pr-4 text-foreground">{memberName(t.seller_member_id)}</td>
-                <td className="py-2.5 pr-4 text-foreground">{memberName(t.buyer_member_id)}</td>
+                <td className="py-2.5 pr-4 text-foreground">{partyName(t.seller_member_id, t.seller_is_treasury)}</td>
+                <td className="py-2.5 pr-4 text-foreground">{partyName(t.buyer_member_id, t.buyer_is_treasury)}</td>
                 <td className="py-2.5 pr-4 text-muted-foreground">{t.shares}</td>
                 <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(t.price)}</td>
                 <td className="py-2.5 pr-0 text-right"><button onClick={() => doApprove(t)} className="text-xs text-emerald-600 font-semibold hover:underline">Approve & settle</button></td>
@@ -217,8 +339,8 @@ const SharesTab = ({ ctx }) => {
             {settled.map((t) => (
               <tr key={t.id} className="border-b border-border/60">
                 <td className="py-2.5 pr-4 text-muted-foreground">{fmtDate(t.created_at)}</td>
-                <td className="py-2.5 pr-4 text-foreground">{memberName(t.seller_member_id)}</td>
-                <td className="py-2.5 pr-4 text-foreground">{memberName(t.buyer_member_id)}</td>
+                <td className="py-2.5 pr-4 text-foreground">{partyName(t.seller_member_id, t.seller_is_treasury)}</td>
+                <td className="py-2.5 pr-4 text-foreground">{partyName(t.buyer_member_id, t.buyer_is_treasury)}</td>
                 <td className="py-2.5 pr-4 text-foreground">{t.shares}</td>
                 <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(t.price)}</td>
               </tr>
@@ -259,6 +381,56 @@ const SharesTab = ({ ctx }) => {
         </div>
       </Modal>
 
+      {/* Treasury settings modal */}
+      <Modal open={treasOpen} onClose={() => setTreasOpen(false)} title="Treasury settings"
+        footer={<><GhostButton onClick={() => setTreasOpen(false)}>Cancel</GhostButton><PrimaryButton icon="Check" onClick={saveTreasurySettings} disabled={saving}>{saving ? 'Saving…' : 'Save'}</PrimaryButton></>}>
+        <p className="text-sm text-muted-foreground mb-4">
+          The treasury pool is the sacco's own stock of shares — unallotted or bought back — that the house sells on the marketplace. Members currently hold {totalShares.toLocaleString()} shares.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Authorized shares (0 = no cap)"><NumberInput value={treasForm.authorized_shares} onChange={(e) => setTF('authorized_shares', e.target.value)} placeholder="100000" /></Field>
+          <Field label="Treasury pool (shares)"><NumberInput value={treasForm.treasury_shares} onChange={(e) => setTF('treasury_shares', e.target.value)} placeholder="10000" /></Field>
+          <Field label="Par value (KES)"><NumberInput value={treasForm.par_value} onChange={(e) => setTF('par_value', e.target.value)} placeholder="100" /></Field>
+        </div>
+      </Modal>
+
+      {/* Sell-from-treasury modal */}
+      <Modal open={houseSellOpen} onClose={() => setHouseSellOpen(false)} title="Sell shares from the treasury"
+        footer={<><GhostButton onClick={() => setHouseSellOpen(false)}>Cancel</GhostButton><PrimaryButton icon="Store" onClick={sellFromHouse} disabled={saving}>{saving ? 'Listing…' : 'List on marketplace'}</PrimaryButton></>}>
+        <p className="text-sm text-muted-foreground mb-4">
+          The house pool holds {pool.toLocaleString()} shares ({houseListed.toLocaleString()} already listed). The listing appears on every member's marketplace as “SACCO Treasury”; the sale settles when you approve the buyer's transfer.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Shares *"><NumberInput value={houseSellForm.shares} onChange={(e) => setHSF('shares', e.target.value)} placeholder="500" /></Field>
+          <Field label="Price per share (KES)"><NumberInput value={houseSellForm.price_per_share} onChange={(e) => setHSF('price_per_share', e.target.value)} placeholder={currentMarketValue > 0 ? String(currentMarketValue) : '120'} /></Field>
+          <Field label="Expiry date"><TextInput type="date" value={houseSellForm.expiry_date} onChange={(e) => setHSF('expiry_date', e.target.value)} /></Field>
+        </div>
+      </Modal>
+
+      {/* Buy-back modal */}
+      <Modal open={buyBackOpen} onClose={() => setBuyBackOpen(false)} title="Buy back shares into the treasury"
+        footer={<><GhostButton onClick={() => setBuyBackOpen(false)}>Cancel</GhostButton><PrimaryButton icon="Check" onClick={submitBuyBack} disabled={saving}>{saving ? 'Settling…' : 'Buy back & settle'}</PrimaryButton></>}>
+        <p className="text-sm text-muted-foreground mb-4">
+          The house buys the member's shares at the agreed price. This settles immediately: the member's holding goes down, the treasury pool goes up, and share capital is posted to the ledger.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Selling member *">
+            <Select value={buyBackForm.seller_member_id} onChange={(e) => setBBF('seller_member_id', e.target.value)}>
+              <option value="">Select member</option>
+              {members.map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}
+            </Select>
+          </Field>
+          <Field label="Shares *"><NumberInput value={buyBackForm.shares} onChange={(e) => setBBF('shares', e.target.value)} placeholder="100" /></Field>
+          <Field label="Price per share (KES)"><NumberInput value={buyBackForm.price_per_share} onChange={(e) => setBBF('price_per_share', e.target.value)} placeholder={currentMarketValue > 0 ? String(currentMarketValue) : '120'} /></Field>
+        </div>
+        {buyBackForm.seller_member_id && (
+          <p className="text-xs text-muted-foreground mt-3">
+            {memberName(buyBackForm.seller_member_id)} holds {(parseInt(shares.find((s) => s.member_id === buyBackForm.seller_member_id)?.shares_held, 10) || 0).toLocaleString()} shares.
+            {' '}Total: {KES((parseInt(buyBackForm.shares, 10) || 0) * (parseFloat(buyBackForm.price_per_share) || 0))}.
+          </p>
+        )}
+      </Modal>
+
       {/* Buy modal */}
       <Modal open={!!buyListing} onClose={() => setBuyListing(null)} title="Buy shares"
         footer={<><GhostButton onClick={() => setBuyListing(null)}>Cancel</GhostButton><PrimaryButton icon="Check" onClick={submitBuy} disabled={saving}>{saving ? 'Submitting…' : 'Submit purchase'}</PrimaryButton></>}>
@@ -269,9 +441,12 @@ const SharesTab = ({ ctx }) => {
               <span className="font-semibold text-foreground">{KES(buyListing.price_per_share)}</span> each ·
               total <span className="font-semibold text-foreground">{KES(buyListing.shares * buyListing.price_per_share)}</span>.
             </p>
-            <Field label="Buying member *">
+            <Field label="Buyer *">
               <Select value={buyer} onChange={(e) => setBuyer(e.target.value)}>
-                <option value="">Select member</option>
+                <option value="">Select buyer</option>
+                {!buyListing.seller_is_treasury && treasury && (
+                  <option value={TREASURY_BUYER}>SACCO Treasury (house buy-back)</option>
+                )}
                 {members.filter((m) => m.id !== buyListing.seller_member_id).map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}
               </Select>
             </Field>

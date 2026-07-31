@@ -60,6 +60,9 @@ const Routes = () => {
           <Route path="/admin-registration"       element={<AdminRegistration />} />
           {/* External signer one-time link (no auth — token-scoped via edge function) */}
           <Route path="/sign/:token"              element={<ExternalSignPage />} />
+          {/* Embedded signing — same token flow, chrome-less, for iframes inside
+              client apps; emits ararat-esign postMessage lifecycle events */}
+          <Route path="/embed/sign/:token"        element={<ExternalSignPage embedded />} />
 
           {/* ── Super Admin only ───────────────────────────────────────── */}
           {/* Post-login portal chooser — Company portal vs Saccos portal */}

@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Savannah Trade Hub — Cars, Plots, Electronics &amp; More</title>
+<style>
+  :root {
+    --green: #14532d;
+    --green-mid: #16a34a;
+    --amber: #d97706;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --bg: #f7f5f0;
+    --card: #ffffff;
+    --red: #dc2626;
+    --dark: #0f172a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--ink); }
+
+  /* ── Site-owner admin bar (simulates the website's backend/save hooks) ── */
+  .admin-bar { background: var(--dark); color: #e2e8f0; padding: 10px 20px; font-size: 13px; }
+  .admin-bar-inner { max-width: 1200px; margin: 0 auto; }
+  .admin-bar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; cursor: pointer; }
+  .admin-bar-head strong { color: #fbbf24; }
+  .admin-fields { display: none; margin-top: 10px; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .admin-fields.open { display: flex; }
+  .admin-field { display: flex; flex-direction: column; gap: 3px; }
+  .admin-field label { font-size: 11px; color: #94a3b8; }
+  .admin-field input[type=text], .admin-field input[type=password] {
+    background: #1e293b; border: 1px solid #334155; color: #e2e8f0; border-radius: 6px;
+    padding: 7px 10px; font-size: 12px; min-width: 240px; font-family: Consolas, monospace;
+  }
+  .admin-field input.endpoint { min-width: 380px; }
+  .admin-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #cbd5e1; user-select: none; cursor: pointer; }
+  .conn-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #64748b; margin-right: 5px; }
+  .conn-dot.ok { background: #22c55e; } .conn-dot.bad { background: #ef4444; }
+
+  button { border: none; border-radius: 7px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+  button:hover { opacity: .85; }
+  .btn-sync { background: var(--green-mid); color: #fff; }
+  .btn-ghost { background: #334155; color: #e2e8f0; }
+  .btn-small { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
+  .btn-amber { background: var(--amber); color: #fff; }
+  .btn-red { background: var(--red); color: #fff; }
+  .btn-outline { background: transparent; border: 1px solid #cbd5e1; color: var(--ink); }
+
+  /* ── Storefront ── */
+  header.site { background: var(--green); color: #fff; padding: 16px 20px; }
+  .site-inner { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .logo { font-size: 22px; font-weight: 800; letter-spacing: .3px; }
+  .logo span { color: #fbbf24; }
+  nav.fake a { color: #d1fae5; text-decoration: none; margin-left: 18px; font-size: 14px; }
+  .hero { background: linear-gradient(120deg, #14532d, #166534 60%, #15803d); color: #fff; padding: 34px 20px; }
+  .hero-inner { max-width: 1200px; margin: 0 auto; }
+  .hero h1 { font-size: 26px; margin-bottom: 6px; }
+  .hero p { color: #bbf7d0; font-size: 14px; max-width: 640px; }
+
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+  .toolbar h2 { font-size: 19px; }
+  .count-pill { background: #e7e5e4; border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--muted); margin-left: 8px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(265px, 1fr)); gap: 18px; }
+  .card { background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.08); display: flex; flex-direction: column; position: relative; }
+  .card img.photo { width: 100%; height: 160px; object-fit: cover; background: #e5e7eb; }
+  .card-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .type-badge { position: absolute; top: 10px; left: 10px; background: rgba(15,23,42,.82); color: #fff; font-size: 11px; padding: 3px 9px; border-radius: 999px; text-transform: capitalize; }
+  .sold-banner { position: absolute; top: 10px; right: 10px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+  .card h3 { font-size: 15px; line-height: 1.3; }
+  .price { color: var(--green); font-weight: 800; font-size: 16px; }
+  .loc { color: var(--muted); font-size: 12px; }
+  .attrs { font-size: 12px; color: #4b5563; line-height: 1.5; }
+  .attrs b { color: #374151; font-weight: 600; }
+  .sync-state { font-size: 11px; border-radius: 6px; padding: 3px 8px; width: fit-content; }
+  .sync-state.never { background: #f3f4f6; color: #6b7280; }
+  .sync-state.dirty { background: #fef3c7; color: #92400e; }
+  .sync-state.synced { background: #dcfce7; color: #166534; }
+  .sync-state.failed { background: #fee2e2; color: #991b1b; }
+  .card-actions { display: flex; gap: 6px; margin-top: auto; padding-top: 8px; flex-wrap: wrap; }
+
+  .add-card { border: 2px dashed #cbd5e1; border-radius: 12px; display: flex; align-items: center; justify-content: center; min-height: 280px; color: var(--muted); cursor: pointer; font-weight: 600; background: transparent; }
+  .add-card:hover { border-color: var(--green-mid); color: var(--green-mid); }
+
+  /* ── Activity log ── */
+  .log-section { margin-top: 34px; }
+  .log-section h2 { font-size: 16px; margin-bottom: 8px; }
+  .log { background: var(--dark); color: #cbd5e1; border-radius: 10px; padding: 12px 16px; font-family: Consolas, monospace; font-size: 12px; max-height: 240px; overflow-y: auto; }
+  .log div { padding: 2px 0; border-bottom: 1px solid rgba(148,163,184,.12); white-space: pre-wrap; word-break: break-word; }
+  .log .ok { color: #4ade80; } .log .err { color: #f87171; } .log .info { color: #93c5fd; }
+
+  /* ── Modal ── */
+  .overlay { position: fixed; inset: 0; background: rgba(15,23,42,.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .overlay.open { display: flex; }
+  .modal { background: #fff; border-radius: 14px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; padding: 22px; }
+  .modal h3 { margin-bottom: 14px; }
+  .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  .form-row label { font-size: 12px; font-weight: 600; color: #374151; }
+  .form-row input, .form-row select { border: 1px solid #d1d5db; border-radius: 7px; padding: 8px 10px; font-size: 13px; }
+  .attr-rows { display: flex; flex-direction: column; gap: 6px; }
+  .attr-row { display: flex; gap: 6px; }
+  .attr-row input { flex: 1; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .modal pre { background: #0f172a; color: #a5f3fc; padding: 12px; border-radius: 8px; font-size: 11px; overflow-x: auto; max-height: 55vh; }
+
+  footer { background: var(--green); color: #bbf7d0; text-align: center; padding: 18px; font-size: 12px; margin-top: 40px; }
+</style>
+</head>
+<body>
+
+<!-- Site-owner panel: simulates the website's backend where the AssetFlow key lives -->
+<div class="admin-bar">
+  <div class="admin-bar-inner">
+    <div class="admin-bar-head" id="adminToggle">
+      <div>⚙️ <strong>Site owner panel</strong> — connect this website to AssetFlow (click to expand)</div>
+      <div><span class="conn-dot" id="connDot"></span><span id="connText">Not connected</span></div>
+    </div>
+    <div class="admin-fields" id="adminFields">
+      <div class="admin-field">
+        <label>Ingest endpoint (from the Website Sync dialog)</label>
+        <input type="text" class="endpoint" id="endpointInput" spellcheck="false" />
+      </div>
+      <div class="admin-field">
+        <label>API key (x-api-key — generate in AssetFlow → Website Sync)</label>
+        <input type="password" id="apiKeyInput" placeholder="afk_..." spellcheck="false" />
+      </div>
+      <div class="admin-actions">
+        <label class="toggle"><input type="checkbox" id="autoPush" checked /> Auto-push on add / edit / sold</label>
+        <button class="btn-sync" id="syncAllBtn">⟳ Sync all to AssetFlow</button>
+        <button class="btn-ghost" id="previewBtn">View payload JSON</button>
+        <button class="btn-ghost" id="csvBtn">Download CSV</button>
+        <button class="btn-ghost" id="resetBtn">Reset demo data</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<header class="site">
+  <div class="site-inner">
+    <div class="logo">🦒 Savannah <span>Trade Hub</span></div>
+    <nav class="fake">
+      <a href="#" onclick="return false">Home</a>
+      <a href="#" onclick="return false">Inventory</a>
+      <a href="#" onclick="return false">Sell With Us</a>
+      <a href="#" onclick="return false">Contact</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="hero-inner">
+    <h1>Quality Cars, Plots, Electronics &amp; Machinery</h1>
+    <p>This is a <b>demo third-party website</b> — a stand-in for any client's site. Listings added, re-priced or sold here are pushed to the AssetFlow Assets tab through the Website Sync API.</p>
+  </div>
+</div>
+
+<main>
+  <div class="toolbar">
+    <h2>Current Inventory <span class="count-pill" id="countPill"></span></h2>
+    <button class="btn-sync" id="addBtn">＋ Add new listing</button>
+  </div>
+  <div class="grid" id="grid"></div>
+
+  <section class="log-section">
+    <h2>📡 Sync activity log</h2>
+    <div class="log" id="log"><div class="info">Ready. Paste your AssetFlow API key in the site owner panel above, then push a listing.</div></div>
+  </section>
+</main>
+
+<footer>Savannah Trade Hub — fictional demo site for testing AssetFlow Website Sync. Not a real business.</footer>
+
+<!-- Add-listing modal -->
+<div class="overlay" id="addOverlay">
+  <div class="modal">
+    <h3>Add a new listing</h3>
+    <div class="form-row"><label>Name / title *</label><input type="text" id="fName" placeholder="e.g. 2020 Nissan X-Trail" /></div>
+    <div class="form-row"><label>Type</label>
+      <select id="fType">
+        <option value="vehicle">Vehicle</option><option value="property">Property</option>
+        <option value="electronics">Electronics</option><option value="furnitures">Furniture</option>
+        <option value="equipment">Equipment</option><option value="heavy_equipment">Heavy equipment</option>
+        <option value="construction_dealers">Construction dealers</option><option value="other">Other</option>
+      </select>
+    </div>
+    <div class="form-row"><label>Price (KSh) *</label><input type="number" id="fPrice" placeholder="e.g. 2500000" /></div>
+    <div class="form-row"><label>Location</label><input type="text" id="fLocation" placeholder="e.g. Nairobi" /></div>
+    <div class="form-row"><label>Image URL (optional)</label><input type="text" id="fImage" placeholder="https://..." /></div>
+    <div class="form-row"><label>Attributes (type-specific details)</label>
+      <div class="attr-rows" id="attrRows"></div>
+      <button class="btn-outline btn-small" id="addAttrBtn" style="margin-top:6px;width:fit-content">＋ attribute</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-outline" id="cancelAdd">Cancel</button>
+      <button class="btn-sync" id="saveAdd">Save listing</button>
+    </div>
+  </div>
+</div>
+
+<!-- Payload preview modal -->
+<div class="overlay" id="previewOverlay">
+  <div class="modal" style="max-width:680px">
+    <h3>Payload that "Sync all" will POST</h3>
+    <pre id="previewPre"></pre>
+    <div class="modal-actions">
+      <button class="btn-outline" id="copyPayload">Copy JSON</button>
+      <button class="btn-sync" id="closePreview">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var DEFAULT_ENDPOINT = 'https://ektyvejahnkxqumeibke.supabase.co/functions/v1/ingest-assets';
+  var LS = { items: 'sth_items', endpoint: 'sth_endpoint', key: 'sth_apikey', auto: 'sth_autopush' };
+
+  function img(seed) { return 'https://picsum.photos/seed/' + seed + '/640/420'; }
+
+  var SEED_ITEMS = [
+    { ref: 'STH-VEH-001', name: '2021 Toyota Land Cruiser Prado TX-L', type: 'vehicle', price: 7850000, location: 'Nairobi',
+      image: img('prado21'), attributes: { make: 'Toyota', model: 'Prado TX-L', year: 2021, mileage: '46,000 km', fuel: 'Diesel', transmission: 'Automatic', color: 'Pearl White' } },
+    { ref: 'STH-VEH-002', name: '2018 Mazda Demio', type: 'vehicle', price: 1180000, location: 'Mombasa',
+      image: img('demio18'), attributes: { make: 'Mazda', model: 'Demio', year: 2018, mileage: '78,000 km', fuel: 'Petrol', transmission: 'Automatic', color: 'Red' } },
+    { ref: 'STH-VEH-003', name: '2019 Isuzu D-Max Double Cab', type: 'vehicle', price: 3450000, location: 'Eldoret',
+      image: img('dmax19'), attributes: { make: 'Isuzu', model: 'D-Max', year: 2019, mileage: '112,000 km', fuel: 'Diesel', transmission: 'Manual' } },
+    { ref: 'STH-PLT-004', name: '1/8 Acre Plot — Kitengela', type: 'property', price: 3200000, location: 'Kajiado',
+      image: img('plot4'), attributes: { property_type: 'Land', size: '0.125 acre', title_deed: 'Ready', zoning: 'Residential' } },
+    { ref: 'STH-APT-005', name: '3-Bedroom Apartment — Kilimani', type: 'property', price: 14500000, location: 'Nairobi',
+      image: img('apt5'), attributes: { property_type: 'Apartment', bedrooms: 3, bathrooms: 2, size: '145 sqm', parking: '2 slots' } },
+    { ref: 'STH-ELC-006', name: 'Dell XPS 13 (2024)', type: 'electronics', price: 145000, location: 'Nairobi',
+      image: img('xps6'), attributes: { brand: 'Dell', ram: '16GB', storage: '512GB SSD', warranty: '1 year' } },
+    { ref: 'STH-ELC-007', name: 'Samsung 65" QLED Smart TV', type: 'electronics', price: 155000, location: 'Nairobi',
+      image: img('tv7'), attributes: { brand: 'Samsung', screen: '65 inch', resolution: '4K', warranty: '2 years' } },
+    { ref: 'STH-FRN-008', name: '6-Seater L-Shaped Leather Sofa', type: 'furnitures', price: 78000, location: 'Nairobi',
+      image: img('sofa8'), attributes: { material: 'Leather', color: 'Grey', seats: 6 } },
+    { ref: 'STH-HEQ-009', name: 'CAT 320D Excavator (2015)', type: 'heavy_equipment', price: 12500000, location: 'Nakuru',
+      image: img('cat9'), attributes: { make: 'Caterpillar', model: '320D', year: 2015, hours: '9,800 hrs', condition: 'Good' } },
+    { ref: 'STH-EQP-010', name: 'Honda EU30i Silent Generator', type: 'equipment', price: 260000, location: 'Kisumu',
+      image: img('gen10'), attributes: { brand: 'Honda', power: '3 kVA', condition: 'New' } }
+  ];
+
+  // Per-item runtime state: sold (bool), sync ('never'|'dirty'|'synced'|'failed'), lastSync (iso)
+  var items = [];
+
+  function freshSeed() {
+    return SEED_ITEMS.map(function (s) {
+      var c = JSON.parse(JSON.stringify(s));
+      c.sold = false; c.sync = 'never'; c.lastSync = null;
+      return c;
+    });
+  }
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(LS.items);
+      items = raw ? JSON.parse(raw) : freshSeed();
+    } catch (e) { items = freshSeed(); }
+    $('endpointInput').value = localStorage.getItem(LS.endpoint) || DEFAULT_ENDPOINT;
+    $('apiKeyInput').value = localStorage.getItem(LS.key) || '';
+    $('autoPush').checked = localStorage.getItem(LS.auto) !== '0';
+    updateConn();
+  }
+  function persist() { localStorage.setItem(LS.items, JSON.stringify(items)); }
+
+  function $(id) { return document.getElementById(id); }
+  function fmt(n) { return 'KSh ' + Number(n).toLocaleString('en-KE'); }
+  function esc(s) { var d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+  function log(msg, cls) {
+    var el = document.createElement('div');
+    if (cls) el.className = cls;
+    el.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+    var box = $('log');
+    box.appendChild(el);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function updateConn() {
+    var has = $('apiKeyInput').value.trim().length > 0;
+    $('connDot').className = 'conn-dot' + (has ? ' ok' : '');
+    $('connText').textContent = has ? 'Key set — ready to push' : 'Not connected';
+  }
+
+  // ── Payload mapping: exactly the generic contract of ingest-assets ──
+  function toPayloadItem(it) {
+    var p = {
+      external_ref: it.ref,
+      name: it.name,
+      type: it.type,
+      price: it.price,
+      location: it.location || '',
+      images: it.image ? [it.image] : [],
+      url: 'https://savannahtradehub.example/listing/' + encodeURIComponent(it.ref),
+      attributes: it.attributes || {}
+    };
+    if (it.sold) p.sold = true;
+    return p;
+  }
+
+  function post(payloadItems, label) {
+    var endpoint = $('endpointInput').value.trim();
+    var key = $('apiKeyInput').value.trim();
+    localStorage.setItem(LS.endpoint, endpoint);
+    localStorage.setItem(LS.key, key);
+    if (!endpoint) { log('No endpoint set.', 'err'); return Promise.resolve(false); }
+    if (!key) { log('No API key set — open the site owner panel and paste the key from AssetFlow → Website Sync.', 'err'); return Promise.resolve(false); }
+
+    log('POST ' + label + ' → ' + endpoint, 'info');
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ items: payloadItems })
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        if (res.ok && body.ok) {
+          var s = body.summary || {};
+          log('✓ HTTP 200 — received ' + s.received + ', created ' + s.created + ', updated ' + s.updated + ', skipped ' + s.skipped, 'ok');
+          (body.errors || []).forEach(function (e) { log('  ⚠ ' + e.ref + ': ' + e.reason, 'err'); });
+          return { ok: true, errors: body.errors || [] };
+        }
+        log('✗ HTTP ' + res.status + ' — ' + (body.error || res.statusText || 'request failed'), 'err');
+        return { ok: false, errors: [] };
+      });
+    }).catch(function (err) {
+      log('✗ Network error: ' + err.message, 'err');
+      return { ok: false, errors: [] };
+    });
+  }
+
+  function markResult(list, result) {
+    var failedRefs = {};
+    (result.errors || []).forEach(function (e) { failedRefs[e.ref] = true; });
+    list.forEach(function (it) {
+      if (!result.ok || failedRefs[it.ref]) { it.sync = 'failed'; }
+      else { it.sync = 'synced'; it.lastSync = new Date().toISOString(); }
+    });
+    persist(); render();
+  }
+
+  function pushItems(list, label) {
+    if (!list.length) return;
+    post(list.map(toPayloadItem), label).then(function (result) {
+      if (result === false) return; // no key/endpoint — leave states untouched
+      markResult(list, result);
+    });
+  }
+
+  function autoPushIfOn(it, label) {
+    if ($('autoPush').checked && $('apiKeyInput').value.trim()) pushItems([it], label);
+  }
+
+  // ── Rendering ──
+  function attrsPreview(a) {
+    var keys = Object.keys(a || {});
+    return keys.slice(0, 3).map(function (k) { return '<b>' + esc(k) + ':</b> ' + esc(a[k]); }).join(' · ');
+  }
+
+  function syncChip(it) {
+    if (it.sync === 'synced') return '<span class="sync-state synced">✓ Synced ' + new Date(it.lastSync).toLocaleTimeString() + '</span>';
+    if (it.sync === 'dirty') return '<span class="sync-state dirty">● Modified — needs sync</span>';
+    if (it.sync === 'failed') return '<span class="sync-state failed">✗ Sync failed</span>';
+    return '<span class="sync-state never">Not synced yet</span>';
+  }
+
+  function render() {
+    var g = $('grid');
+    g.innerHTML = '';
+    items.forEach(function (it, idx) {
+      var card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML =
+        '<img class="photo" src="' + esc(it.image || img('none')) + '" alt="" loading="lazy" />' +
+        '<span class="type-badge">' + esc(it.type.replace(/_/g, ' ')) + '</span>' +
+        (it.sold ? '<span class="sold-banner">SOLD</span>' : '') +
+        '<div class="card-body">' +
+          '<h3>' + esc(it.name) + '</h3>' +
+          '<div class="price">' + fmt(it.price) + '</div>' +
+          '<div class="loc">📍 ' + esc(it.location || '—') + ' &nbsp;·&nbsp; ref ' + esc(it.ref) + '</div>' +
+          '<div class="attrs">' + attrsPreview(it.attributes) + '</div>' +
+          syncChip(it) +
+          '<div class="card-actions">' +
+            '<button class="btn-sync btn-small" data-act="push" data-i="' + idx + '">⟳ Push</button>' +
+            '<button class="btn-outline btn-small" data-act="price" data-i="' + idx + '">Edit price</button>' +
+            (it.sold ? '' : '<button class="btn-amber btn-small" data-act="sold" data-i="' + idx + '">Mark sold</button>') +
+            '<button class="btn-outline btn-small" data-act="remove" data-i="' + idx + '">✕</button>' +
+          '</div>' +
+        '</div>';
+      g.appendChild(card);
+    });
+
+    var add = document.createElement('div');
+    add.className = 'add-card';
+    add.textContent = '＋ Add new listing';
+    add.onclick = openAddModal;
+    g.appendChild(add);
+
+    $('countPill').textContent = items.length + ' listings';
+  }
+
+  $('grid').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    var it = items[Number(btn.dataset.i)];
+    if (!it) return;
+
+    if (btn.dataset.act === 'push') {
+      pushItems([it], '1 item (' + it.ref + ')');
+    } else if (btn.dataset.act === 'price') {
+      var v = prompt('New price (KSh) for ' + it.name + ':', it.price);
+      if (v === null) return;
+      var n = parseFloat(String(v).replace(/[, ]/g, ''));
+      if (!isFinite(n) || n <= 0) { alert('Enter a valid price.'); return; }
+      it.price = n; it.sync = 'dirty'; persist(); render();
+      log('Price changed on ' + it.ref + ' → ' + fmt(n), 'info');
+      autoPushIfOn(it, 'price update (' + it.ref + ')');
+    } else if (btn.dataset.act === 'sold') {
+      if (!confirm('Mark "' + it.name + '" as SOLD? This pushes sold status to AssetFlow.')) return;
+      it.sold = true; it.sync = 'dirty'; persist(); render();
+      log(it.ref + ' marked SOLD on the website', 'info');
+      autoPushIfOn(it, 'sold flag (' + it.ref + ')');
+    } else if (btn.dataset.act === 'remove') {
+      if (!confirm('Remove "' + it.name + '" from this demo site?\n(Local only — it will NOT be deleted from AssetFlow.)')) return;
+      items.splice(items.indexOf(it), 1); persist(); render();
+      log(it.ref + ' removed locally (AssetFlow copy untouched)', 'info');
+    }
+  });
+
+  // ── Admin bar ──
+  $('adminToggle').onclick = function () { $('adminFields').classList.toggle('open'); };
+  $('apiKeyInput').addEventListener('input', function () { localStorage.setItem(LS.key, this.value.trim()); updateConn(); });
+  $('endpointInput').addEventListener('input', function () { localStorage.setItem(LS.endpoint, this.value.trim()); });
+  $('autoPush').addEventListener('change', function () { localStorage.setItem(LS.auto, this.checked ? '1' : '0'); });
+
+  $('syncAllBtn').onclick = function () { pushItems(items.slice(), items.length + ' items (full inventory)'); };
+
+  $('resetBtn').onclick = function () {
+    if (!confirm('Reset the demo inventory to the original 10 listings? Local changes are lost (AssetFlow data is untouched).')) return;
+    items = freshSeed(); persist(); render();
+    log('Demo data reset to seed inventory.', 'info');
+  };
+
+  // ── Payload preview ──
+  $('previewBtn').onclick = function () {
+    $('previewPre').textContent = JSON.stringify({ items: items.map(toPayloadItem) }, null, 2);
+    $('previewOverlay').classList.add('open');
+  };
+  $('closePreview').onclick = function () { $('previewOverlay').classList.remove('open'); };
+  $('copyPayload').onclick = function () {
+    navigator.clipboard.writeText($('previewPre').textContent).then(function () { log('Payload JSON copied to clipboard.', 'info'); });
+  };
+
+  // ── CSV export (for the Website Sync "Import a spreadsheet" transport) ──
+  $('csvBtn').onclick = function () {
+    var attrKeys = [];
+    items.forEach(function (it) {
+      Object.keys(it.attributes || {}).forEach(function (k) { if (attrKeys.indexOf(k) === -1) attrKeys.push(k); });
+    });
+    var header = ['sku', 'name', 'type', 'price', 'location', 'image_url', 'status'].concat(attrKeys);
+    var q = function (v) { v = v === undefined || v === null ? '' : String(v); return '"' + v.replace(/"/g, '""') + '"'; };
+    var rows = [header.map(q).join(',')];
+    items.forEach(function (it) {
+      var base = [it.ref, it.name, it.type, it.price, it.location || '', it.image || '', it.sold ? 'sold' : 'available'];
+      var extra = attrKeys.map(function (k) { return (it.attributes || {})[k]; });
+      rows.push(base.concat(extra).map(q).join(','));
+    });
+    var blob = new Blob([rows.join('\r\n')], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'savannah-trade-hub-inventory.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    log('CSV exported — upload it in AssetFlow → Website Sync → Import a spreadsheet.', 'info');
+  };
+
+  // ── Add-listing modal ──
+  function attrRowEl(k, v) {
+    var row = document.createElement('div');
+    row.className = 'attr-row';
+    row.innerHTML = '<input type="text" placeholder="key (e.g. mileage)" value="' + esc(k || '') + '" />' +
+                    '<input type="text" placeholder="value (e.g. 45,000 km)" value="' + esc(v || '') + '" />' +
+                    '<button class="btn-outline btn-small" type="button">✕</button>';
+    row.querySelector('button').onclick = function () { row.remove(); };
+    return row;
+  }
+
+  function openAddModal() {
+    $('fName').value = ''; $('fPrice').value = ''; $('fLocation').value = ''; $('fImage').value = '';
+    $('fType').value = 'vehicle';
+    var rows = $('attrRows');
+    rows.innerHTML = '';
+    rows.appendChild(attrRowEl('', ''));
+    rows.appendChild(attrRowEl('', ''));
+    $('addOverlay').classList.add('open');
+  }
+  $('addBtn').onclick = openAddModal;
+  $('cancelAdd').onclick = function () { $('addOverlay').classList.remove('open'); };
+  $('addAttrBtn').onclick = function () { $('attrRows').appendChild(attrRowEl('', '')); };
+
+  $('saveAdd').onclick = function () {
+    var name = $('fName').value.trim();
+    var price = parseFloat(String($('fPrice').value).replace(/[, ]/g, ''));
+    if (!name) { alert('Name is required.'); return; }
+    if (!isFinite(price) || price <= 0) { alert('Enter a valid price.'); return; }
+    var attributes = {};
+    $('attrRows').querySelectorAll('.attr-row').forEach(function (row) {
+      var inputs = row.querySelectorAll('input');
+      var k = inputs[0].value.trim(), v = inputs[1].value.trim();
+      if (k && v) attributes[k] = v;
+    });
+    var it = {
+      ref: 'STH-NEW-' + Date.now(),
+      name: name,
+      type: $('fType').value,
+      price: price,
+      location: $('fLocation').value.trim(),
+      image: $('fImage').value.trim() || img('new' + Date.now()),
+      attributes: attributes,
+      sold: false, sync: 'dirty', lastSync: null
+    };
+    items.unshift(it);
+    persist(); render();
+    $('addOverlay').classList.remove('open');
+    log('New listing added on the website: ' + it.ref + ' — ' + it.name, 'info');
+    autoPushIfOn(it, 'new listing (' + it.ref + ')');
+  };
+
+  // close modals on backdrop click
+  ['addOverlay', 'previewOverlay'].forEach(function (id) {
+    $(id).addEventListener('click', function (e) { if (e.target === this) this.classList.remove('open'); });
+  });
+
+  load();
+  render();
+})();
+</script>
+</body>
+</html>

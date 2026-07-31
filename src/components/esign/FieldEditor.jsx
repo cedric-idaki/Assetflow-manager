@@ -11,13 +11,21 @@ import { detectSignableAreas } from "../../utils/detectSignableAreas";
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// `choices` marks the types that carry their own option list. A radio or
+// dropdown is ONE field holding every choice, not a cluster of separately placed
+// boxes — so "exactly one answer" holds by construction rather than by
+// validation, and the signer's pick is a single stored value.
 const FIELD_TYPES = [
-  { id: "signature", label: "Signature", icon: "PenTool",     w: 0.24, h: 0.060 },
-  { id: "initials",  label: "Initials",  icon: "Type",        w: 0.10, h: 0.050 },
-  { id: "date",      label: "Date",      icon: "Calendar",    w: 0.16, h: 0.035 },
-  { id: "text",      label: "Text",      icon: "AlignLeft",   w: 0.22, h: 0.035 },
+  { id: "signature", label: "Signature", icon: "PenTool",     w: 0.24,  h: 0.060 },
+  { id: "initials",  label: "Initials",  icon: "Type",        w: 0.10,  h: 0.050 },
+  { id: "date",      label: "Date",      icon: "Calendar",    w: 0.16,  h: 0.035 },
+  { id: "text",      label: "Text",      icon: "AlignLeft",   w: 0.22,  h: 0.035 },
   { id: "checkbox",  label: "Checkbox",  icon: "CheckSquare", w: 0.035, h: 0.025 },
+  { id: "radio",     label: "Choice",    icon: "CircleDot",   w: 0.30,  h: 0.040, choices: true },
+  { id: "dropdown",  label: "Dropdown",  icon: "ChevronDown", w: 0.24,  h: 0.035, choices: true },
 ];
+const CHOICE_TYPES = new Set(FIELD_TYPES.filter(t => t.choices).map(t => t.id));
+const DEFAULT_OPTIONS = ["Option 1", "Option 2"];
 const TYPE_LABEL = Object.fromEntries(FIELD_TYPES.map(t => [t.id, t.label]));
 
 const SIGNER_COLORS = [
@@ -81,7 +89,20 @@ function FieldBox({ field, color, label, onChange, onRemove, suppressRef }) {
   );
 }
 
-export default function FieldEditor({ fileUrl, signers = [], onSave, onBack, saving = false }) {
+// `signers` doubles as the list of field owners. Sending a real document passes
+// signer rows; building a reusable template passes role placeholders whose id is
+// the role index — the editor only needs { id, name, role } either way, so the
+// same placement UI serves both. The label props let the template flow relabel
+// the action without forking the component.
+export default function FieldEditor({
+  fileUrl, signers = [], onSave, onBack, saving = false,
+  title = "Place signature fields",
+  subtitle = "Pick a signer and a field, then click the document to drop it. Drag to move, corner to resize.",
+  actionLabel = "Save & Send",
+  actionBusyLabel = "Sending…",
+  actionIcon = "Send",
+  ownerNoun = "signatory",
+}) {
   const usable = signers.filter(s => s.id);
   const [fields, setFields] = useState([]);
   const [activeType, setActiveType] = useState("signature");
@@ -136,11 +157,14 @@ export default function FieldEditor({ fileUrl, signers = [], onSave, onBack, sav
       signer_id: activeSigner, field_type: activeType, page_index: pageIndex,
       pos_x: clamp(nx - t.w / 2, 0, 1 - t.w), pos_y: clamp(ny - t.h / 2, 0, 1 - t.h),
       width: t.w, height: t.h, required: true,
+      ...(t.choices ? { options: [...DEFAULT_OPTIONS] } : {}),
     }]);
   }, [activeSigner, activeType]);
 
   const patchField  = useCallback((tmpId, patch) => setFields(prev => prev.map(f => f.tmpId === tmpId ? { ...f, ...patch } : f)), []);
   const removeField = useCallback((tmpId) => setFields(prev => prev.filter(f => f.tmpId !== tmpId)), []);
+
+  const choiceFields = fields.filter(f => CHOICE_TYPES.has(f.field_type));
 
   const overlay = (page) => fields.filter(f => f.page_index === page.index).map(f => (
     <FieldBox key={f.tmpId} field={f} color={colorFor(f.signer_id)} label={TYPE_LABEL[f.field_type]}
@@ -156,7 +180,20 @@ export default function FieldEditor({ fileUrl, signers = [], onSave, onBack, sav
     if (usable.length >= 2) {
       const missing = usable.filter(s => countFor(s.id) === 0);
       if (missing.length) {
-        setSendError(`Place at least one field for: ${missing.map(s => s.name || s.email).join(", ")}. Every signatory needs somewhere to sign.`);
+        setSendError(`Place at least one field for: ${missing.map(s => s.name || s.email).join(", ")}. Every ${ownerNoun} needs somewhere to sign.`);
+        return;
+      }
+    }
+    // A choice field with fewer than two usable labels is not a choice, and a
+    // duplicate label makes the stored answer ambiguous — the value IS the label.
+    for (const f of choiceFields) {
+      const opts = (Array.isArray(f.options) ? f.options : []).map(o => String(o).trim()).filter(Boolean);
+      if (opts.length < 2) {
+        setSendError(`Every ${TYPE_LABEL[f.field_type].toLowerCase()} field needs at least two choices.`);
+        return;
+      }
+      if (new Set(opts.map(o => o.toLowerCase())).size !== opts.length) {
+        setSendError(`Choices within one ${TYPE_LABEL[f.field_type].toLowerCase()} field must be unique.`);
         return;
       }
     }
@@ -171,12 +208,12 @@ export default function FieldEditor({ fileUrl, signers = [], onSave, onBack, sav
           <button onClick={onBack} className="text-xs text-primary font-medium flex items-center gap-1 mb-1 hover:underline">
             <Icon name="ArrowLeft" size={12} color="currentColor" /> Back
           </button>
-          <h2 className="text-2xl font-bold text-foreground">Place signature fields</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">Pick a signer and a field, then click the document to drop it. Drag to move, corner to resize.</p>
+          <h2 className="text-2xl font-bold text-foreground">{title}</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">{subtitle}</p>
         </div>
         <button onClick={handleSend} disabled={saving}
           className="flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-60">
-          <Icon name="Send" size={14} color="currentColor" /> {saving ? "Sending…" : `Save & Send (${fields.length})`}
+          <Icon name={actionIcon} size={14} color="currentColor" /> {saving ? actionBusyLabel : `${actionLabel} (${fields.length})`}
         </button>
       </div>
 
@@ -251,6 +288,45 @@ export default function FieldEditor({ fileUrl, signers = [], onSave, onBack, sav
               <Icon name="Sparkles" size={13} color="currentColor" /> {detecting ? "Scanning…" : "Auto-detect fields"}
             </button>
           </div>
+
+          {/* Choices for the radio/dropdown fields placed so far. Editing lives
+              here rather than on the field box itself — the boxes are small and
+              a popover over the page would fight the drag-to-move gesture. */}
+          {choiceFields.length > 0 && (
+            <div className="bg-card border border-border rounded-xl p-4 space-y-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Choices</h3>
+              {choiceFields.map((f, n) => {
+                const opts = Array.isArray(f.options) ? f.options : [];
+                return (
+                  <div key={f.tmpId} className="space-y-1.5">
+                    <p className="text-[11px] font-semibold text-foreground flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full" style={{ background: colorFor(f.signer_id).solid }} />
+                      {TYPE_LABEL[f.field_type]} {n + 1} · p{(f.page_index ?? 0) + 1}
+                    </p>
+                    {opts.map((o, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <input value={o}
+                          onChange={(e) => patchField(f.tmpId, {
+                            options: opts.map((v, j) => (j === i ? e.target.value : v)),
+                          })}
+                          className="flex-1 min-w-0 px-2 py-1 border border-border rounded text-[11px] bg-background text-foreground" />
+                        {opts.length > 2 && (
+                          <button onClick={() => patchField(f.tmpId, { options: opts.filter((_, j) => j !== i) })}
+                            className="p-1 text-muted-foreground hover:text-red-600 transition-colors">
+                            <Icon name="X" size={11} color="currentColor" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    <button onClick={() => patchField(f.tmpId, { options: [...opts, `Option ${opts.length + 1}`] })}
+                      className="text-[11px] text-primary font-medium hover:underline">
+                      + Add choice
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Document */}

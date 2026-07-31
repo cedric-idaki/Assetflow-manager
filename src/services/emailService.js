@@ -50,6 +50,15 @@ export const sendPaymentReminder = async (toEmail, { client, payment, asset, day
 };
 
 /**
+ * Confirm to a newly-registered admin that their company / sacco was created.
+ * @param {string} toEmail - The admin's email
+ * @param {{ adminName, entityName, entityType: 'company'|'sacco', planName, seats, regNumber, sasraLicence, location, city, registeredOn, portalUrl }} data
+ */
+export const sendAdminRegistrationConfirmation = async (toEmail, data) => {
+  return callEmailFunction('admin_registration_confirmation', toEmail, data);
+};
+
+/**
  * Send a one-time signing OTP code to a signer's email.
  * @param {string} toEmail - Recipient email
  * @param {{ signerName, code, documentName, expiresMinutes }} data

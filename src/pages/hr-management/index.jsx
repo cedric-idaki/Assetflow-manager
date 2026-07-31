@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { supabase } from '../../lib/supabase';
+import { openStoredFile } from '../../lib/storageUrl';
+import { useSignedUrl } from '../../hooks/useSignedUrl';
 import Icon from '../../components/AppIcon';
 import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
 import { generateTempPassword } from '../../services/credentialsEmailService';
@@ -145,17 +147,27 @@ const NoDoc = () => (
 
 // A compact link to an uploaded employee document (ID/passport, CV).
 const DocLink = ({ url, label }) => url ? (
-  <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">
+  <a href={url} onClick={(e) => { e.preventDefault(); openStoredFile(url); }}
+    target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">
     <Icon name="FileText" size={13} color="currentColor" /> {label}
   </a>
 ) : <NoDoc />;
 
 // Thumbnail preview for an uploaded employee photo (links to the full image).
-const DocThumb = ({ url }) => url ? (
-  <a href={url} target="_blank" rel="noopener noreferrer" className="inline-block">
-    <img src={url} alt="Employee" loading="lazy" className="w-10 h-10 rounded-lg object-cover border border-border hover:ring-2 hover:ring-primary/40 transition-all" />
-  </a>
-) : <NoDoc />;
+// employee-documents is a private bucket, so the <img> needs a signed URL rather
+// than the stored one.
+const DocThumb = ({ url }) => {
+  const { url: signed } = useSignedUrl(url);
+  if (!url) return <NoDoc />;
+  return (
+    <a href={url} onClick={(e) => { e.preventDefault(); openStoredFile(url); }}
+      target="_blank" rel="noopener noreferrer" className="inline-block">
+      {signed
+        ? <img src={signed} alt="Employee" loading="lazy" className="w-10 h-10 rounded-lg object-cover border border-border hover:ring-2 hover:ring-primary/40 transition-all" />
+        : <span className="inline-block w-10 h-10 rounded-lg border border-border bg-muted" />}
+    </a>
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EMPLOYEE FORM MODAL

@@ -19,6 +19,9 @@ import { tierForMembers, calculateMonthlyBill } from '../config/saccoTiers';
 
 const SaccoDashboardContext = createContext(null);
 
+// Sentinel buyer id meaning "the house buys" (treasury buy-back via a listing).
+export const TREASURY_BUYER = '__treasury__';
+
 const getAdminId = async () => {
   const { data: { user } } = await supabase.auth.getUser();
   return user?.id;
@@ -36,6 +39,7 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [sharePrices,   setSharePrices]   = useState([]);
   const [listings,      setListings]      = useState([]);
   const [transfers,     setTransfers]     = useState([]);
+  const [treasury,      setTreasury]      = useState(null);
   const [motions,       setMotions]       = useState([]);
   const [votes,         setVotes]         = useState([]);
   const [elections,          setElections]          = useState([]);
@@ -149,6 +153,16 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  // The house: authorized cap + the pool of shares the sacco itself trades.
+  const fetchTreasury = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_share_treasury').select('*')
+        .eq('admin_id', adminId).limit(1).maybeSingle();
+      setTreasury(data);
+    } catch (_) {}
+  }, []);
+
   // Daily market-value series the sacco_admin publishes (latest = current value).
   const fetchSharePrices = useCallback(async () => {
     try {
@@ -248,7 +262,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     await Promise.all([
       fetchSacco(), fetchMembers(), fetchContributions(), fetchContributionTypes(),
       fetchLoanProducts(), fetchLoans(), fetchSchedules(), fetchShares(), fetchListings(),
-      fetchTransfers(), fetchSharePrices(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
+      fetchTransfers(), fetchTreasury(), fetchSharePrices(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(),
       fetchElectionVoters(), fetchElectionAudit(),
     ]);
@@ -257,7 +271,7 @@ export const SaccoDashboardProvider = ({ children }) => {
   }, [
     fetchSacco, fetchMembers, fetchContributions, fetchContributionTypes,
     fetchLoanProducts, fetchLoans, fetchSchedules, fetchShares, fetchListings,
-    fetchTransfers, fetchSharePrices, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
+    fetchTransfers, fetchTreasury, fetchSharePrices, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
     fetchElections, fetchElectionPositions, fetchElectionCandidates,
     fetchElectionVoters, fetchElectionAudit,
   ]);
@@ -295,7 +309,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     const adminId = await getAdminId();
     const { error } = await supabase.from('sacco_members').insert({
       admin_id: adminId, sacco_id: saccoId,
-      member_no: form.member_no || `M-${Date.now().toString().slice(-6)}`,
+      member_no: (form.member_no || '').trim(),
       full_name: form.full_name, phone: form.phone || '', email: form.email || '',
       national_id: form.national_id || '', gender: form.gender || null,
       member_role: form.member_role || 'member', status: form.status || 'active',
@@ -473,10 +487,26 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchSharePrices();
   }, [saccoId, fetchSharePrices]);
 
+  // Create/update the treasury row (authorized cap, house pool, par).
+  const saveTreasury = useCallback(async (form) => {
+    const adminId = await getAdminId();
+    const { error } = await supabase.from('sacco_share_treasury').upsert({
+      admin_id: adminId, sacco_id: saccoId,
+      authorized_shares: parseInt(form.authorized_shares, 10) || 0,
+      treasury_shares: parseInt(form.treasury_shares, 10) || 0,
+      par_value: parseFloat(form.par_value) || 0,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'sacco_id' });
+    if (error) throw error;
+    await fetchTreasury();
+  }, [saccoId, fetchTreasury]);
+
   const createListing = useCallback(async (form) => {
     const adminId = await getAdminId();
     const { error } = await supabase.from('sacco_share_listings').insert({
-      admin_id: adminId, sacco_id: saccoId, seller_member_id: form.seller_member_id,
+      admin_id: adminId, sacco_id: saccoId,
+      seller_member_id: form.seller_is_treasury ? null : form.seller_member_id,
+      seller_is_treasury: !!form.seller_is_treasury,
       shares: parseInt(form.shares, 10) || 0,
       price_per_share: parseFloat(form.price_per_share) || 0,
       status: 'open', expiry_date: form.expiry_date || null,
@@ -486,11 +516,16 @@ export const SaccoDashboardProvider = ({ children }) => {
   }, [saccoId, fetchListings]);
 
   // Buyer expresses interest → creates a pending transfer + flags the listing.
+  // The buyer may be TREASURY_BUYER: the house buying a member's listing.
   const requestTransfer = useCallback(async (listing, buyerMemberId) => {
     const adminId = await getAdminId();
+    const buyerIsTreasury = buyerMemberId === TREASURY_BUYER;
     const { error } = await supabase.from('sacco_share_transfers').insert({
       admin_id: adminId, sacco_id: saccoId, listing_id: listing.id,
-      seller_member_id: listing.seller_member_id, buyer_member_id: buyerMemberId,
+      seller_member_id: listing.seller_member_id,
+      seller_is_treasury: !!listing.seller_is_treasury,
+      buyer_member_id: buyerIsTreasury ? null : buyerMemberId,
+      buyer_is_treasury: buyerIsTreasury,
       shares: listing.shares, price: listing.shares * listing.price_per_share,
       status: 'pending',
     });
@@ -499,32 +534,95 @@ export const SaccoDashboardProvider = ({ children }) => {
     await Promise.all([fetchTransfers(), fetchListings()]);
   }, [saccoId, fetchTransfers, fetchListings]);
 
-  // Admin approval settles the transfer: move shares seller → buyer.
+  // House trades move the sacco's own cash, so settlement also posts share
+  // capital to the Finance Hub ledger (Dr Bank/Cr Share Capital on a sale,
+  // reversed on a buy-back). Best-effort: the books may not be seeded yet.
+  const postTreasuryJournal = useCallback(async (transfer) => {
+    const amount = Math.round(parseFloat(transfer.price || 0) * 100) / 100;
+    if (!(amount > 0) || !saccoId) return false;
+    const sale = !!transfer.seller_is_treasury;
+    const { error } = await supabase.rpc('sacco_post_journal', {
+      p_sacco_id: saccoId,
+      p_entry_date: new Date().toISOString().slice(0, 10),
+      p_description: sale ? 'Treasury share sale to member' : 'Treasury share buy-back from member',
+      p_lines: sale
+        ? [{ account_code: '1020', debit: amount, credit: 0 }, { account_code: '3010', debit: 0, credit: amount }]
+        : [{ account_code: '3010', debit: amount, credit: 0 }, { account_code: '1020', debit: 0, credit: amount }],
+      p_reference: `SHR-${String(transfer.id).slice(0, 8)}`,
+      p_member_id: sale ? transfer.buyer_member_id : transfer.seller_member_id,
+      p_source_table: 'sacco_share_transfers',
+      p_source_id: transfer.id,
+      p_is_automated: true,
+    });
+    return !error;
+  }, [saccoId]);
+
+  // Admin approval settles the transfer: move shares seller → buyer. Either
+  // side may be the house (treasury pool). Returns { ledgerPosted } so the UI
+  // can say whether a house trade reached the books.
   const approveTransfer = useCallback(async (transfer) => {
     const adminId = await getAdminId();
-    const sellerRow = shares.find((s) => s.member_id === transfer.seller_member_id);
-    const buyerRow  = shares.find((s) => s.member_id === transfer.buyer_member_id);
-    const par = parseFloat(sellerRow?.par_value || buyerRow?.par_value || 0);
+    const qty = parseInt(transfer.shares, 10) || 0;
+    const sellerRow = transfer.seller_is_treasury ? null : shares.find((s) => s.member_id === transfer.seller_member_id);
+    const buyerRow  = transfer.buyer_is_treasury  ? null : shares.find((s) => s.member_id === transfer.buyer_member_id);
+    const par = parseFloat(sellerRow?.par_value || buyerRow?.par_value || treasury?.par_value || 0);
+
+    if (transfer.seller_is_treasury || transfer.buyer_is_treasury) {
+      if (!treasury) throw new Error('Set up the treasury first (Treasury settings on the Shares tab).');
+      const pool = parseInt(treasury.treasury_shares, 10) || 0;
+      if (transfer.seller_is_treasury && pool < qty) {
+        throw new Error(`The treasury pool holds only ${pool} shares — cannot sell ${qty}.`);
+      }
+      const { error } = await supabase.from('sacco_share_treasury').update({
+        treasury_shares: transfer.seller_is_treasury ? pool - qty : pool + qty,
+        updated_at: new Date().toISOString(),
+      }).eq('id', treasury.id);
+      if (error) throw error;
+    }
 
     if (sellerRow) {
       await supabase.from('sacco_shares').update({
-        shares_held: Math.max(0, (parseInt(sellerRow.shares_held, 10) || 0) - transfer.shares),
+        shares_held: Math.max(0, (parseInt(sellerRow.shares_held, 10) || 0) - qty),
       }).eq('id', sellerRow.id);
     }
-    if (buyerRow) {
-      await supabase.from('sacco_shares').update({
-        shares_held: (parseInt(buyerRow.shares_held, 10) || 0) + transfer.shares,
-      }).eq('id', buyerRow.id);
-    } else {
-      await supabase.from('sacco_shares').insert({
-        admin_id: adminId, sacco_id: saccoId, member_id: transfer.buyer_member_id,
-        shares_held: transfer.shares, par_value: par,
-      });
+    if (!transfer.buyer_is_treasury) {
+      if (buyerRow) {
+        await supabase.from('sacco_shares').update({
+          shares_held: (parseInt(buyerRow.shares_held, 10) || 0) + qty,
+        }).eq('id', buyerRow.id);
+      } else {
+        await supabase.from('sacco_shares').insert({
+          admin_id: adminId, sacco_id: saccoId, member_id: transfer.buyer_member_id,
+          shares_held: qty, par_value: par,
+        });
+      }
     }
     await supabase.from('sacco_share_transfers').update({ status: 'settled', approved_by: adminId }).eq('id', transfer.id);
     if (transfer.listing_id) await supabase.from('sacco_share_listings').update({ status: 'settled' }).eq('id', transfer.listing_id);
-    await Promise.all([fetchShares(), fetchTransfers(), fetchListings()]);
-  }, [shares, saccoId, fetchShares, fetchTransfers, fetchListings]);
+
+    let ledgerPosted = false;
+    if (!!transfer.seller_is_treasury !== !!transfer.buyer_is_treasury) {
+      try { ledgerPosted = await postTreasuryJournal(transfer); } catch (_) {}
+    }
+    await Promise.all([fetchShares(), fetchTransfers(), fetchListings(), fetchTreasury()]);
+    return { ledgerPosted };
+  }, [shares, treasury, saccoId, postTreasuryJournal, fetchShares, fetchTransfers, fetchListings, fetchTreasury]);
+
+  // The house buys back a member's shares directly (admin-initiated, settles
+  // immediately — the admin is both initiator and approver).
+  const treasuryBuyBack = useCallback(async (form) => {
+    const adminId = await getAdminId();
+    const qty = parseInt(form.shares, 10) || 0;
+    const price = parseFloat(form.price_per_share) || 0;
+    const { data, error } = await supabase.from('sacco_share_transfers').insert({
+      admin_id: adminId, sacco_id: saccoId,
+      seller_member_id: form.seller_member_id, seller_is_treasury: false,
+      buyer_member_id: null, buyer_is_treasury: true,
+      shares: qty, price: qty * price, status: 'pending',
+    }).select().single();
+    if (error) throw error;
+    return approveTransfer(data);
+  }, [saccoId, approveTransfer]);
 
   // ── Voting lifecycle ────────────────────────────────────────────────────────
   const createMotion = useCallback(async (form) => {
@@ -874,7 +972,7 @@ export const SaccoDashboardProvider = ({ children }) => {
 
   const value = {
     sacco, members, contributions, contributionTypes, loanProducts, loans, schedules,
-    shares, sharePrices, listings, transfers, motions, votes, documents, invoices,
+    shares, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
     currentMarketValue, marketCap, totalSharesHeld,
     elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     stats, loading, connectionStatus,
@@ -886,6 +984,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     createContributionType, updateContributionType,
     createLoanProduct, createLoan, approveLoan, rejectLoan, recordRepayment,
     saveShares, setMarketValue, createListing, requestTransfer, approveTransfer,
+    saveTreasury, treasuryBuyBack,
     createMotion, secondMotion, openVoting, castVote, publishResults, notifyMotion,
     createElection, updateElection, deleteElection,
     addElectionPosition, updateElectionPosition, deleteElectionPosition,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
+import { openStoredFile } from '../../../lib/storageUrl';
 import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 
 const DOC_LABELS = {
@@ -502,6 +503,7 @@ const KYCReviewTab = ({ adminId }) => {
                             {doc.file_url && (
                               <a
                                 href={doc.file_url}
+                                onClick={(e) => { e.preventDefault(); openStoredFile(doc.file_url); }}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"

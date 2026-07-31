@@ -6,6 +6,7 @@ import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { auditLogsService } from '../../services/supabaseService';
 import { supabase } from '../../lib/supabase';
+import { openStoredFile } from '../../lib/storageUrl';
 
 const DOC_LABELS = {
   national_id_front:     'National ID Front',
@@ -291,7 +292,9 @@ const KycReviewPanel = ({ client, onClose, onStatusChange }) => {
                       {doc && (
                         <div className="flex items-center gap-1.5 flex-shrink-0">
                           {doc.file_url && (
-                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer"
+                            <a href={doc.file_url}
+                              onClick={(e) => { e.preventDefault(); openStoredFile(doc.file_url); }}
+                              target="_blank" rel="noopener noreferrer"
                               className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-muted transition-all"
                               title="View document">
                               <Icon name="Eye" size={14} color="currentColor" />

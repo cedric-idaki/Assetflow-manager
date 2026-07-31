@@ -10,17 +10,28 @@ import Icon from "../AppIcon";
 // Strokes are smoothed (quadratic midpoints) and mapped to the canvas's internal
 // resolution so the ink lands exactly under the pen at any display width.
 
-const FONTS = ["Dancing Script", "Pacifico", "Satisfy", "Caveat"];
-const INKS = [
+export const FONTS = ["Dancing Script", "Pacifico", "Satisfy", "Caveat"];
+export const INKS = [
   { id: "blue",   label: "Blue",   color: "#1d4ed8" },
   { id: "black",  label: "Black",  color: "#0f172a" },
   { id: "indigo", label: "Indigo", color: "#4338ca" },
 ];
-const NIBS = [
+export const NIBS = [
   { id: "fine",   label: "Fine",   w: 1.6 },
   { id: "medium", label: "Medium", w: 2.8 },
   { id: "bold",   label: "Bold",   w: 4.4 },
 ];
+
+// Inject the script-font stylesheet once (shared by every signing surface).
+let fontsInjected = false;
+export function ensureSignatureFonts() {
+  if (fontsInjected || typeof document === "undefined") return;
+  fontsInjected = true;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Pacifico&family=Satisfy&family=Caveat:wght@700&display=swap";
+  document.head.appendChild(link);
+}
 
 export default function SignatureCanvas({ onCapture }) {
   const canvasRef = useRef();
@@ -38,12 +49,7 @@ export default function SignatureCanvas({ onCapture }) {
   const inkRef = useRef(ink); inkRef.current = ink;
   const nibRef = useRef(nib); nibRef.current = nib;
 
-  useEffect(() => {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = "https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Pacifico&family=Satisfy&family=Caveat:wght@700&display=swap";
-    document.head.appendChild(link);
-  }, []);
+  useEffect(() => { ensureSignatureFonts(); }, []);
 
   // Map a pointer event to the canvas's INTERNAL pixel coordinates. The pad is
   // displayed at container width (CSS) but has a fixed backing resolution, so we

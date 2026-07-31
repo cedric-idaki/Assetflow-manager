@@ -18,6 +18,7 @@
  *            top-left origin) — the same convention as esign_fields.
  */
 import { loadPdfJs } from "./pdfjsLoader";
+import { resolveFileUrl } from "../lib/storageUrl";
 
 // Default normalized field sizes per detected type.
 const SIZE = {
@@ -128,7 +129,9 @@ function makeField(type, pageIndex, xPts, baselineY, pw, ph, { widthPts = null, 
 
 export async function detectSignableAreas(fileUrl, { maxSuggestions = 40 } = {}) {
   const pdfjsLib = await loadPdfJs();
-  const bytes = await fetch(fileUrl).then(r => {
+  const src = await resolveFileUrl(fileUrl);
+  if (!src) throw new Error('Could not fetch document');
+  const bytes = await fetch(src).then(r => {
     if (!r.ok) throw new Error(`Could not fetch document (${r.status})`);
     return r.arrayBuffer();
   });

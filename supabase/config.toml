@@ -48,6 +48,14 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/agent-followup-reminders/index.ts"
 
+# E-signature auto-reminders + link expiry. Invoked by the scheduler with the
+# service-role key (no user JWT), so verify_jwt must be false — same shape as
+# agent-followup-reminders. Run it every ~6 hours.
+[functions.esign-reminders]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/esign-reminders/index.ts"
+
 # Website → Ararat vehicle sync. Authenticated by a per-dealer API key in the
 # x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the caller
 # is the dealer's website, not a logged-in user. The function resolves the tenant
@@ -56,3 +64,12 @@ entrypoint = "./functions/agent-followup-reminders/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/ingest-assets/index.ts"
+
+# E-signature API & embedded signing. Authenticated by a per-tenant API key in
+# the x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the
+# caller is the client team's own server/app. The function resolves the tenant
+# from the key hash (esign_api_keys) and writes with the service-role key.
+[functions.esign-api]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/esign-api/index.ts"

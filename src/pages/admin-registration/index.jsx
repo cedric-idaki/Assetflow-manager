@@ -8,6 +8,7 @@ import { COMPANY_PLANS as PLANS, planForUsers, INSTALLATION_FEE } from '../../co
 import { tierForMembers, SACCO_TIERS, INSTALLATION_FEE as SACCO_INSTALLATION_FEE } from '../../config/saccoTiers';
 import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../config/kenyaCounties';
 import { getPasswordError } from '../../utils/validation';
+import { sendAdminRegistrationConfirmation } from '../../services/emailService';
 
 // Pricing is per user, per tier (KES / user / month). The number of users the
 // admin needs automatically selects the plan tier (which sets the free storage
@@ -227,10 +228,12 @@ const AdminRegistration = () => {
       // 3. Create the tenant record — a sacco lives in its own `saccos` table
       //    (backs the Sacco dashboard); a company keeps its company_profiles row.
       if (isSacco) {
-        // If this fails the DB self-heals on activation (a stub saccos row is
-        // created by the ensure_sacco_admin_tenant_row trigger), but the stub
-        // lacks the registration details — so at least make the failure visible.
-        const { error: saccoError } = await supabase.from('saccos').insert({
+        // UPSERT, not insert: ensure_sacco_admin_tenant_row already created a
+        // "<full name> Sacco" stub when the profile appeared at signup, and
+        // saccos is unique per admin_id — this lands the real registration
+        // details on that row instead of beside it (root cause of the
+        // dashboard greeting admins with their own name as the sacco name).
+        const { error: saccoError } = await supabase.from('saccos').upsert({
           admin_id: userId,
           name: company.companyName,
           // Left null for an unregistered sacco (both columns are nullable).
@@ -243,8 +246,8 @@ const AdminRegistration = () => {
           tier: saccoTier.id, // from the member count given on the plan step
           member_cap: userCount,
           kyc_status: 'pending',
-        });
-        if (saccoError) console.error('saccos insert failed during registration:', saccoError);
+        }, { onConflict: 'admin_id' });
+        if (saccoError) console.error('saccos upsert failed during registration:', saccoError);
       } else {
         await supabase.from('company_profiles').insert({
           admin_id: userId,
@@ -277,6 +280,26 @@ const AdminRegistration = () => {
         start_date: new Date().toISOString(),
         end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       });
+
+      // 5. Confirmation email to the admin — best-effort: registration must
+      //    never fail because the mail didn't go out.
+      try {
+        await sendAdminRegistrationConfirmation(account.email, {
+          adminName: account.fullName,
+          entityName: company.companyName,
+          entityType: isSacco ? 'sacco' : 'company',
+          planName: activePlan?.name || activePlan?.id,
+          seats: userCount,
+          regNumber: company.businessRegNumber || null,
+          sasraLicence: isSacco ? company.sasraLicence || null : null,
+          location: company.location,
+          city: company.city,
+          registeredOn: new Date().toISOString(),
+          portalUrl: `${window.location.origin}/login`,
+        });
+      } catch (mailErr) {
+        console.error('Registration confirmation email failed (non-fatal):', mailErr?.message);
+      }
 
       return userId;
     } catch (err) {

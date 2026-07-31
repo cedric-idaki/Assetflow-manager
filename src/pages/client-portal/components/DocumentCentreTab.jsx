@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { openStoredFile, resolveFileUrl } from '../../../lib/storageUrl';
 import Icon from '../../../components/AppIcon';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -9,6 +10,7 @@ const StatusBadge = ({ status }) => {
   const map = {
     signed:    'bg-emerald-100 text-emerald-700',
     completed: 'bg-emerald-100 text-emerald-700',
+    approved:  'bg-emerald-100 text-emerald-700',
     pending:   'bg-amber-100  text-amber-700',
     sent:      'bg-blue-100   text-blue-700',
     verified:  'bg-emerald-100 text-emerald-700',
@@ -87,19 +89,38 @@ const UploadModal = ({ clientId, adminId, onClose, onUploaded }) => {
 
   const handleUpload = async () => {
     if (!file) { setError('Please select a file'); return; }
-    if (file.size > 10 * 1024 * 1024) { setError('File must be under 10MB'); return; }
+    // The kyc-documents bucket caps objects at 5MB and only accepts PDF/JPG/PNG.
+    if (file.size > 5 * 1024 * 1024) { setError('File must be under 5MB'); return; }
     setUploading(true);
     setError('');
     try {
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData?.user;
+      if (!user) throw new Error('Your session has expired. Please sign in again.');
+
+      const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath  = `${clientId}/${docType}_${Date.now()}_${cleanName}`;
+
+      const { error: upErr } = await supabase.storage
+        .from('kyc-documents')
+        .upload(filePath, file, { cacheControl: '3600', upsert: true });
+      if (upErr) throw upErr;
+
+      // Private bucket: the stored URL is re-signed at read time (storageUrl.js).
+      const { data: urlData } = supabase.storage
+        .from('kyc-documents')
+        .getPublicUrl(filePath);
+
       const { error: dbErr } = await supabase
         .from('kyc_documents')
         .insert({
           client_id:     clientId,
           admin_id:      adminId,
           document_type: docType,
-          status:        'uploaded',
-          expiry_date:   '2099-12-31',
-          document_side: 'front',
+          file_url:      urlData?.publicUrl || filePath,
+          file_name:     file.name,
+          status:        'pending',
+          uploaded_by:   user.id,
         });
       if (dbErr) throw dbErr;
       onUploaded();
@@ -135,7 +156,7 @@ const UploadModal = ({ clientId, adminId, onClose, onUploaded }) => {
               onClick={() => fileRef.current?.click()}
               className="border-2 border-dashed border-border rounded-xl p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all">
               <input ref={fileRef} type="file" className="hidden"
-                accept=".pdf,.jpg,.jpeg,.png,.heic,.docx"
+                accept=".pdf,.jpg,.jpeg,.png"
                 onChange={e => setFile(e.target.files?.[0] || null)} />
               {file ? (
                 <div>
@@ -147,7 +168,7 @@ const UploadModal = ({ clientId, adminId, onClose, onUploaded }) => {
                 <div>
                   <Icon name="Upload" size={24} color="var(--muted-foreground)" />
                   <p className="text-sm text-muted-foreground mt-2">Click to select file</p>
-                  <p className="text-xs text-muted-foreground">PDF, JPG, PNG, DOCX — Max 10MB</p>
+                  <p className="text-xs text-muted-foreground">PDF, JPG, PNG — Max 5MB</p>
                 </div>
               )}
             </div>
@@ -203,7 +224,7 @@ const DocumentCentreTab = ({ clientProfile }) => {
 
         supabase
           .from('kyc_documents')
-          .select('id, document_type, document_side, status, created_at, rejection_reason')
+          .select('id, document_type, file_url, file_name, status, created_at, reviewer_notes')
           .eq('client_id', clientId)
           .order('created_at', { ascending: false }),
       ]);
@@ -220,10 +241,14 @@ const DocumentCentreTab = ({ clientProfile }) => {
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
-  const handleDownload = (url, name) => {
+  const handleDownload = async (url, name) => {
     if (!url) { alert('Document file not available for download.'); return; }
+    // Documents live in private buckets, so the stored URL has to be signed for
+    // this session before it will resolve.
+    const signed = await resolveFileUrl(url);
+    if (!signed) { alert('Document file not available for download.'); return; }
     const a = document.createElement('a');
-    a.href = url;
+    a.href = signed;
     a.download = name || 'document';
     a.target = '_blank';
     a.click();
@@ -310,7 +335,7 @@ const DocumentCentreTab = ({ clientProfile }) => {
               date={c.signed_at || c.generated_at}
               status={c.esign_status || 'pending'}
               tag="Hire Purchase"
-              onView={c.file_url ? () => window.open(c.file_url, '_blank') : null}
+              onView={c.file_url ? () => openStoredFile(c.file_url) : null}
               onDownload={c.esign_status === 'signed' && c.file_url ? () => handleDownload(c.file_url, `Contract-${c.invoice_number}`) : null}
             />
           ))}
@@ -331,7 +356,7 @@ const DocumentCentreTab = ({ clientProfile }) => {
               subtitle={d.contract_type || '—'}
               date={d.signed_at || d.created_at}
               status={d.status || 'pending'}
-              onView={d.file_url ? () => window.open(d.file_url, '_blank') : null}
+              onView={d.file_url ? () => openStoredFile(d.file_url) : null}
               onDownload={d.file_url ? () => handleDownload(d.file_url, d.contract_name) : null}
             />
           ))}
@@ -361,12 +386,12 @@ const DocumentCentreTab = ({ clientProfile }) => {
               key={d.id}
               icon="Shield"
               title={d.document_type?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'KYC Document'}
-              subtitle={d.document_side ? `Side: ${d.document_side}` : undefined}
+              subtitle={d.status === 'rejected' && d.reviewer_notes ? `Reason: ${d.reviewer_notes}` : (d.file_name || undefined)}
               date={d.created_at}
-              status={d.status || 'uploaded'}
+              status={d.status || 'pending'}
               tag="KYC"
-              onView={null}
-              onDownload={null}
+              onView={d.file_url ? () => openStoredFile(d.file_url) : null}
+              onDownload={d.file_url ? () => handleDownload(d.file_url, d.file_name || d.document_type) : null}
             />
           ))}
 

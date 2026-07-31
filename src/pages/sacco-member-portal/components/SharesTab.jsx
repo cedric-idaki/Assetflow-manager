@@ -118,7 +118,7 @@ const SharesTab = ({ ctx }) => {
 
       <Card
         title="Marketplace"
-        subtitle="Shares offered by other members — purchases settle after administrator approval"
+        subtitle="Shares offered by fellow members and by the SACCO itself — purchases settle after administrator approval"
         actions={<PrimaryButton icon="Store" onClick={openSell} disabled={held - listedShares() <= 0}>Sell my shares</PrimaryButton>}
       >
         {marketListings.length === 0 ? (
@@ -127,7 +127,11 @@ const SharesTab = ({ ctx }) => {
           <Table columns={['Seller', 'Shares', 'Price / share', 'Total', 'Expires', '']}>
             {marketListings.map((l) => (
               <tr key={l.id} className="border-b border-border/60">
-                <td className="py-2.5 pr-4 text-foreground">{l.seller?.full_name || '—'}</td>
+                <td className="py-2.5 pr-4 text-foreground">
+                  {l.seller_is_treasury
+                    ? <span className="font-medium text-primary">SACCO Treasury (the house)</span>
+                    : (l.seller?.full_name || '—')}
+                </td>
                 <td className="py-2.5 pr-4 text-foreground">{l.shares}</td>
                 <td className="py-2.5 pr-4 text-foreground">{KES(l.price_per_share)}</td>
                 <td className="py-2.5 pr-4 font-medium text-foreground">{KES(l.shares * l.price_per_share)}</td>
@@ -239,7 +243,7 @@ const SharesTab = ({ ctx }) => {
       >
         {buying && (
           <p className="text-sm text-foreground">
-            Buy <strong>{buying.shares}</strong> shares from <strong>{buying.seller?.full_name || 'a member'}</strong> at{' '}
+            Buy <strong>{buying.shares}</strong> shares from <strong>{buying.seller_is_treasury ? 'the SACCO (treasury)' : (buying.seller?.full_name || 'a member')}</strong> at{' '}
             <strong>{KES(buying.price_per_share)}</strong> per share — total <strong>{KES(buying.shares * buying.price_per_share)}</strong>.
             The transfer completes once the administrator approves it.
           </p>

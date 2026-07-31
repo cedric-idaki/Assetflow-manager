@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
+import { openStoredFile } from '../../../lib/storageUrl';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 import { generateSchedule, AMORTIZATION_METHODS } from '../../../utils/saccoAmortization';
@@ -176,7 +177,7 @@ const ContractCard = ({ contract, onSendForSignature }) => (
       {contract.created_at ? new Date(contract.created_at).toLocaleDateString('en-GB') : '—'}
     </p>
     <div className="mt-3 pt-3 border-t border-border flex items-center gap-2">
-      <button onClick={() => contract.file_url && window.open(contract.file_url, '_blank')}
+      <button onClick={() => contract.file_url && openStoredFile(contract.file_url)}
         disabled={!contract.file_url}
         className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40"
         style={{ background: 'rgba(52,193,221,0.12)', color: '#0e7f97' }}>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
+import { openStoredFile } from '../../../lib/storageUrl';
 
 const KYC_DOCUMENTS = [
   { type: 'national_id_front',     label: 'National ID Front',     required: true },
@@ -268,6 +269,7 @@ const KYCTab = ({ clientProfile, onUploaded }) => {
                   {existing && existing.file_url && existing.status !== 'rejected' && (
                     <a
                       href={existing.file_url}
+                      onClick={(e) => { e.preventDefault(); openStoredFile(existing.file_url); }}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"

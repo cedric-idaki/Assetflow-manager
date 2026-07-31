@@ -288,10 +288,13 @@ export const SaccoMemberProvider = ({ children }) => {
   }, [fetchListings]);
 
   // Buyer expression of interest (BRS 5.3.2 step 3) — settlement is admin-side.
+  // The seller may be the house (treasury listing) — carry the flag through.
   const buyListing = useCallback(async (listing) => {
     const { error } = await supabase.from('sacco_share_transfers').insert({
       admin_id: me?.admin_id, sacco_id: me?.sacco_id, listing_id: listing.id,
-      seller_member_id: listing.seller_member_id, buyer_member_id: me?.id,
+      seller_member_id: listing.seller_member_id,
+      seller_is_treasury: !!listing.seller_is_treasury,
+      buyer_member_id: me?.id,
       shares: listing.shares, price: listing.shares * listing.price_per_share,
       status: 'pending',
     });

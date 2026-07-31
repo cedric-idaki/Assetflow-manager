@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "../../lib/supabase";
+import { openStoredFile } from "../../lib/storageUrl";
+import { useSignedUrl } from "../../hooks/useSignedUrl";
 import MainLayout from "../../layouts/MainLayout";
 import ClosePageButton from "../../components/ui/ClosePageButton";
 import Icon from "../../components/AppIcon";
@@ -7,9 +9,12 @@ import SignatureCanvas from "../../components/esign/SignatureCanvas";
 import FieldEditor from "../../components/esign/FieldEditor";
 import FieldFiller from "../../components/esign/FieldFiller";
 import WalkInSigning from "../../components/esign/WalkInSigning";
+import ApiEmbedPanel from "../../components/esign/ApiEmbedPanel";
+import TemplatesPanel from "../../components/esign/TemplatesPanel";
 import { applySignatureToPDF, applyFieldsToPDF } from "../../utils/applySignatureToPDF";
 import { detectSignableAreas } from "../../utils/detectSignableAreas";
 import { sendSigningOtp, sendSignatureAlert, sendSigningInvite } from "../../services/emailService";
+import { sendSigningLinkSMS } from "../../services/smsService";
 
 // ── Audit event display mapping ─────────────────────────────────────────────────
 const AUDIT_ACTION_LABEL = {
@@ -21,11 +26,14 @@ const AUDIT_ACTION_LABEL = {
   security: "Security Event",
   revoked: "Signing Request Revoked",
   reminder: "Reminder Sent",
+  consent: "E-Sign Consent Captured",
+  expired: "Signing Link Expired",
 };
 const AUDIT_STATUS_MAP = {
   created: "complete", sent: "complete", viewed: "view",
   signed: "signed", completed: "final", security: "view",
-  revoked: "complete", reminder: "complete",
+  revoked: "complete", reminder: "complete", consent: "complete",
+  expired: "view",
 };
 // Map an esign_audit_events row → the shape the timeline UI renders.
 const mapAuditRow = (r) => ({
@@ -71,6 +79,21 @@ const genSignToken = () =>
     : Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 const isPdfUrl = (u) => !!u && /\.pdf(\?|$)/i.test(u);
+
+// esign-documents and contracts are private buckets, so an <iframe> pointed at a
+// stored URL gets a 404 — it has to be signed for the current session first.
+const SignedDocFrame = ({ url, title, className }) => {
+  const { url: signed, loading } = useSignedUrl(url);
+  if (loading) return <div className={className} />;
+  if (!signed) {
+    return (
+      <div className={`${className} flex items-center justify-center`}>
+        <p className="text-xs text-muted-foreground">This document is no longer available.</p>
+      </div>
+    );
+  }
+  return <iframe title={title} src={signed} className={className} />;
+};
 const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || "").trim());
 
 // Per-signatory colours — kept in step with esign/FieldEditor's SIGNER_COLORS so
@@ -235,6 +258,17 @@ function Dashboard({ docs, setActive, setSelectedDoc }) {
   const total = docs.length;
   const recentDocs = docs.filter(d => d.status !== "draft").slice(0, 5);
 
+  // Per-client rollup: pending vs signed documents, most-pending first — the
+  // at-a-glance answer to "which client still owes us a signature?"
+  const byClient = Object.values(docs.reduce((acc, d) => {
+    if (!d.client || d.status === "draft") return acc;
+    const k = d.client;
+    if (!acc[k]) acc[k] = { client: k, pending: 0, signed: 0 };
+    if (d.status === "signed" || d.status === "completed") acc[k].signed++;
+    else acc[k].pending++;
+    return acc;
+  }, {})).sort((a, b) => b.pending - a.pending || b.signed - a.signed).slice(0, 6);
+
   return (
     <div className="space-y-5">
       {/* KPI Cards */}
@@ -309,6 +343,30 @@ function Dashboard({ docs, setActive, setSelectedDoc }) {
                 </div>
               );
             })}
+          </div>
+
+          {/* Per-client status */}
+          <div className="bg-card border border-border rounded-xl p-5">
+            <h3 className="text-base font-semibold text-foreground mb-3">By Client</h3>
+            {byClient.length === 0 && (
+              <p className="text-xs text-muted-foreground">No sent documents yet.</p>
+            )}
+            {byClient.map(c => (
+              <div key={c.client} className="flex items-center gap-2.5 mb-2.5 last:mb-0">
+                <Avatar initials={(c.client || "CL").slice(0, 2).toUpperCase()} size={26} />
+                <span className="flex-1 min-w-0 text-xs font-medium text-foreground truncate">{c.client}</span>
+                {c.pending > 0 && (
+                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-500/10 rounded-full px-2 py-0.5">
+                    {c.pending} pending
+                  </span>
+                )}
+                {c.signed > 0 && (
+                  <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-500/10 rounded-full px-2 py-0.5">
+                    {c.signed} signed
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
 
           {/* Quick Actions */}
@@ -437,7 +495,7 @@ function Documents({ docs, setDocs, setActive, adminId }) {
               {doc.status === "pending" && <button onClick={() => handleAction(doc,"sign")} className="px-2.5 py-1 bg-primary text-primary-foreground rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors">Sign</button>}
               {(doc.status === "completed" || doc.status === "signed") && <button onClick={() => handleAction(doc,"audit")} className="px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-200 transition-colors">Audit</button>}
               {doc.status === "expired" && <button onClick={() => handleAction(doc,"resend")} className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-semibold hover:bg-amber-200 transition-colors">Resend</button>}
-              {doc.file_url && <button onClick={() => window.open(doc.file_url, "_blank")} className="px-2.5 py-1 bg-muted text-muted-foreground rounded-lg text-xs font-semibold hover:bg-muted/80 transition-colors">View</button>}
+              {doc.file_url && <button onClick={() => openStoredFile(doc.file_url)} className="px-2.5 py-1 bg-muted text-muted-foreground rounded-lg text-xs font-semibold hover:bg-muted/80 transition-colors">View</button>}
             </div>
           </div>
         ))}
@@ -547,7 +605,7 @@ function SignDocument({ docs, onStartSigning }) {
 function Upload({ setActive, adminId, onUploaded }) {
   const [dragOver, setDragOver] = useState(false);
   const [file, setFile] = useState(null);
-  const [signers, setSigners] = useState([{ name: "", email: "", role: "Signer" }]);
+  const [signers, setSigners] = useState([{ name: "", email: "", phone: "", role: "Signer" }]);
   const [order, setOrder] = useState("sequential");
   const [message, setMessage] = useState("");
   const [stage, setStage] = useState("setup"); // setup | fields | sent
@@ -612,12 +670,14 @@ function Upload({ setActive, adminId, onUploaded }) {
         source_type: "esign_doc",
         name: s.name.trim() || s.email.split("@")[0],
         email: s.email.trim(),
+        phone: s.phone?.trim() || null,
         role: s.role,
         signing_order: order === "sequential" ? i : 0,
         status: "pending",
         token: genSignToken(),
         token_expires_at: expires,
-      }))).select("id, name, email, role, token");
+        link_base: window.location.origin,
+      }))).select("id, name, email, phone, role, token");
       if (sErr) throw new Error(sErr.message);
 
       await recordAudit(adminId, {
@@ -654,6 +714,7 @@ function Upload({ setActive, adminId, onUploaded }) {
           pos_x: f.pos_x, pos_y: f.pos_y, width: f.width, height: f.height,
           required: f.required !== false,
           mask: f.mask === true,
+          options: Array.isArray(f.options) ? f.options.map(o => String(o).trim()).filter(Boolean) : [],
         })));
         if (fErr) throw new Error(fErr.message);
       }
@@ -671,13 +732,25 @@ function Upload({ setActive, adminId, onUploaded }) {
         detail: `${meta.name} · ${meta.signerRows.length} signer(s) invited`, contractId: meta.docId,
       });
 
+      // Sequential order only invites the FIRST signer now — esign-public
+      // advances the chain and invites the next signer as each one signs.
       const base = window.location.origin;
-      await Promise.all(meta.signerRows.filter(r => r.token).map(r =>
-        sendSigningInvite(r.email, {
-          signerName: r.name, documentName: meta.name,
-          link: `${base}/sign/${r.token}`, message, expiresAt: meta.expires,
-        }).catch(e => console.warn("invite email failed:", e.message))
-      ));
+      const external = meta.signerRows.filter(r => r.token);
+      const toInvite = order === "sequential" ? external.slice(0, 1) : external;
+      await Promise.all(toInvite.map(r => {
+        const link = `${base}/sign/${r.token}`;
+        const jobs = [
+          sendSigningInvite(r.email, {
+            signerName: r.name, documentName: meta.name,
+            link, message, expiresAt: meta.expires,
+          }).catch(e => console.warn("invite email failed:", e.message)),
+        ];
+        if (r.phone) {
+          jobs.push(sendSigningLinkSMS(r.phone, { signerName: r.name, documentName: meta.name, link })
+            .catch(e => console.warn("invite SMS failed:", e.message)));
+        }
+        return Promise.all(jobs);
+      }));
 
       if (onUploaded) await onUploaded();
       setStage("sent");
@@ -703,7 +776,7 @@ function Upload({ setActive, adminId, onUploaded }) {
           <Icon name="Send" size={28} color="#059669" />
         </div>
         <h2 className="text-2xl font-bold text-foreground mb-2">Document Sent!</h2>
-        <p className="text-sm text-muted-foreground mb-6">Secure signing links have been dispatched to all signers. You'll be notified when each party signs.</p>
+        <p className="text-sm text-muted-foreground mb-6">Secure signing links are on their way — by email, and by SMS where a phone number was provided. In sequential order each signer is invited automatically when the previous one finishes. You'll be notified when each party signs.</p>
         <div className="flex gap-3 justify-center">
           <button onClick={() => { setStage("setup"); setFile(null); setSigners([{ name: "", email: "", role: "Signer" }]); setDocMeta(null); setMessage(""); }}
             className="px-4 py-2 border border-border rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
@@ -804,6 +877,9 @@ function Upload({ setActive, adminId, onUploaded }) {
                   placeholder={`signer${i+1}@example.com`}
                   className={`w-full px-3 py-2 text-sm border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 mb-1 ${invalid ? "border-red-300 focus:ring-red-200" : "border-border focus:ring-primary/30"}`} />
                 {invalid && <p className="text-[11px] text-red-500 mb-1">Enter a valid email address.</p>}
+                <input value={s.phone || ""} onChange={e => setS(i, "phone", e.target.value)} type="tel"
+                  placeholder="+2547… (optional — SMS link + SMS code)"
+                  className="w-full px-3 py-2 text-sm border border-border rounded-xl bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 mb-1" />
                 <select value={s.role} onChange={e => setS(i, "role", e.target.value)}
                   className="w-full px-3 py-2 text-xs border border-border rounded-xl bg-background text-muted-foreground focus:outline-none mt-0.5">
                   {["Signer","Approver","Witness","Final Authority"].map(r => <option key={r}>{r}</option>)}
@@ -1050,6 +1126,7 @@ export default function ESignaturePage() {
       { name: "Authorized Officer", initials: "AO", signed: ["signed","completed","settled"].includes(c.esign_status), role: "Vendor" },
     ],
     sent: c.generated_at, due: null, external: false, file_url: c.file_url, _raw: c,
+    client: c.client_name || c.client?.full_name || "Client",
   }));
 
   // Uploaded contracts (company_contracts, non-template) → doc shape. These are
@@ -1070,6 +1147,7 @@ export default function ESignaturePage() {
         }))
       : [{ name: c.client?.full_name || "Client", initials: (c.client?.full_name || "CL").slice(0,2).toUpperCase(), signed: ["signed","completed"].includes(c.esign_status), role: "Signer" }],
     sent: c.created_at, due: c.expires_at, external: false, file_url: c.file_url, _raw: c,
+    client: c.client?.full_name || c.esign_signers?.[0]?.name || c.esign_signers?.[0]?.email || null,
   }));
 
   // Uploaded-for-signature documents (esign_documents) → doc shape.
@@ -1088,6 +1166,7 @@ export default function ESignaturePage() {
       role: s.role,
     })),
     sent: d.created_at, due: d.expires_at, external: true, file_url: d.file_url,
+    client: d.esign_signers?.[0]?.name || d.esign_signers?.[0]?.email || null,
   }));
 
   const docs = [...dbDocs, ...companyDocs, ...uploadedDocs];
@@ -1115,6 +1194,29 @@ export default function ESignaturePage() {
     };
     boot();
   }, []);
+
+  // ── Live status (Supabase Realtime): the esign tables are in the
+  // supabase_realtime publication, so status flips (viewed/signed/expired,
+  // reminders, notifications) land here without a manual refresh. Changes come
+  // in bursts (signer + parent + notification), so refetches are debounced.
+  useEffect(() => {
+    if (!adminId) return;
+    let timer = null;
+    const refresh = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        fetchContracts(adminId); fetchCompanyContracts(adminId);
+        fetchEsignDocs(adminId); loadNotifications(adminId);
+      }, 400);
+    };
+    const ch = supabase
+      .channel(`esign-live-${adminId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "esign_signers", filter: `admin_id=eq.${adminId}` }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "esign_documents", filter: `admin_id=eq.${adminId}` }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "esign_notifications", filter: `admin_id=eq.${adminId}` }, refresh)
+      .subscribe();
+    return () => { clearTimeout(timer); supabase.removeChannel(ch); };
+  }, [adminId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchContracts = async (aId) => {
     if (!aId) return;
@@ -1458,7 +1560,9 @@ export default function ESignaturePage() {
     { id: "documents", icon: "FileText",        label: "All Documents" },
     { id: "sign",      icon: "PenTool",         label: "Sign a Document" },
     { id: "upload",    icon: "Upload",          label: "New Document" },
+    { id: "templates", icon: "Copy",            label: "Templates" },
     { id: "audit",     icon: "Search",          label: "Audit Trail" },
+    { id: "api",       icon: "Code",            label: "API & Embed" },
   ];
 
   const stats = {
@@ -1562,14 +1666,16 @@ export default function ESignaturePage() {
                             <Icon name="FileText" size={15} color="currentColor" /> Review Document
                           </h3>
                           {selectedContract.file_url && (
-                            <a href={selectedContract.file_url} target="_blank" rel="noopener noreferrer"
+                            <a href={selectedContract.file_url}
+                              onClick={(e) => { e.preventDefault(); openStoredFile(selectedContract.file_url); }}
+                              target="_blank" rel="noopener noreferrer"
                               className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
                               <Icon name="ExternalLink" size={12} color="currentColor" /> Open in new tab
                             </a>
                           )}
                         </div>
                         {selectedContract.file_url ? (
-                          <iframe title="Contract document" src={selectedContract.file_url}
+                          <SignedDocFrame url={selectedContract.file_url} title="Contract document"
                             className="w-full h-[420px] bg-muted/20" />
                         ) : (
                           <div className="px-5 py-10 text-center">
@@ -1609,6 +1715,8 @@ export default function ESignaturePage() {
           )}
           {active === "upload"        && <Upload setActive={setActive} adminId={adminId} onUploaded={() => fetchEsignDocs(adminId)} />}
           {active === "audit"         && <AuditPage docs={docs} adminId={adminId} />}
+          {active === "templates"     && <TemplatesPanel adminId={adminId} onSent={() => fetchEsignDocs(adminId)} />}
+          {active === "api"           && <ApiEmbedPanel adminId={adminId} currentUser={currentUser} />}
           {active === "notifications" && <NotificationsPage notifs={notifs} setNotifs={setNotifs} onMarkRead={markNotificationsRead} />}
           {active === "settings"      && <Settings currentUser={currentUser} />}
         </div>

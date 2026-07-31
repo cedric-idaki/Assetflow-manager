@@ -419,6 +419,62 @@ const buildMemberCredentialsEmail = (data: any) => {
 </body></html>`;
 };
 
+const buildRegistrationConfirmationEmail = (data: any) => {
+  const {
+    adminName, entityName, entityType, planName, seats,
+    regNumber, sasraLicence, location, city, registeredOn, portalUrl,
+  } = data;
+  const isSacco = entityType === "sacco";
+  const entityLabel = isSacco ? "Sacco" : "Company";
+  const seatsLabel = isSacco ? "Members" : "Users";
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🎉</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${entityLabel} Registered</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${entityName || `Your ${entityLabel.toLowerCase()}`} is now on Ararat Management</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${adminName || "Administrator"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      This confirms that you have successfully registered
+      <strong>${entityName || `your ${entityLabel.toLowerCase()}`}</strong> on Ararat Management
+      and your ${isSacco ? "sacco admin" : "admin"} account has been created.
+    </p>
+    <h3 style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 12px">Registration Summary</h3>
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">${entityLabel} Name</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${entityName || "—"}</td></tr>
+        ${regNumber ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Registration No.</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${regNumber}</td></tr>` : ""}
+        ${sasraLicence ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">SASRA Licence</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${sasraLicence}</td></tr>` : ""}
+        ${planName ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">${isSacco ? "Tier" : "Plan"}</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right;text-transform:capitalize">${planName}</td></tr>` : ""}
+        ${seats ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">${seatsLabel}</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${seats}</td></tr>` : ""}
+        ${location || city ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Location</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${[location, city].filter(Boolean).join(", ")}</td></tr>` : ""}
+        <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Registered On</td><td style="padding:8px 0;color:#111827;font-size:14px;font-weight:700;text-align:right">${registeredOn ? formatDate(registeredOn) : formatDate(new Date().toISOString())}</td></tr>
+      </table>
+    </div>
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;margin-bottom:24px">
+      <p style="margin:0;font-size:13px;color:#1e40af;line-height:1.6">
+        <strong>What happens next?</strong> Your dashboard is activated once your subscription payment
+        is confirmed. After that, sign in to set up your ${isSacco ? "members, contributions and loans" : "team, clients and assets"}.
+      </p>
+    </div>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Sign in to your dashboard</a>
+    </div>` : ""}
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#6b7280">This is an automated confirmation from <strong>Ararat Management</strong>. If you did not register this ${entityLabel.toLowerCase()}, please contact support immediately.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 const buildElectionNominationsOpenEmail = (data: any) => {
   const { fullName, saccoName, electionTitle, positions, portalUrl } = data;
   const positionItems = (positions || []).map((p: any) =>
@@ -775,6 +831,42 @@ const buildSigningInviteEmail = (data: any) => {
 </body></html>`;
 };
 
+// E-signature reminder. Sent by the esign-reminders worker to a signer whose
+// one-time link is still unused — same secure link, gentler nudge framing.
+const buildSigningReminderEmail = (data: any) => {
+  const { signerName, documentName, link, expiresAt, reminderNumber } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🔔</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Still waiting for your signature</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">A friendly reminder${reminderNumber ? ` (reminder ${reminderNumber})` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${signerName || "there"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      ${documentName ? `<strong>${documentName}</strong> is` : "A document is"} still waiting for your signature.
+      It only takes a minute — open the secure link below and you'll confirm your identity with a one-time code before signing.
+    </p>
+    <div style="text-align:center;margin-bottom:24px">
+      <a href="${link}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Review &amp; Sign Document</a>
+    </div>
+    <p style="margin:0 0 20px;font-size:12px;color:#9ca3af;text-align:center;word-break:break-all">
+      Or paste this link into your browser:<br>${link}
+    </p>
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#92400e">This is a one-time link${expiresAt ? ` and expires on ${formatDate(expiresAt)}` : ""}. After that the sender will need to issue a new request.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 // Sales-agent follow-up reminder. Sent by the agent-followup-reminders worker
 // when a scheduled follow-up comes due, and addressed to the AGENT (not the
 // lead) — it is the agent's own diary nudge.
@@ -971,6 +1063,10 @@ serve(async (req) => {
         subject = `Your ${data?.saccoName ? `${data.saccoName} ` : ""}member portal login`;
         html = buildMemberCredentialsEmail(data);
         break;
+      case "admin_registration_confirmation":
+        subject = `🎉 ${data?.entityName || (data?.entityType === "sacco" ? "Your sacco" : "Your company")} is registered on Ararat`;
+        html = buildRegistrationConfirmationEmail(data);
+        break;
       case "sacco_election_nominations_open":
         subject = `Nominations open – ${data?.electionTitle || "sacco election"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
         html = buildElectionNominationsOpenEmail(data);
@@ -1016,6 +1112,10 @@ serve(async (req) => {
       case "signing_invite":
         subject = `Signature requested${data?.documentName ? `: ${data.documentName}` : ""}`;
         html = buildSigningInviteEmail(data);
+        break;
+      case "signing_reminder":
+        subject = `🔔 Reminder: signature still needed${data?.documentName ? ` – ${data.documentName}` : ""}`;
+        html = buildSigningReminderEmail(data);
         break;
       case "assist_request":
         subject = `🛟 ${data?.bronzeName || "An agent"} needs help onboarding ${data?.adminName || "an admin"}`;

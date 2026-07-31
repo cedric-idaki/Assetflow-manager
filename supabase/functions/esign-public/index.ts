@@ -6,8 +6,18 @@
 // actions, keeping signing tokens server-side instead of weakening RLS.
 //
 //   POST { action: "lookup",          token }
-//   POST { action: "send-otp",        token }
-//   POST { action: "verify-and-sign", token, code, signature:{type,data,font?}, ip?, device? }
+//   POST { action: "send-otp",        token, channel? ("sms"|"email") }
+//   POST { action: "verify-and-sign", token, code, consent:true, signature:{type,data,font?}, ip?, device? }
+//
+// Hardening (2026-07-27):
+//   * lookup flips the signer to "viewed" and reports sequential-order locks.
+//   * OTP can be delivered by SMS (Twilio via send-sms) when the signer has a
+//     phone on file; email remains the fallback.
+//   * verify-and-sign requires explicit e-sign consent (stored + audited).
+//   * Sequential signing order is enforced server-side, and the next signer in
+//     a sequential chain is invited automatically when their turn arrives.
+//   * After sealing, the SHA-256 of the final PDF bytes is stored on the parent
+//     (final_pdf_hash) so any later tampering is provable.
 //
 // @ts-nocheck — Deno runtime globals are not known to the app's TS config.
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
@@ -37,6 +47,52 @@ async function hashOtp(token: string, code: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// A six-digit code from the CSPRNG. Math.random() is V8's xorshift128+, whose
+// internal state is recoverable from prior outputs — not a basis for a
+// credential that authorises a legally binding signature. Rejection sampling
+// keeps the distribution uniform rather than biasing the low digits via modulo.
+function generateOtp(): string {
+  const buf = new Uint32Array(1);
+  let n: number;
+  do {
+    crypto.getRandomValues(buf);
+    n = buf[0];
+  } while (n >= 4294000000);           // largest multiple of 900000 below 2^32
+  return String(100000 + (n % 900000));
+}
+
+// How many wrong codes a signing link tolerates before its OTP is burned. The
+// counter resets when a fresh code is issued.
+const MAX_OTP_ATTEMPTS = 5;
+
+// How many codes one signing link may ever request. Generous for a real signer
+// who mistypes or loses an email; the binding limit for an attacker, since it
+// caps total guesses per link at MAX_OTP_ATTEMPTS × MAX_OTP_SENDS.
+const MAX_OTP_SENDS = 10;
+
+// The document buckets went private in 20260731091000, so a stored file_url is a
+// permanent reference rather than a fetchable link. Resolve it to a short-lived
+// signed URL before handing it to an external signer (who has no session at all)
+// or fetching it to seal.
+const PRIVATE_BUCKETS = new Set(["esign-documents", "contracts", "kyc-documents", "employee-documents"]);
+
+function parseStorageRef(value: string) {
+  if (!value) return null;
+  const m = String(value).match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/([^/]+)\/([^?]+)/);
+  if (!m) return null;
+  let path = m[2];
+  try { path = decodeURIComponent(path); } catch { /* keep raw */ }
+  return { bucket: m[1], path };
+}
+
+async function signStoredUrl(value: string, expiresIn = 3600): Promise<string | null> {
+  const ref = parseStorageRef(value);
+  if (!ref || !PRIVATE_BUCKETS.has(ref.bucket)) return value || null;
+  const { data, error } = await admin.storage.from(ref.bucket).createSignedUrl(ref.path, expiresIn);
+  if (error) { console.warn("signStoredUrl failed:", error.message); return null; }
+  return data?.signedUrl ?? null;
+}
+
 // Resolve the parent document (name + file_url) for a signer row.
 async function resolveDocument(signer: any): Promise<{ name: string; file_url: string | null }> {
   const src = signer.source_type || "generated";
@@ -59,8 +115,48 @@ async function getSigner(token: string) {
   const { data } = await admin.from("esign_signers").select("*").eq("token", token).limit(1).single();
   if (!data) return null;
   if (data.status === "signed") return { row: data, expired: false, signed: true };
-  const expired = data.token_expires_at ? new Date(data.token_expires_at) < new Date() : false;
+  const expired = data.status === "expired" ||
+    (data.token_expires_at ? new Date(data.token_expires_at) < new Date() : false);
   return { row: data, expired, signed: false };
+}
+
+// The canonical consent statement stored against every electronic signature.
+const CONSENT_TEXT =
+  "I agree to conduct business electronically and to sign this document electronically.";
+
+const maskPhone = (p: string) => (p && p.length > 3 ? `•••${p.slice(-3)}` : "•••");
+
+// Earlier signers in a sequential chain who haven't signed yet. Parallel sends
+// give every signer order 0, so this never blocks them.
+async function blockingSigner(signer: any): Promise<any | null> {
+  if (!signer.signing_order || signer.signing_order <= 0) return null;
+  const linkCol = (signer.source_type || "generated") === "esign_doc" ? "esign_document_id" : "contract_id";
+  const linkVal = linkCol === "esign_document_id" ? signer.esign_document_id : signer.contract_id;
+  const { data } = await admin.from("esign_signers")
+    .select("id, name, email, status, signing_order")
+    .eq(linkCol, linkVal).eq("source_type", signer.source_type || "generated")
+    .lt("signing_order", signer.signing_order)
+    .neq("status", "signed")
+    .order("signing_order", { ascending: true }).limit(1);
+  return data?.[0] || null;
+}
+
+async function callSms(to: string, message: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/send-sms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE_ROLE}`, apikey: SERVICE_ROLE },
+      body: JSON.stringify({ type: "custom", to, message: message }),
+    });
+    return res.ok;
+  } catch (e) { console.warn("callSms failed:", e.message); return false; }
+}
+
+// Full (untruncated) SHA-256 hex of the sealed PDF bytes — the tamper-evidence
+// hash stored as final_pdf_hash on the parent record.
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function recordAudit(adminId: string, contractId: string, label: string, eventType: string, actor: string, detail: string, extra: any = {}) {
@@ -112,7 +208,11 @@ async function callEmail(type: string, to: string, data: any) {
 // normalized (0..1); pdf-lib's origin is bottom-left. Typed signatures fall
 // back to oblique text since Deno has no canvas to rasterize a script font.
 async function burnFieldsIntoPdf(fileUrl: string, fields: any[], meta: any): Promise<Uint8Array> {
-  const bytes = await fetch(fileUrl).then((r) => {
+  // The source lives in a private bucket, so the stored URL is a reference and
+  // not something fetch() can follow — sign it first.
+  const src = await signStoredUrl(fileUrl);
+  if (!src) throw new Error("Could not resolve source PDF");
+  const bytes = await fetch(src).then((r) => {
     if (!r.ok) throw new Error(`Could not fetch source PDF (${r.status})`);
     return r.arrayBuffer();
   });
@@ -203,7 +303,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   try {
-    const { action, token, code, signature, fields, fields_adhoc, device } = await req.json();
+    const { action, token, code, signature, fields, fields_adhoc, device, channel: requestedChannel, consent, reason } = await req.json();
     if (!action || !token) return json({ error: "action and token are required" }, 400);
 
     // Derive the signer's IP from the request for the audit trail.
@@ -220,32 +320,110 @@ serve(async (req) => {
 
     // ── lookup ──────────────────────────────────────────────────────────────
     if (action === "lookup") {
+      // sent → viewed lifecycle flip (never downgrade a later status).
+      if (signer.status === "pending") {
+        await admin.from("esign_signers")
+          .update({ status: "viewed", viewed_at: new Date().toISOString() })
+          .eq("id", signer.id);
+      }
       await recordAudit(signer.admin_id, signer.contract_id, label, "viewed",
         signer.name || signer.email, "External signer opened the document",
         { actor_email: signer.email, ip, device });
       const { data: signerFields } = await admin
         .from("esign_fields")
-        .select("id, field_type, page_index, pos_x, pos_y, width, height, required, placeholder")
+        .select("id, field_type, page_index, pos_x, pos_y, width, height, required, placeholder, options")
         .eq("signer_id", signer.id)
         .order("page_index", { ascending: true });
+      const blocker = await blockingSigner(signer);
       return json({
         ok: true,
         signer: { name: signer.name, email: signer.email, role: signer.role },
-        document: { name: doc.name, file_url: doc.file_url },
+        document: { name: doc.name, file_url: await signStoredUrl(doc.file_url) },
         fields: signerFields || [],
+        sms_available: !!signer.phone,
+        phone_hint: signer.phone ? maskPhone(signer.phone) : null,
+        consent_text: CONSENT_TEXT,
+        waiting_on: blocker ? (blocker.name || blocker.email) : null,
       });
+    }
+
+    // ── decline ─────────────────────────────────────────────────────────────
+    // Refusing is a real outcome, not an abandoned link: record who declined,
+    // when and why, burn the token so it cannot be reused, and stop the chain.
+    // No OTP is required — declining asserts nothing about identity, and forcing
+    // a code would just push people to walk away silently instead.
+    if (action === "decline") {
+      const why = String(reason || "").trim().slice(0, 500);
+      if (!why) return json({ error: "Please give a brief reason for declining." }, 400);
+      if (signer.declined_at) return json({ error: "You have already declined this document." }, 410);
+
+      const declinedAt = new Date().toISOString();
+      await admin.from("esign_signers").update({
+        status: "declined", declined_at: declinedAt, decline_reason: why,
+        token: null, token_expires_at: null, otp_hash: null, otp_expires_at: null,
+      }).eq("id", signer.id);
+
+      // One refusal blocks the whole document — the remaining signers are not
+      // invited, and any link already issued stops working.
+      const src = signer.source_type || "generated";
+      const refId = src === "esign_doc" ? signer.esign_document_id : signer.contract_id;
+      const tbl = src === "company" ? "company_contracts" : src === "esign_doc" ? "esign_documents" : "generated_contracts";
+      await admin.from(tbl).update({
+        status: "declined", declined_at: declinedAt, decline_reason: why,
+      }).eq("id", refId).then(() => {}, () => {});
+
+      await admin.from("esign_signers")
+        .update({ token: null, token_expires_at: null })
+        .eq(src === "esign_doc" ? "esign_document_id" : "contract_id", refId)
+        .neq("id", signer.id)
+        .is("signed_at", null)
+        .then(() => {}, () => {});
+
+      await recordAudit(signer.admin_id, refId, label, "declined", signer.name || signer.email,
+        `Declined to sign — reason: ${why}`, { actor_email: signer.email, ip, device });
+
+      await admin.from("esign_notifications").insert({
+        admin_id: signer.admin_id, type: "warning",
+        title: "Document declined",
+        detail: `${signer.name || signer.email} declined "${label}" — ${why}`,
+        contract_id: refId,
+      }).then(() => {}, () => {});
+
+      return json({ ok: true, declined_at: declinedAt });
     }
 
     // ── send-otp ────────────────────────────────────────────────────────────
     if (action === "send-otp") {
-      const otp = String(Math.floor(100000 + Math.random() * 900000));
+      // Cap total codes per link. Without this an attacker could keep the
+      // per-code guess budget topped up by cycling resends (and burn the
+      // tenant's SMS credit doing it).
+      if ((signer.otp_sent_count || 0) >= MAX_OTP_SENDS) {
+        return json({ error: "Too many verification codes requested for this link. Contact the sender to be re-invited." }, 429);
+      }
+      const otp = generateOtp();
       const otp_hash = await hashOtp(token, otp);
       const otp_expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      await admin.from("esign_signers").update({ otp_hash, otp_expires_at }).eq("id", signer.id);
-      await callEmail("signing_otp", signer.email, {
-        signerName: signer.name, code: otp, documentName: doc.name, expiresMinutes: 10,
-      });
-      return json({ ok: true });
+
+      // SMS when requested and a phone is on file; email otherwise (and as the
+      // fallback when the SMS gateway declines).
+      const { channel } = await (async () => {
+        if (requestedChannel === "sms" && signer.phone) {
+          const sent = await callSms(signer.phone,
+            `Ararat E-Sign: ${otp} is your verification code for "${doc.name}". It expires in 10 minutes. Never share this code.`);
+          if (sent) return { channel: "sms" };
+        }
+        await callEmail("signing_otp", signer.email, {
+          signerName: signer.name, code: otp, documentName: doc.name, expiresMinutes: 10,
+        });
+        return { channel: "email" };
+      })();
+
+      await admin.from("esign_signers").update({
+        otp_hash, otp_expires_at, otp_channel: channel,
+        otp_attempts: 0,                                  // fresh code, fresh budget
+        otp_sent_count: (signer.otp_sent_count || 0) + 1,
+      }).eq("id", signer.id);
+      return json({ ok: true, channel, phone_hint: signer.phone ? maskPhone(signer.phone) : null });
     }
 
     // ── verify-and-sign ───────────────────────────────────────────────────────
@@ -258,11 +436,37 @@ serve(async (req) => {
         : [];
       const hasAdhoc = adhocFields.length > 0;
       if (!code) return json({ error: "Verification code is required." }, 400);
+      if (consent !== true) return json({ error: "You must agree to sign electronically before signing." }, 400);
+      const blocker = await blockingSigner(signer);
+      if (blocker) return json({ error: `It's not your turn yet — waiting for ${blocker.name || blocker.email} to sign first.` }, 409);
       if (!hasFields && !hasAdhoc && !signature?.data) return json({ error: "A signature is required." }, 400);
       if (!signer.otp_hash || !signer.otp_expires_at) return json({ error: "Request a verification code first." }, 400);
       if (new Date(signer.otp_expires_at) < new Date()) return json({ error: "Your code expired. Request a new one." }, 410);
+
+      // Register the attempt BEFORE comparing, via an atomic DB increment, so
+      // concurrent guesses each consume a slot instead of racing on a
+      // read-modify-write and slipping past the cap. Six digits with no limit at
+      // all was brute-forceable in minutes.
+      const { data: attemptNo } = await admin.rpc("esign_otp_register_attempt", { p_signer: signer.id });
+      if ((attemptNo ?? 0) > MAX_OTP_ATTEMPTS) {
+        // Burn the code so the link cannot be ground down further without a
+        // fresh send (itself capped by MAX_OTP_SENDS).
+        await admin.from("esign_signers").update({ otp_hash: null, otp_expires_at: null }).eq("id", signer.id);
+        await recordAudit(signer.admin_id, signer.contract_id, label, "security",
+          signer.name || signer.email, "Signing code invalidated after too many failed attempts",
+          { actor_email: signer.email, ip, device });
+        return json({ error: "Too many incorrect codes. Request a new one." }, 429);
+      }
+
       const incoming = await hashOtp(token, String(code));
-      if (incoming !== signer.otp_hash) return json({ error: "Invalid verification code." }, 401);
+      if (incoming !== signer.otp_hash) {
+        const left = Math.max(0, MAX_OTP_ATTEMPTS - (attemptNo ?? 0));
+        return json({
+          error: left > 0
+            ? `Invalid verification code. ${left} attempt${left === 1 ? "" : "s"} remaining.`
+            : "Invalid verification code.",
+        }, 401);
+      }
 
       const signedAt = new Date().toISOString();
       const src = signer.source_type || "generated";
@@ -278,6 +482,19 @@ serve(async (req) => {
         const v = submitted.get(ff.id);
         const ok = v != null && v !== "" && !(ff.field_type === "checkbox" && String(v) === "false");
         if (!ok) return json({ error: "Please complete all required fields before signing." }, 400);
+      }
+
+      // A choice field's value is burned into the sealed contract verbatim, so it
+      // must be one of the labels the sender actually offered — the browser is
+      // not a trustworthy source for that. Anything else is a forged answer.
+      for (const ff of (signerFields || [])) {
+        if (ff.field_type !== "radio" && ff.field_type !== "dropdown") continue;
+        const v = submitted.get(ff.id);
+        if (v == null || v === "") continue;   // optional and left blank
+        const opts: string[] = Array.isArray(ff.options) ? ff.options.map((o: unknown) => String(o)) : [];
+        if (!opts.includes(String(v))) {
+          return json({ error: "One of your selections is not a valid option for this document." }, 400);
+        }
       }
 
       // Persist each submitted field value.
@@ -336,12 +553,20 @@ serve(async (req) => {
       const sigHashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(hashInput));
       const sigHash = Array.from(new Uint8Array(sigHashBuf)).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 24) + "…";
 
-      // Persist the signature on the signer row and expire the one-time link.
+      // Persist the signature + consent on the signer row and expire the
+      // one-time link. The consent record is part of the legal audit trail.
+      const otpChannel = signer.otp_channel === "sms" ? "SMS" : "email";
       await admin.from("esign_signers").update({
         status: "signed", signed_at: signedAt, ip, device,
+        consent_at: signedAt, consent_text: CONSENT_TEXT,
         signature_type: sigType, signature_data: sigData, signature_hash: sigHash,
         otp_hash: null, otp_expires_at: null, token: null, token_expires_at: null,
       }).eq("id", signer.id);
+      await recordAudit(signer.admin_id,
+        src === "esign_doc" ? signer.esign_document_id : signer.contract_id,
+        label, "consent",
+        signer.name || signer.email, `Consent captured: "${CONSENT_TEXT}"`,
+        { actor_email: signer.email, ip, device });
 
       // Are all signers for this document done?
       const linkCol = src === "esign_doc" ? "esign_document_id" : "contract_id";
@@ -384,22 +609,90 @@ serve(async (req) => {
               hash: sigHash,
               signers: (allSigners || []).map((s: any) => ({ name: s.name || s.email, role: s.role, signedAt: s.signed_at, ip: s.ip })),
             });
+            // Tamper evidence: hash the SEALED bytes (the exact file stored) so
+            // the PDF anyone later downloads can be re-hashed and compared.
+            const finalHash = await sha256Hex(sealed);
             const bucket = src === "esign_doc" ? "esign-documents" : "contracts";
             const path = `${signer.admin_id}/signed_${refId}.pdf`;
             const { error: upErr } = await admin.storage.from(bucket).upload(path, sealed, { upsert: true, contentType: "application/pdf" });
             if (!upErr) {
               const { data: pub } = admin.storage.from(bucket).getPublicUrl(path);
               const tbl = src === "company" ? "company_contracts" : src === "esign_doc" ? "esign_documents" : "generated_contracts";
-              if (pub?.publicUrl) await admin.from(tbl).update({ file_url: pub.publicUrl }).eq("id", refId);
+              await admin.from(tbl).update({
+                ...(pub?.publicUrl ? { file_url: pub.publicUrl } : {}),
+                final_pdf_hash: finalHash,
+              }).eq("id", refId);
+              await recordAudit(signer.admin_id, refId, label, "completed", "System",
+                `Sealed PDF SHA-256: ${finalHash}`, { hash: finalHash.slice(0, 24) + "…" });
             }
           }
         } catch (e) { console.warn("burnFieldsIntoPdf failed:", e.message); }
       }
 
       await recordAudit(signer.admin_id, refId, label, "signed", signer.name || signer.email,
-        "External signature applied — OTP verified by email", { actor_email: signer.email, ip, device, hash: sigHash });
+        `External signature applied — OTP verified by ${otpChannel}; e-sign consent recorded`,
+        { actor_email: signer.email, ip, device, hash: sigHash });
       if (allSigned) {
         await recordAudit(signer.admin_id, refId, label, "completed", "System", "All signatures verified. Document sealed.", { hash: sigHash });
+      }
+
+      // Sequential advance: if the chain isn't finished, invite the signer whose
+      // turn just arrived (parallel sends all carry order 0 and skip this).
+      if (!allSigned) {
+        const { data: nextRows } = await admin.from("esign_signers")
+          .select("id, name, email, phone, token, token_expires_at, signing_order, link_base")
+          .eq(linkCol, linkVal).eq("source_type", src)
+          .neq("status", "signed").not("token", "is", null)
+          .order("signing_order", { ascending: true }).limit(1);
+        const next = nextRows?.[0];
+        if (next && (next.signing_order || 0) > (signer.signing_order || 0)) {
+          const base = next.link_base || req.headers.get("origin") || Deno.env.get("PORTAL_URL") || "";
+          if (base) {
+            const link = `${base.replace(/\/$/, "")}/sign/${next.token}`;
+            await callEmail("signing_invite", next.email, {
+              signerName: next.name, documentName: label, link,
+              message: `It's your turn to sign — ${signer.name || signer.email} has completed their part.`,
+              expiresAt: next.token_expires_at,
+            });
+            if (next.phone) {
+              await callSms(next.phone,
+                `Ararat E-Sign: Hi ${next.name || "there"}, it's your turn to sign "${label}". Sign securely: ${link}`);
+            }
+            await recordAudit(signer.admin_id, refId, label, "sent", "System",
+              `Sequential turn advanced — invited ${next.email}`, { actor_email: next.email });
+          }
+        }
+      }
+
+      // API & Embedded Signing: if this envelope was created through esign-api,
+      // POST a webhook to the client app so their server learns about the
+      // signature (and, once sealed, gets the certified PDF + hash).
+      if (src === "esign_doc") {
+        try {
+          const { data: docRow } = await admin.from("esign_documents")
+            .select("api_key_id, external_ref, file_url, final_pdf_hash")
+            .eq("id", signer.esign_document_id).single();
+          if (docRow?.api_key_id) {
+            const { data: apiKey } = await admin.from("esign_api_keys")
+              .select("webhook_url, active").eq("id", docRow.api_key_id).single();
+            if (apiKey?.active && apiKey.webhook_url) {
+              await fetch(apiKey.webhook_url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  source: "ararat-esign",
+                  event: allSigned ? "document.completed" : "signer.signed",
+                  document_id: signer.esign_document_id,
+                  external_ref: docRow.external_ref,
+                  signer: { name: signer.name, email: signer.email, role: signer.role },
+                  signed_at: signedAt,
+                  completed: allSigned,
+                  ...(allSigned ? { file_url: docRow.file_url, final_pdf_hash: docRow.final_pdf_hash } : {}),
+                }),
+              }).catch((e) => console.warn("webhook delivery failed:", e.message));
+            }
+          }
+        } catch (e) { console.warn("webhook dispatch:", e.message); }
       }
 
       // Tenant notification + a confirmation/security record to the signer.

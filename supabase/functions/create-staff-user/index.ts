@@ -365,7 +365,10 @@ Deno.serve(async (req) => {
     if (role === 'sacco_admin') {
       const saccoTier = (tier as string) || 'bronze';
 
-      const { error: saccoErr } = await adminClient.from('saccos').insert({
+      // UPSERT, not insert: ensure_sacco_admin_tenant_row stubs a saccos row
+      // the moment the active sacco_admin profile appears, and saccos is
+      // unique per admin_id — this overwrites the stub with the real details.
+      const { error: saccoErr } = await adminClient.from('saccos').upsert({
         admin_id:         newUserId,
         name:             sacco_name || company_name || full_name,
         registration_no:  business_reg_number || null,
@@ -378,10 +381,10 @@ Deno.serve(async (req) => {
         tier:             saccoTier,
         member_cap:       member_cap || null,
         kyc_status:       'pending',
-      });
+      }, { onConflict: 'admin_id' });
       if (saccoErr) {
         warnings.push(`saccos: ${saccoErr.message}`);
-        console.error('saccos insert error:', saccoErr.message);
+        console.error('saccos upsert error:', saccoErr.message);
       }
 
       const { data: planRow } = await adminClient

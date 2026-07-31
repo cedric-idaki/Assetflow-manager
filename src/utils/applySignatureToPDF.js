@@ -15,6 +15,8 @@
  */
 
 // ── Load pdf-lib dynamically (UMD global: window.PDFLib) ────────────────────────
+import { resolveFileUrl } from '../lib/storageUrl';
+
 const loadPdfLib = () => new Promise((resolve, reject) => {
   if (window.PDFLib) return resolve(window.PDFLib);
   if (document.getElementById('pdflib-script')) {
@@ -80,7 +82,9 @@ export const applySignatureToPDF = async (sourceUrl, sig) => {
   if (!sourceUrl) throw new Error('No source PDF to sign');
   const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
 
-  const bytes = await fetch(sourceUrl).then(r => {
+  const src = await resolveFileUrl(sourceUrl);
+  if (!src) throw new Error('Could not fetch document');
+  const bytes = await fetch(src).then(r => {
     if (!r.ok) throw new Error(`Could not fetch document (${r.status})`);
     return r.arrayBuffer();
   });
@@ -202,7 +206,9 @@ export const applyFieldsToPDF = async (sourceUrl, fields = [], meta = {}) => {
   if (!sourceUrl) throw new Error('No source PDF to sign');
   const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
 
-  const bytes = await fetch(sourceUrl).then(r => {
+  const src = await resolveFileUrl(sourceUrl);
+  if (!src) throw new Error('Could not fetch document');
+  const bytes = await fetch(src).then(r => {
     if (!r.ok) throw new Error(`Could not fetch document (${r.status})`);
     return r.arrayBuffer();
   });
@@ -242,6 +248,36 @@ export const applyFieldsToPDF = async (sourceUrl, fields = [], meta = {}) => {
       if (String(f.value) === 'true' || f.value === true) {
         page.drawText('X', { x: x + s * 0.18, y: y + s * 0.14, size: s * 0.7, font: helvB, color: rgb(0.06, 0.4, 0.13) });
       }
+    } else if (type === 'radio') {
+      // Every choice is drawn so the finished contract shows what was on offer,
+      // not just what was picked — a bare "Monthly" proves nothing about which
+      // alternatives the signer was actually presented with.
+      const opts = Array.isArray(f.options) ? f.options.filter(Boolean) : [];
+      const chosen = f.value == null ? '' : String(f.value);
+      const size = Math.min(10, Math.max(6, boxH * 0.6));
+      const r = size * 0.34;
+      let cx = x + 2;
+      for (const opt of opts) {
+        const label = String(opt);
+        const labelW = helv.widthOfTextAtSize(label, size);
+        const cellW = r * 2 + 4 + labelW + 10;
+        if (cx + cellW > x + boxW && cx > x + 2) break; // no room left on this row
+        const cyc = y + boxH / 2;
+        page.drawCircle({ x: cx + r, y: cyc, size: r, borderWidth: 0.8, borderColor: rgb(0.4, 0.45, 0.5) });
+        if (label === chosen) {
+          page.drawCircle({ x: cx + r, y: cyc, size: r * 0.5, color: rgb(0.06, 0.4, 0.13) });
+        }
+        page.drawText(label, {
+          x: cx + r * 2 + 4, y: cyc - size * 0.35, size, font: helv,
+          color: label === chosen ? rgb(0.1, 0.14, 0.2) : rgb(0.45, 0.5, 0.56),
+        });
+        cx += cellW;
+      }
+    } else if (type === 'dropdown') {
+      const text = f.value == null ? '' : String(f.value);
+      const size = Math.min(13, Math.max(7, boxH * 0.55));
+      page.drawText(text, { x: x + 2, y: y + (boxH - size) / 2 + 1, size, font: helv, color: rgb(0.1, 0.14, 0.2) });
+      page.drawLine({ start: { x, y }, end: { x: x + boxW, y }, thickness: 0.5, color: rgb(0.6, 0.7, 0.85) });
     } else { // date | text
       const text = f.value == null ? '' : String(f.value);
       const size = Math.min(13, Math.max(7, boxH * 0.55));

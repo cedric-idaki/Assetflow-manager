@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Acme Motors — Contract Signing (Embedded Demo)</title>
+<!--
+  Demo: Ararat API & Embedded Signing inside a client's own app.
+
+  Flow this page demonstrates:
+    1. YOUR SERVER calls the esign-api edge function (x-api-key) with action
+       "create-document" and receives per-signer embed_url values.
+       (Never call esign-api from the browser — the API key must stay
+       server-side. This demo just asks you to paste an embed_url.)
+    2. This page iframes the embed_url — the customer signs with the pen
+       directly on the document without ever leaving your site.
+    3. The iframe posts `ararat-esign` events; the banner below reacts live.
+       Your server can additionally receive webhooks (esign_api_keys.webhook_url).
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f1f5f9; color: #0f172a; }
+  header { background: #0f172a; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 10px; }
+  header .logo { width: 34px; height: 34px; border-radius: 9px; background: #f59e0b; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #0f172a; }
+  main { max-width: 960px; margin: 28px auto; padding: 0 16px; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin-bottom: 6px; }
+  p.sub { color: #475569; font-size: 14px; margin-bottom: 14px; }
+  label { font-size: 12px; font-weight: 700; color: #334155; display: block; margin-bottom: 6px; }
+  .row { display: flex; gap: 8px; }
+  input[type=text] { flex: 1; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 13px; }
+  button { padding: 10px 18px; border: 0; border-radius: 10px; background: #1d4ed8; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; }
+  button:hover { background: #1e40af; }
+  #status { display: none; padding: 12px 16px; border-radius: 12px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+  #status.info    { display: block; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  #status.success { display: block; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  #status.error   { display: block; background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  #frameWrap { display: none; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
+  iframe { width: 100%; height: 82vh; border: 0; display: block; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+  .hint { font-size: 12px; color: #64748b; margin-top: 10px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">A</div>
+  <div>
+    <strong>Acme Motors</strong>
+    <div style="font-size:11px; color:#94a3b8;">Customer portal — vehicle purchase agreement (demo)</div>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <h1>Sign your purchase agreement</h1>
+    <p class="sub">The document opens right here on our site — no redirect, no account needed. Powered by Ararat E-Signature's embedded signing.</p>
+    <label for="embedUrl">Signer embed link (the <code>embed_url</code> your server got from <code>esign-api → create-document</code>)</label>
+    <div class="row">
+      <input id="embedUrl" type="text" placeholder="https://your-ararat-portal.com/embed/sign/…" />
+      <button onclick="openSigning()">Open signing</button>
+    </div>
+    <p class="hint">
+      Server-side, you created this with:<br />
+      <code>POST /functions/v1/esign-api</code> · header <code>x-api-key: esk_live_…</code> · body <code>{ "action": "create-document", … }</code><br />
+      The API key stays on your server — only the one-time, per-signer embed link ever reaches the browser.
+    </p>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="frameWrap" class="card" style="padding:0;">
+    <iframe id="signFrame" title="Sign the agreement" allow="clipboard-write"></iframe>
+  </div>
+</main>
+
+<script>
+  const statusEl = document.getElementById("status");
+  const show = (cls, text) => { statusEl.className = cls; statusEl.textContent = text; };
+
+  function openSigning() {
+    const url = document.getElementById("embedUrl").value.trim();
+    if (!/\/embed\/sign\//.test(url)) { show("error", "Paste a valid /embed/sign/… link first."); return; }
+    document.getElementById("signFrame").src = url;
+    document.getElementById("frameWrap").style.display = "block";
+    show("info", "Opening the document…");
+  }
+
+  // ── The embedded-signing event contract ──────────────────────────────────
+  window.addEventListener("message", (e) => {
+    const msg = e.data;
+    if (!msg || msg.source !== "ararat-esign") return;
+    switch (msg.event) {
+      case "ready":
+        show("info", `Document open — ${msg.signer || "signer"} can now sign directly on the page.`);
+        break;
+      case "waiting":
+        show("info", `Sequential order: waiting for ${msg.waiting_on || "an earlier signer"} to sign first.`);
+        break;
+      case "signed":
+        show("success", "Signature captured! Waiting on the remaining parties.");
+        break;
+      case "completed":
+        show("success", "✅ All parties signed — the sealed, certified PDF is ready. (Your server also got a document.completed webhook.)");
+        break;
+      case "error":
+        show("error", "Signing problem: " + (msg.message || "unknown error"));
+        break;
+    }
+  });
+</script>
+</body>
+</html>

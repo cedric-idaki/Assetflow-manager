@@ -1,4 +1,5 @@
 import React from 'react';
+import { openStoredFile } from '../../../lib/storageUrl';
 import { Card, Badge, Table, EmptyState, fmtDate } from '../../sacco-dashboard/components/_shared';
 
 // Read-only list of contracts the administrator has assigned to this member
@@ -20,7 +21,9 @@ const ContractsTab = ({ ctx }) => {
               <td className="py-2.5 pr-4"><Badge status={c.status || (c.is_template ? 'draft' : 'active')} /></td>
               <td className="py-2.5 pr-0 text-right">
                 {c.file_url && (
-                  <a href={c.file_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary font-semibold hover:underline">
+                  <a href={c.file_url}
+                    onClick={(e) => { e.preventDefault(); openStoredFile(c.file_url); }}
+                    target="_blank" rel="noopener noreferrer" className="text-xs text-primary font-semibold hover:underline">
                     View / download
                   </a>
                 )}

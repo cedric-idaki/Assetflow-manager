@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Icon from '../AppIcon';
 import { supabase } from '../../lib/supabase';
 import { sendSigningInvite } from '../../services/emailService';
+import { sendSigningLinkSMS } from '../../services/smsService';
 
 // One-time token for an external signer's secure /sign/:token link.
 const genSignToken = () =>
@@ -18,6 +19,7 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
   const [signers, setSigners] = useState([{
     name:  context.defaultClient?.name  || '',
     email: context.defaultClient?.email || '',
+    phone: context.defaultClient?.phone || '',
     role:  'Signer',
     type:  'external',
   }]);
@@ -28,7 +30,7 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
   const [doneCount, setDoneCount] = useState(null);
 
   const setS = (i, k, v) => setSigners(prev => prev.map((p, j) => j === i ? { ...p, [k]: v } : p));
-  const addSigner = () => setSigners(p => [...p, { name: '', email: '', role: 'Signer', type: 'external' }]);
+  const addSigner = () => setSigners(p => [...p, { name: '', email: '', phone: '', role: 'Signer', type: 'external' }]);
   const removeSigner = (i) => setSigners(p => p.filter((_, j) => j !== i));
 
   const handleSend = async () => {
@@ -43,11 +45,13 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
         source_type:      context.source,
         name:             s.name || s.email.split('@')[0],
         email:            s.email.trim(),
+        phone:            s.phone?.trim() || null,
         role:             s.role,
         signing_order:    order === 'sequential' ? i : 0,
         status:           'pending',
         token:            s.type === 'external' ? genSignToken() : null,
         token_expires_at: s.type === 'external' ? expires : null,
+        link_base:        window.location.origin,
       }));
 
       const { error: insErr } = await supabase.from('esign_signers').insert(rows);
@@ -70,14 +74,27 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
         detail: `${context.documentLabel} · ${clean.length} signer(s)`, contract_id: context.contractId,
       }).then(() => {}, () => {});
 
-      // Email external signers their one-time link (best-effort).
+      // Invite external signers their one-time link (best-effort). Sequential
+      // order only invites the FIRST signer now — the esign-public function
+      // advances the chain and invites the next signer as each one signs.
       const base = window.location.origin;
-      await Promise.all(rows.filter(r => r.token).map(r =>
-        sendSigningInvite(r.email, {
-          signerName: r.name, documentName: context.documentLabel,
-          link: `${base}/sign/${r.token}`, message, expiresAt: expires,
-        }).catch(e => console.warn('invite email failed:', e.message))
-      ));
+      const external = rows.filter(r => r.token);
+      const toInvite = order === 'sequential' ? external.slice(0, 1) : external;
+      await Promise.all(toInvite.map(r => {
+        const link = `${base}/sign/${r.token}`;
+        const jobs = [
+          sendSigningInvite(r.email, {
+            signerName: r.name, documentName: context.documentLabel,
+            link, message, expiresAt: expires,
+          }).catch(e => console.warn('invite email failed:', e.message)),
+        ];
+        if (r.phone) {
+          jobs.push(sendSigningLinkSMS(r.phone, {
+            signerName: r.name, documentName: context.documentLabel, link,
+          }).catch(e => console.warn('invite SMS failed:', e.message)));
+        }
+        return Promise.all(jobs);
+      }));
 
       setDoneCount(clean.length);
       if (onSent) onSent();
@@ -113,7 +130,9 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
             </div>
             <p className="text-base font-bold text-foreground">Sent to {doneCount} signer(s)</p>
             <p className="text-xs text-muted-foreground mt-1">
-              Internal signers can sign it in the E-Signature module. External signers received a secure link by email.
+              Internal signers can sign it in the E-Signature module. External signers receive a secure link by email
+              (and SMS when a phone number is provided). In sequential order, each signer is invited automatically
+              when the previous one signs.
             </p>
             <button onClick={onClose} className="mt-5 px-5 py-2 rounded-lg text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg,#1A56DB,#1E429F)' }}>Done</button>
@@ -139,6 +158,8 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
                 <input value={s.name} onChange={e => setS(i, 'name', e.target.value)} placeholder="Full name"
                   className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground" />
                 <input value={s.email} onChange={e => setS(i, 'email', e.target.value)} placeholder="email@example.com" type="email"
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground" />
+                <input value={s.phone || ''} onChange={e => setS(i, 'phone', e.target.value)} placeholder="+2547… (optional — SMS link + SMS code)" type="tel"
                   className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground" />
                 <div className="grid grid-cols-2 gap-2">
                   <select value={s.type} onChange={e => setS(i, 'type', e.target.value)}

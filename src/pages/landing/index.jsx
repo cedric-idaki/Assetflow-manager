@@ -426,7 +426,7 @@ const LandingPage = () => {
 
             <p className="hero-sub">
               Stop juggling spreadsheets, WhatsApp messages, paperwork, and multiple applications.
-              Ararat brings all your essential business operations into one intelligent platform —
+              Ararat brings all your essential business operations into one intelligent platform
               so you save time, work more efficiently, and grow with confidence.
             </p>
 
@@ -468,7 +468,7 @@ const LandingPage = () => {
               <div className="receipt-head">
                 <div>
                   <div className="rtitle">Daily operations summary</div>
-                  <div className="rid">NO. 00184 — TODAY</div>
+                  <div className="rid">NO. 00184  TODAY</div>
                 </div>
               </div>
 
@@ -508,7 +508,7 @@ const LandingPage = () => {
           </div>
 
           <p className="t-result reveal">
-            Ararat brings every operation onto a single, intelligent dashboard — built for how Kenyan
+            Ararat brings every operation onto a single, intelligent dashboard built for how Kenyan
             businesses, SACCOs, and chamas actually run.
           </p>
         </div>
@@ -554,7 +554,7 @@ const LandingPage = () => {
               <div className="stitle">Whoever you serve, Ararat fits your structure.</div>
             </div>
             <div className="sdesc">
-              From a single shop to a member-owned cooperative — the same platform scales with you.
+              From a single shop to a member-owned cooperative the same platform scales with you.
             </div>
           </div>
           <div className="aud-grid">
@@ -576,7 +576,7 @@ const LandingPage = () => {
               <span className="eyebrow">Start your journey</span>
               <div className="stitle">Subscribe here to start your journey.</div>
               <p className="sdesc">
-                Leave your email and we'll set up your Ararat dashboard — POS, accounting,
+                Leave your email and we'll set up your Ararat dashboard POS, accounting,
                 contributions, and reporting, ready in one place.
               </p>
             </div>
@@ -597,7 +597,7 @@ const LandingPage = () => {
                   : (
                     <div className="sub-note">
                       <Icon name="Mail" size={14} color="#12758c" />
-                      Takes you straight to registration — no spam.
+                      Takes you straight to registration no spam.
                     </div>
                   )}
               </form>

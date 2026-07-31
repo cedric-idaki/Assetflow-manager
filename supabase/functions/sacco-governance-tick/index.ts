@@ -34,6 +34,27 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// ─── Scheduler authentication ─────────────────────────────────────────────────
+// config.toml sets verify_jwt = false so pg_cron can invoke this without a user
+// JWT — which also means the platform performs no auth at all and anyone can
+// POST here. Accept only the service-role key (what the scheduler sends) or an
+// explicit CRON_SECRET, compared in constant time.
+const CRON_SECRET = Deno.env.get("CRON_SECRET") || "";
+
+const safeEqual = (a: string, b: string): boolean => {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
+
+const isScheduler = (req: Request): boolean => {
+  const auth = req.headers.get("Authorization") || "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  if (safeEqual(bearer, SERVICE_KEY)) return true;
+  return safeEqual((req.headers.get("x-cron-secret") || "").trim(), CRON_SECRET);
+};
+
 // ─── Supabase REST / RPC helpers (service role) ───────────────────────────────
 
 const rest = async (path: string, options: RequestInit = {}) => {
@@ -112,6 +133,14 @@ const emailDataFor = (ev: any, saccoName: string) => {
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
+
+  // verify_jwt = false leaves this endpoint open to the internet, so the caller
+  // has to prove it is the scheduler.
+  if (!isScheduler(req)) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
   try {

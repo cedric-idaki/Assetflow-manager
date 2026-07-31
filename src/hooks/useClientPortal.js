@@ -70,16 +70,23 @@ export const useClientPortal = () => {
     }
   }, []);
 
-  // ── Fetch available assets from same admin to browse ───────────────────────
-  const fetchBrowseAssets = useCallback(async (adminId, clientId) => {
+  // ── Fetch available assets from the client's company to browse ─────────────
+  // RLS (clients_browse_company_market_assets) scopes the read to the client's
+  // own company, including assets registered by the admin's staff — filtering
+  // on registered_by = admin_id here would hide staff-registered stock.
+  const fetchBrowseAssets = useCallback(async (clientId) => {
     try {
-      const { data } = await supabase
+      let query = supabase
         .from('assets')
         .select('*')
-        .eq('registered_by', adminId)
         .eq('asset_status', 'available')
-        .neq('linked_client_id', clientId)
         .order('created_at', { ascending: false });
+      // A plain .neq() drops unlinked assets (NULL <> x is not true in SQL),
+      // which is most of the market — NULL must survive the filter.
+      if (clientId) {
+        query = query.or(`linked_client_id.is.null,linked_client_id.neq.${clientId}`);
+      }
+      const { data } = await query;
       setBrowseAssets(data || []);
     } catch (err) {
       console.error('[ClientPortal] Browse assets error:', err);
@@ -232,7 +239,7 @@ export const useClientPortal = () => {
       if (client) {
         await Promise.all([
           fetchMyAssets(client.id),
-          fetchBrowseAssets(client.admin_id, client.id),
+          fetchBrowseAssets(client.id),
           fetchPayments(client.id),
           fetchInstallmentPlans(client.id),
           fetchEnquiries(client.id),
