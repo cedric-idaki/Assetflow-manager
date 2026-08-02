@@ -56,9 +56,11 @@ const AdminRegistration = () => {
   const [showTerms, setShowTerms] = useState(false);
 
   // Step 2 - Company / Sacco (organizationType is chosen on step 1 alongside
-  // the account details; it drives which fields show on this step).
+  // the account details; it drives which fields show on this step). The landing
+  // and login pages offer a CTA per organization type and hand the choice over
+  // in router state so it arrives preselected.
   const [company, setCompany] = useState({
-    organizationType: 'company', // 'company' | 'sacco'
+    organizationType: location.state?.orgType === 'sacco' ? 'sacco' : 'company', // 'company' | 'sacco'
     companyName: '', businessRegNumber: '', businessType: '',
     // Saccos declare up-front whether they are registered ('Yes' | 'No'). Only a
     // registered sacco is asked for its certificate + SASRA licence numbers, and

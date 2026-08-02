@@ -31,7 +31,14 @@ const StatementTab = ({ ctx }) => {
       .filter((c) => inRange(c.paid_date || c.due_date))
       .map((c) => ({
         date: c.paid_date || c.due_date, section: 'Contribution',
-        detail: `${c.contribution_type} contribution${c.reference ? ` · ${c.reference}` : ''}`,
+        // The transaction number is what a member quotes when querying an
+        // entry, so it belongs on the statement, not just in the ledger.
+        ref: c.txn_no || '',
+        detail: [
+          `${c.contribution_type} contribution`,
+          c.payment_method ? c.payment_method.toUpperCase() : null,
+          c.reference || null,
+        ].filter(Boolean).join(' · '),
         amount: parseFloat(c.amount || 0), status: c.status,
       }));
 
@@ -72,7 +79,10 @@ const StatementTab = ({ ctx }) => {
   const ref = `ST-${(me?.member_no || 'M').replace(/\s+/g, '')}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
 
   const exportRows = () => exportCSV(
-    data.map((r) => ({ date: String(r.date || '').slice(0, 10), section: r.section, detail: r.detail, amount: r.amount, status: r.status })),
+    data.map((r) => ({
+      date: String(r.date || '').slice(0, 10), reference: r.ref || '',
+      section: r.section, detail: r.detail, amount: r.amount, status: r.status,
+    })),
     `statement_${type}`,
   );
 
@@ -107,10 +117,11 @@ const StatementTab = ({ ctx }) => {
       {data.length === 0 ? (
         <EmptyState icon="FileSpreadsheet" title="Nothing in this period" hint="Adjust the date range or statement type." />
       ) : (
-        <Table columns={['Date', 'Section', 'Detail', 'Amount', 'Status']}>
+        <Table columns={['Date', 'Reference', 'Section', 'Detail', 'Amount', 'Status']}>
           {data.map((r, i) => (
             <tr key={i} className="border-b border-border/60">
               <td className="py-2.5 pr-4 text-muted-foreground">{fmtDate(r.date)}</td>
+              <td className="py-2.5 pr-4 font-mono text-xs text-muted-foreground">{r.ref || '—'}</td>
               <td className="py-2.5 pr-4 text-foreground">{r.section}</td>
               <td className="py-2.5 pr-4 text-muted-foreground">{r.detail}</td>
               <td className="py-2.5 pr-4 font-medium text-foreground">{KES(r.amount)}</td>

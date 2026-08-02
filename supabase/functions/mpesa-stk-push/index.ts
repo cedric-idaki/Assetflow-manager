@@ -1,133 +1,291 @@
+// STK Push initiator.
+//
+// Routes to the correct paybill by `purpose`:
+//   'subscription'       -> the PLATFORM OWNER's paybill (MPESA_* secrets). An
+//                           admin paying for portal access.
+//   'collection'         -> the CALLING TENANT's own paybill
+//                           (mpesa_tenant_credentials). A company/sacco
+//                           collecting from its own client/member.
+//   'sacco_contribution' -> the PLATFORM OWNER's paybill, collected on behalf of
+//                           the sacco. A member paying their savings
+//                           contribution from the member portal. The pending
+//                           sacco_contributions row must already exist and is
+//                           named by `contributionId`; the callback completes
+//                           that exact row, so the money can never land against
+//                           a contribution nobody asked for.
+//
+// Why sacco contributions collect centrally: saccos do not run their own Daraja
+// apps here, so there is no per-sacco paybill to route to. The platform collects
+// and the sacco's ledger records the member's credit — which means the platform
+// owner HOLDS that cash and owes it onward to the sacco. That settlement is a
+// business process, not something this function can do. Anyone changing this
+// must keep that obligation in view.
+//
+// 'collection' still has NO fallback. If a company has not configured its own
+// Daraja app, collection fails with a clear message — silently routing a
+// company's customer's money to the platform owner would be a financial error,
+// not a degraded experience. sacco_contribution is central BY DESIGN and says so
+// on every screen; 'collection' would be central BY ACCIDENT.
+//
+// verify_jwt = true: the caller's JWT is what establishes which tenant this
+// payment belongs to. Never take admin_id from the request body.
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  corsHeaders,
+  json,
+  baseUrl,
+  getDarajaToken,
+  darajaTimestamp,
+  stkPassword,
+  normalisePhone,
+  platformCreds,
+  tenantCreds,
+  stkRouting,
+  type DarajaCreds,
+} from '../_shared/mpesa.ts';
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
   env: { get: (key: string) => string | undefined };
 };
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
-// Generate Daraja access token
-async function getDarajaToken(): Promise<string> {
-  const consumerKey = Deno.env.get('MPESA_CONSUMER_KEY') ?? '';
-  const consumerSecret = Deno.env.get('MPESA_CONSUMER_SECRET') ?? '';
-  const credentials = btoa(`${consumerKey}:${consumerSecret}`);
-  const env = Deno.env.get('MPESA_ENV') ?? 'sandbox';
-  const baseUrl = env === 'production'
-    ? 'https://api.safaricom.co.ke'
-    : 'https://sandbox.safaricom.co.ke';
-
-  const res = await fetch(`${baseUrl}/oauth/v1/generate?grant_type=client_credentials`, {
-    headers: { Authorization: `Basic ${credentials}` },
-  });
-  const data = await res.json();
-  if (!data.access_token) throw new Error('Failed to get Daraja access token');
-  return data.access_token;
-}
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const admin = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
 
-    const { phone, amount, accountRef, clientId, planId, chargeId } = await req.json();
+    // ── Identify the caller ──────────────────────────────────────────────────
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const jwt = authHeader.replace(/^Bearer\s+/i, '');
+    if (!jwt) return json({ error: 'Not authenticated' }, 401);
 
-    // Validate inputs
+    const { data: userData, error: userErr } = await admin.auth.getUser(jwt);
+    const user = userData?.user;
+    if (userErr || !user) return json({ error: 'Not authenticated' }, 401);
+
+    // Mirrors public.current_admin_id(): staff/agents resolve to their owning
+    // admin, an admin resolves to themselves.
+    const { data: profile } = await admin
+      .from('user_profiles')
+      .select('admin_id, role, email')
+      .eq('id', user.id)
+      .maybeSingle();
+    let adminId: string = profile?.admin_id ?? user.id;
+
+    // ── Validate input ───────────────────────────────────────────────────────
+    const body = await req.json().catch(() => ({}));
+    const {
+      purpose = 'collection',
+      phone,
+      amount,
+      accountRef,
+      clientId = null,
+      planId = null,
+      chargeId = null,
+      subscriptionId = null,
+      contributionId = null,
+    } = body ?? {};
+
+    if (!['subscription', 'collection', 'test', 'sacco_contribution'].includes(purpose)) {
+      return json(
+        { error: "purpose must be 'subscription', 'collection', 'sacco_contribution' or 'test'" },
+        400,
+      );
+    }
+
+    // A test push spends real money on the platform paybill, so it is restricted
+    // to the platform owner rather than being an open endpoint any tenant can
+    // hammer against your Daraja rate limits.
+    if (purpose === 'test' && profile?.role !== 'super_admin') {
+      return json({ error: 'Only a super admin can send a test payment.' }, 403);
+    }
     if (!phone || !amount || !accountRef) {
-      return new Response(JSON.stringify({ error: 'phone, amount, and accountRef are required' }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return json({ error: 'phone, amount and accountRef are required' }, 400);
     }
 
-    // Normalize phone: strip leading 0 or +254, ensure 254XXXXXXXXX
-    const normalised = phone.replace(/\s+/g, '').replace(/^\+/, '').replace(/^0/, '254');
-    if (!/^2547\d{8}$/.test(normalised)) {
-      return new Response(JSON.stringify({ error: 'Invalid Safaricom number. Use format: 07XXXXXXXX or 2547XXXXXXXX' }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    const msisdn = normalisePhone(phone);
+    if (!msisdn) {
+      return json({ error: 'Invalid Safaricom number. Use 07XXXXXXXX or 2547XXXXXXXX.' }, 400);
     }
 
-    const env = Deno.env.get('MPESA_ENV') ?? 'sandbox';
-    const baseUrl = env === 'production'
-      ? 'https://api.safaricom.co.ke'
-      : 'https://sandbox.safaricom.co.ke';
+    // Daraja only accepts whole shillings, and rejects zero/negative outright.
+    const payable = Math.round(Number(amount));
+    if (!Number.isFinite(payable) || payable < 1) {
+      return json({ error: 'Amount must be at least KES 1' }, 400);
+    }
 
-    const shortcode = Deno.env.get('MPESA_SHORTCODE') ?? '';
-    const passkey = Deno.env.get('MPESA_PASSKEY') ?? '';
-    const callbackUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/mpesa-callback`;
+    // ── Sacco contribution: bind the push to a real pending row ──────────────
+    // The contribution must already exist (created by
+    // sacco_member_submit_contribution under the member's own JWT), and the
+    // caller must be either the member it belongs to or staff of their sacco.
+    // Taking the sacco from THIS row rather than from the request body is what
+    // stops a member of sacco A from pushing money onto sacco B's paybill.
+    let memberId: string | null = null;
+    if (purpose === 'sacco_contribution') {
+      if (!contributionId) {
+        return json({ error: 'contributionId is required for a sacco contribution' }, 400);
+      }
 
-    const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, '').slice(0, 14);
-    const password = btoa(`${shortcode}${passkey}${timestamp}`);
+      const { data: contribution } = await admin
+        .from('sacco_contributions')
+        .select('id, admin_id, member_id, amount, status, payment_method')
+        .eq('id', contributionId)
+        .maybeSingle();
 
-    const token = await getDarajaToken();
+      if (!contribution) return json({ error: 'Contribution not found' }, 404);
+      if (contribution.status !== 'pending') {
+        return json({ error: `This contribution is already ${contribution.status}.` }, 409);
+      }
 
-    // Initiate STK Push
-    const stkRes = await fetch(`${baseUrl}/mpesa/stkpush/v1/processrequest`, {
+      const { data: member } = await admin
+        .from('sacco_members')
+        .select('id, user_id, admin_id')
+        .eq('id', contribution.member_id)
+        .maybeSingle();
+
+      const isOwner = member?.user_id === user.id;
+      const isTheirStaff =
+        profile?.role !== 'sacco_member' &&
+        profile?.role !== 'client' &&
+        adminId === contribution.admin_id;
+
+      if (!isOwner && !isTheirStaff) {
+        return json({ error: 'Not authorised to pay this contribution' }, 403);
+      }
+
+      // The amount is the recorded one, not whatever the browser posted.
+      if (Math.round(Number(contribution.amount)) !== payable) {
+        return json({ error: 'Amount does not match the recorded contribution' }, 400);
+      }
+
+      adminId = contribution.admin_id;
+      memberId = contribution.member_id;
+    }
+
+    // ── Resolve credentials for this flow ────────────────────────────────────
+    let creds: DarajaCreds;
+    if (purpose === 'subscription' || purpose === 'test' || purpose === 'sacco_contribution') {
+      // Sacco contributions collect centrally — see the header note. The
+      // transaction row still carries admin_id + member_id, so which sacco the
+      // money is owed to is never ambiguous.
+      try {
+        creds = platformCreds();
+      } catch (_) {
+        return json(
+          {
+            error:
+              purpose === 'sacco_contribution'
+                ? 'M-Pesa is not available right now. Pay by cash, bank or card and record it here for your treasurer to confirm.'
+                : 'Platform M-Pesa is not configured (missing MPESA_* secrets).',
+            code: 'MPESA_NOT_CONFIGURED',
+          },
+          503,
+        );
+      }
+    } else {
+      const tc = await tenantCreds(admin, adminId);
+      if (!tc) {
+        return json(
+          {
+            error:
+              'M-Pesa is not set up for this account. Add your own Daraja credentials under Settings → M-Pesa before collecting payments.',
+            code: 'TENANT_MPESA_NOT_CONFIGURED',
+          },
+          409,
+        );
+      }
+      creds = tc;
+    }
+
+    // ── Initiate ─────────────────────────────────────────────────────────────
+    const timestamp = darajaTimestamp();
+    const token = await getDarajaToken(creds);
+    const route = stkRouting(creds);
+
+    const stkRes = await fetch(`${baseUrl(creds.environment)}/mpesa/stkpush/v1/processrequest`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        BusinessShortCode: shortcode,
-        Password: password,
+        BusinessShortCode: route.businessShortCode,
+        // The password is derived from the shortcode the request authenticates
+        // as, which for Buy Goods is the head office, not the till.
+        Password: stkPassword(route.businessShortCode, creds.passkey, timestamp),
         Timestamp: timestamp,
-        TransactionType: 'CustomerPayBillOnline',
-        Amount: Math.round(amount),
-        PartyA: normalised,
-        PartyB: shortcode,
-        PhoneNumber: normalised,
-        CallBackURL: callbackUrl,
-        AccountReference: accountRef.slice(0, 12),
-        TransactionDesc: `Payment for ${accountRef}`.slice(0, 13),
+        TransactionType: route.transactionType,
+        Amount: payable,
+        PartyA: msisdn,
+        PartyB: route.partyB,
+        PhoneNumber: msisdn,
+        CallBackURL: `${supabaseUrl}/functions/v1/mpesa-callback`,
+        // Daraja truncates these hard; send something the payer can recognise
+        // on their statement rather than a silently cut UUID.
+        AccountReference: String(accountRef).slice(0, 12),
+        TransactionDesc: String(accountRef).slice(0, 13),
       }),
     });
 
-    const stkData = await stkRes.json();
+    const stk = await stkRes.json().catch(() => ({}));
 
-    if (stkData.ResponseCode !== '0') {
-      return new Response(JSON.stringify({
-        error: stkData.errorMessage || stkData.ResponseDescription || 'STK push failed',
-      }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (stk.ResponseCode !== '0') {
+      const message = stk.errorMessage || stk.ResponseDescription || 'STK push failed';
+      console.error('STK push rejected', { purpose, shortcode: creds.shortcode, message });
+      return json({ error: message }, 400);
     }
 
-    // Record pending payment in DB
-    const checkoutRequestId = stkData.CheckoutRequestID;
-    const { data: txn, error: dbErr } = await supabase
-      .from('mpesa_transactions')
-      .insert({
-        checkout_request_id: checkoutRequestId,
-        merchant_request_id: stkData.MerchantRequestID,
-        phone_number: normalised,
-        amount: Math.round(amount),
-        account_reference: accountRef,
-        client_id: clientId || null,
-        plan_id: planId || null,
-        charge_id: chargeId || null,
+    // ── Record the attempt ───────────────────────────────────────────────────
+    // This row is the ONLY thing that makes the callback trustworthy: the
+    // callback endpoint is public, so it only acts on a CheckoutRequestID it
+    // finds here.
+    const { error: dbErr } = await admin.from('mpesa_transactions').insert({
+      checkout_request_id: stk.CheckoutRequestID,
+      merchant_request_id: stk.MerchantRequestID,
+      phone_number: msisdn,
+      amount: payable,
+      account_reference: accountRef,
+      admin_id: adminId,
+      purpose,
+      client_id: clientId,
+      plan_id: planId,
+      charge_id: chargeId,
+      member_id: memberId,
+      contribution_id: purpose === 'sacco_contribution' ? contributionId : null,
+      shortcode: creds.shortcode,
+      environment: creds.environment,
+      status: 'pending',
+    });
+
+    if (dbErr) {
+      // The customer's phone is already ringing, but we have nowhere to record
+      // the result — better to fail loudly than to take money we cannot match.
+      console.error('Failed to record STK attempt:', dbErr.message);
+      return json(
+        { error: 'Payment was initiated but could not be recorded. Do not retry — contact support.' },
+        500,
+      );
+    }
+
+    if (purpose === 'subscription') {
+      await admin.from('mpesa_subscription_payments').insert({
+        admin_id: adminId,
+        subscription_id: subscriptionId,
+        phone_number: msisdn,
+        amount: payable,
+        merchant_request_id: stk.MerchantRequestID,
+        checkout_request_id: stk.CheckoutRequestID,
         status: 'pending',
-      })
-      .select()
-      .single();
+      });
+    }
 
-    if (dbErr) console.error('DB insert error:', dbErr.message);
-
-    return new Response(JSON.stringify({
+    return json({
       success: true,
-      checkoutRequestId,
-      message: 'STK push sent. Waiting for customer to confirm on their phone.',
-    }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-
+      checkoutRequestId: stk.CheckoutRequestID,
+      message: 'STK push sent. Waiting for the customer to confirm on their phone.',
+    });
   } catch (err) {
     console.error('STK push error:', err);
-    return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return json({ error: (err as Error).message || 'Internal server error' }, 500);
   }
 });

@@ -6,11 +6,15 @@
  */
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { useSalesAgentPortal } from '../hooks/useSalesAgentPortal';
+import { useAgentTickets } from '../hooks/useAgentTickets';
 
 const SalesAgentContext = createContext(null);
 
 export const SalesAgentProvider = ({ children }) => {
   const portal = useSalesAgentPortal();
+  // Tickets hang off the agent profile the portal hook resolves, and mount here
+  // so their realtime subscriptions survive navigation like everything else.
+  const tickets = useAgentTickets(portal.agentProfile);
   const [activeView, setActiveView] = useState('portal');
   const [modals, setModals] = useState({
     leadRegistration: false,
@@ -22,6 +26,10 @@ export const SalesAgentProvider = ({ children }) => {
     scheduleFollowUp: false,
     prefillFollowUpLead: null,
     assist: false,
+    assistInbox: false,
+    tickets: false,
+    newTicket: false,
+    ticketThread: null,
     successPopup: null,
   });
 
@@ -35,6 +43,7 @@ export const SalesAgentProvider = ({ children }) => {
 
   const value = {
     ...portal,
+    ...tickets,
     activeView,
     setActiveView,
     modals,

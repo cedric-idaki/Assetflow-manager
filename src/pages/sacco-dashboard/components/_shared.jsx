@@ -113,11 +113,14 @@ export const StatCard = ({ label, value, icon, hint, tone = 'primary' }) => {
 // ── Status badge ─────────────────────────────────────────────────────────────
 const BADGE_TONES = {
   active: 'bg-emerald-100 text-emerald-700', paid: 'bg-emerald-100 text-emerald-700',
+  completed: 'bg-emerald-100 text-emerald-700',
   approved: 'bg-emerald-100 text-emerald-700', settled: 'bg-emerald-100 text-emerald-700',
   passed: 'bg-emerald-100 text-emerald-700', closed: 'bg-slate-100 text-slate-600',
   inactive: 'bg-slate-100 text-slate-600', pending: 'bg-amber-100 text-amber-700',
   pending_approval: 'bg-amber-100 text-amber-700', overdue: 'bg-red-100 text-red-700',
   suspended: 'bg-red-100 text-red-700', rejected: 'bg-red-100 text-red-700',
+  failed: 'bg-red-100 text-red-700', reversed: 'bg-purple-100 text-purple-700',
+  waived: 'bg-slate-100 text-slate-600',
   open: 'bg-sky-100 text-sky-700', proposed: 'bg-sky-100 text-sky-700',
   seconded: 'bg-indigo-100 text-indigo-700', draft: 'bg-slate-100 text-slate-600',
   nominations_open: 'bg-sky-100 text-sky-700', nominations_closed: 'bg-indigo-100 text-indigo-700',
@@ -211,3 +214,94 @@ export const Table = ({ columns, children }) => (
     </table>
   </div>
 );
+
+// ── Contributions vocabulary ─────────────────────────────────────────────────
+// Single source of truth for both portals, so the member's "Total saved" and
+// the treasurer's "Total collected" can never drift apart.
+
+/**
+ * 20260801120000_sacco_contributions_engine renames 'paid' to 'completed'.
+ * Both are accepted so a ledger that has not been migrated yet still totals
+ * correctly instead of silently reading as zero.
+ */
+export const SETTLED_STATUSES = ['completed', 'paid'];
+export const isSettled = (c) => SETTLED_STATUSES.includes(c?.status);
+
+export const CONTRIB_STATUSES  = ['pending', 'completed', 'failed', 'reversed', 'overdue', 'waived'];
+export const PAYMENT_METHODS   = ['cash', 'bank', 'mpesa', 'card', 'cheque', 'other'];
+export const CONTRIB_ACCOUNTS  = [
+  { value: 'deposits',      label: 'Deposit contributions' },
+  { value: 'share_capital', label: 'Share capital' },
+  { value: 'other',         label: 'Other' },
+];
+export const accountLabel = (a) =>
+  CONTRIB_ACCOUNTS.find((x) => x.value === (a || 'deposits'))?.label || 'Deposit contributions';
+
+export const sumAmount = (rows) =>
+  (rows || []).reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+
+export const monthKey = (d) => (d ? String(d).slice(0, 7) : '');
+export const monthLabel = (d) => (d
+  ? new Date(`${String(d).slice(0, 7)}-01T00:00:00`).toLocaleDateString('en-KE', { month: 'short', year: '2-digit' })
+  : '—');
+
+// ── Progress bar ─────────────────────────────────────────────────────────────
+export const ProgressBar = ({ value = 0, target = 0, tone = 'primary' }) => {
+  const pct = target > 0 ? Math.min(100, Math.round((value / target) * 100)) : (value > 0 ? 100 : 0);
+  const bar = { primary: '#1da8c5', success: '#059669', warning: '#ca8a04', danger: '#dc2626' }[tone] || '#1da8c5';
+  return (
+    <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: bar }} />
+    </div>
+  );
+};
+
+/**
+ * Monthly contribution progress: a bar per month, against the expected amount.
+ * Deliberately dependency-free — a chart library is not worth pulling in for a
+ * twelve-bar column chart, and this one keeps the app's theme tokens.
+ */
+export const ContributionChart = ({ data = [], target = 0, height = 140 }) => {
+  const max = Math.max(target, ...data.map((d) => d.value), 1);
+  if (data.length === 0) {
+    return <p className="text-xs text-muted-foreground py-6 text-center">Nothing to chart yet.</p>;
+  }
+  return (
+    <div>
+      <div className="relative flex items-end gap-1.5 sm:gap-2" style={{ height }}>
+        {target > 0 && (
+          <div
+            className="absolute left-0 right-0 border-t border-dashed border-amber-400/70 pointer-events-none"
+            style={{ bottom: `${(target / max) * 100}%` }}
+            title={`Expected ${KES(target)} / month`}
+          />
+        )}
+        {data.map((d) => {
+          const pct = (d.value / max) * 100;
+          const met = target > 0 && d.value >= target;
+          return (
+            <div key={d.key} className="flex-1 h-full flex flex-col justify-end items-center group relative">
+              <div
+                className="w-full rounded-t transition-all"
+                style={{
+                  height: `${Math.max(pct, d.value > 0 ? 2 : 0)}%`,
+                  background: met ? '#059669' : d.value > 0 ? '#34c1dd' : 'transparent',
+                  minHeight: d.value > 0 ? 3 : 0,
+                }}
+              />
+              {d.value === 0 && <div className="w-full h-0.5 rounded bg-border" />}
+              <span className="absolute -top-6 px-1.5 py-0.5 rounded bg-foreground text-background text-[10px] font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                {KES(d.value)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-1.5 sm:gap-2 mt-1.5">
+        {data.map((d) => (
+          <span key={d.key} className="flex-1 text-center text-[10px] text-muted-foreground truncate">{d.label}</span>
+        ))}
+      </div>
+    </div>
+  );
+};

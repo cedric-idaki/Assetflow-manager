@@ -45,7 +45,14 @@ const getAdminId = async () => {
 };
 
 // Which template an operational row posts through.
-const contributionTemplate = (type = '') => {
+// 20260801120000_sacco_contributions_engine renames 'paid' to 'completed'.
+// Both are accepted so a ledger that has not been migrated yet still posts.
+const isSettledContribution = (c) => ['completed', 'paid'].includes(c?.status);
+
+// A contribution row settled after 20260801 says which member account it
+// credits; the type name is the fallback for everything recorded before that.
+const contributionTemplate = (type = '', account = '') => {
+  if (account === 'share_capital') return 'MEMBER_SHARE_PURCHASE';
   const t = String(type).toLowerCase();
   if (t.includes('share'))                        return 'MEMBER_SHARE_PURCHASE';
   if (t.includes('welfare') || t.includes('benevolent')) return 'WELFARE_CONTRIBUTION';
@@ -382,10 +389,10 @@ export const useSaccoFinance = (sacco) => {
     };
 
     if (sources.contributions !== false) {
-      contributions.filter((c) => c.status === 'paid' && round2(c.amount) > 0).forEach((c) => {
+      contributions.filter((c) => isSettledContribution(c) && round2(c.amount) > 0).forEach((c) => {
         push({
           group: 'contributions',
-          templateCode: contributionTemplate(c.contribution_type),
+          templateCode: contributionTemplate(c.contribution_type, c.account),
           amount: round2(c.amount),
           date: c.paid_date || c.created_at?.slice(0, 10),
           description: `${c.contribution_type || 'Contribution'} — ${c.member?.full_name || 'member'}`,
@@ -532,7 +539,7 @@ export const useSaccoFinance = (sacco) => {
     }
 
     const depositBalance = round2((contributions || [])
-      .filter((c) => c.status === 'paid')
+      .filter(isSettledContribution)
       .reduce((s, c) => s + (Number(c.amount) || 0), 0));
     const depositInterest = computeDepositInterestAccrual({
       depositBalance,

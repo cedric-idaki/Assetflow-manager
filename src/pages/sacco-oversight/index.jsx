@@ -336,7 +336,8 @@ const SaccoOversight = () => {
     totalSaccos:   saccos.length,
     pendingKyc:    saccos.filter((s) => s.kyc_status === 'pending').length,
     totalMembers:  members.length,
-    collected:     contributions.filter((c) => c.status === 'paid').reduce((a, c) => a + Number(c.amount || 0), 0),
+    // 'paid' is the pre-20260801 spelling of 'completed'; both are settled.
+    collected:     contributions.filter((c) => ['completed', 'paid'].includes(c.status)).reduce((a, c) => a + Number(c.amount || 0), 0),
     loansIssued:   loans.filter((l) => l.status === 'approved' || l.status === 'active').length,
     loanPrincipal: loans.filter((l) => l.status === 'approved' || l.status === 'active').reduce((a, l) => a + Number(l.principal || 0), 0),
   }), [saccos, members, contributions, loans]);

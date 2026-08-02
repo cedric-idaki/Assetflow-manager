@@ -68,6 +68,8 @@ const StatusBadge = ({ status }) => {
     pending:  'bg-amber-100  text-amber-700  dark:bg-amber-900/30  dark:text-amber-400',
     overdue:  'bg-red-100    text-red-700    dark:bg-red-900/30    dark:text-red-400',
     posted:   'bg-blue-100   text-blue-700   dark:bg-blue-900/30   dark:text-blue-400',
+    reversed: 'bg-red-100    text-red-700    dark:bg-red-900/30    dark:text-red-400',
+    reversal: 'bg-amber-100  text-amber-700  dark:bg-amber-900/30  dark:text-amber-400',
     approved: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
     draft:    'bg-gray-100   text-gray-600   dark:bg-gray-800      dark:text-gray-400',
     active:   'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -227,6 +229,20 @@ const printInvoice = ({ company, invoice: inv }) => {
   const total  = (inv.amount || 0) + (inv.vat_amount || 0);
   const assetDesc = inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment';
   const assetRef  = [inv.asset_code, inv.plate_number].filter(Boolean).join(' · ');
+  const money = (n) => (n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 });
+  // A hand-raised invoice carries its own line items; a payment-derived one is
+  // always the single asset line.
+  const itemRows = (inv.items && inv.items.length > 0)
+    ? inv.items.map(it => `
+          <tr>
+            <td>${it.description}${it.quantity > 1 ? `<div class="muted">${it.quantity} × ${money(it.unit_price)}</div>` : ''}</td>
+            <td class="r">${money(it.line_total)}</td>
+          </tr>`).join('')
+    : `
+          <tr>
+            <td>${assetDesc}${assetRef ? `<div class="muted">${assetRef}</div>` : ''}</td>
+            <td class="r">${money(inv.amount)}</td>
+          </tr>`;
   w.document.write(`
     <html><head><title>Invoice — ${inv.invoice_no} — ${inv.client_name || 'Client'}</title>
     <style>
@@ -279,13 +295,10 @@ const printInvoice = ({ company, invoice: inv }) => {
       <table class="items">
         <thead><tr><th>Description</th><th class="r">Amount (KES)</th></tr></thead>
         <tbody>
-          <tr>
-            <td>${assetDesc}${assetRef ? `<div class="muted">${assetRef}</div>` : ''}</td>
-            <td class="r">${(inv.amount || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
-          </tr>
+          ${itemRows}
           <tr class="vat">
-            <td>VAT (16%)</td>
-            <td class="r">${(inv.vat_amount || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
+            <td>VAT (${inv.vat_rate ?? 16}%)</td>
+            <td class="r">${money(inv.vat_amount)}</td>
           </tr>
         </tbody>
       </table>
@@ -305,11 +318,115 @@ const printInvoice = ({ company, invoice: inv }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB 1 — INVOICES
 // ─────────────────────────────────────────────────────────────────────────────
-const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }) => {
+const emptyInvoiceLine = () => ({ description: '', quantity: 1, unit_price: '' });
+
+const blankInvoiceForm = () => {
+  const today = new Date();
+  const due   = new Date(today);
+  due.setDate(due.getDate() + 30);
+  return {
+    client_id: '', client_name: '', client_email: '', client_phone: '', account_no: '',
+    asset_id: '',
+    issue_date: today.toISOString().split('T')[0],
+    due_date:   due.toISOString().split('T')[0],
+    vat_rate: 16,
+    status: 'pending',
+    payment_method: '',
+    reference: '',
+    notes: '',
+    items: [emptyInvoiceLine()],
+  };
+};
+
+const InvoicesTab = ({
+  invoices, loading, companyProfile, financialSummary: fs,
+  clients = [], assets = [], onCreate, onUpdateStatus, onDelete,
+}) => {
   const [search,  setSearch]  = useState('');
   const [filter,  setFilter]  = useState('all');
   const [selected, setSelected] = useState(null);
   const [emailing, setEmailing] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [saving,   setSaving]   = useState(false);
+  const [busyRow,  setBusyRow]  = useState(null);
+  const [form,     setForm]     = useState(blankInvoiceForm);
+
+  const formSubtotal = useMemo(
+    () => form.items.reduce((s, it) => s + (parseFloat(it.quantity || 0) * parseFloat(it.unit_price || 0)), 0),
+    [form.items]
+  );
+  const formVat   = formSubtotal * (parseFloat(form.vat_rate || 0) / 100);
+  const formTotal = formSubtotal + formVat;
+
+  const setLine = (idx, patch) =>
+    setForm(p => ({ ...p, items: p.items.map((it, i) => i === idx ? { ...it, ...patch } : it) }));
+
+  const pickClient = (clientId) => {
+    const c = clients.find(x => x.id === clientId);
+    setForm(p => ({
+      ...p,
+      client_id:    clientId,
+      client_name:  c?.full_name      || '',
+      client_email: c?.email          || '',
+      client_phone: c?.phone          || '',
+      account_no:   c?.account_number || '',
+    }));
+  };
+
+  // Choosing an asset fills the first empty line with its description and price
+  // so the common case — billing a client for an asset — is two clicks.
+  const pickAsset = (assetId) => {
+    const a = assets.find(x => x.id === assetId);
+    setForm(p => {
+      if (!a) return { ...p, asset_id: '' };
+      const label = a.description || [a.make, a.model, a.year].filter(Boolean).join(' ') || a.asset_code || 'Asset';
+      const ref   = [a.asset_code, a.plate_number].filter(Boolean).join(' · ');
+      const idx   = p.items.findIndex(it => !it.description?.trim());
+      const line  = {
+        description: ref ? `${label} (${ref})` : label,
+        quantity: 1,
+        unit_price: a.selling_price ?? '',
+      };
+      const items = idx === -1 ? [...p.items, line] : p.items.map((it, i) => i === idx ? line : it);
+      return { ...p, asset_id: assetId, items };
+    });
+  };
+
+  const handleCreate = async () => {
+    if (!form.client_name.trim()) { toast('Choose a client or type a bill-to name', 'error'); return; }
+    if (!form.items.some(it => it.description.trim())) { toast('Add at least one line item', 'error'); return; }
+    if (formSubtotal <= 0) { toast('Invoice total must be greater than zero', 'error'); return; }
+    setSaving(true);
+    try {
+      const created = await onCreate(form);
+      setForm(blankInvoiceForm());
+      setShowForm(false);
+      toast(`Invoice ${created?.invoice_no || ''} created for ${form.client_name}`, 'success');
+    } catch (e) {
+      toast(e.message || 'Failed to create invoice', 'error');
+    } finally { setSaving(false); }
+  };
+
+  const handleStatus = async (inv, status) => {
+    setBusyRow(inv.id);
+    try {
+      await onUpdateStatus(inv.id, status);
+      setSelected(prev => prev && prev.id === inv.id ? { ...prev, status } : prev);
+      toast(`${inv.invoice_no} marked ${status}`, 'success');
+    } catch (e) { toast(e.message || 'Failed to update invoice', 'error'); }
+    finally { setBusyRow(null); }
+  };
+
+  const handleDelete = async (inv) => {
+    if (!window.confirm(`Delete invoice ${inv.invoice_no}? This cannot be undone.`)) return;
+    setBusyRow(inv.id);
+    try {
+      await onDelete(inv.id);
+      setSelected(prev => prev && prev.id === inv.id ? null : prev);
+      toast(`Invoice ${inv.invoice_no} deleted`, 'success');
+    } catch (e) { toast(e.message || 'Failed to delete invoice', 'error'); }
+    finally { setBusyRow(null); }
+  };
 
   const filtered = useMemo(() =>
     invoices.filter(inv => {
@@ -354,8 +471,10 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
             ? { description: inv.asset, asset_code: inv.asset_code, asset_type: inv.asset_type }
             : null,
           lineItems: [
-            { description: inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment', quantity: 1, unitPrice: inv.amount || 0 },
-            { description: 'VAT (16%)', quantity: 1, unitPrice: inv.vat_amount || 0 },
+            ...(inv.items && inv.items.length > 0
+              ? inv.items.map(it => ({ description: it.description, quantity: it.quantity, unitPrice: it.unit_price }))
+              : [{ description: inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment', quantity: 1, unitPrice: inv.amount || 0 }]),
+            { description: `VAT (${inv.vat_rate ?? 16}%)`, quantity: 1, unitPrice: inv.vat_amount || 0 },
           ],
         });
         toast(`Invoice ${inv.invoice_no} emailed to ${inv.client_email}`, 'success');
@@ -382,6 +501,7 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
             <div className="text-right">
               <p className="text-2xl font-black text-primary">INVOICE</p>
               <p className="text-sm font-mono font-bold text-gray-700 dark:text-muted-foreground mt-1">{inv.invoice_no}</p>
+              <div className="mt-2"><StatusBadge status={inv.status} /></div>
             </div>
           </div>
           {/* Bill to / dates */}
@@ -410,19 +530,35 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
               </tr>
             </thead>
             <tbody>
-              <tr className="border-b border-gray-100 dark:border-border">
-                <td className="px-4 py-3 text-gray-800 dark:text-foreground">
-                  {inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment'}
-                  {[inv.asset_code, inv.plate_number].filter(Boolean).length > 0 && (
-                    <span className="block text-xs text-gray-400">
-                      {[inv.asset_code, inv.plate_number].filter(Boolean).join(' · ')}
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-right font-mono text-gray-800 dark:text-foreground">{inv.amount.toLocaleString('en-KE')}</td>
-              </tr>
+              {inv.items && inv.items.length > 0 ? inv.items.map(it => (
+                <tr key={it.id} className="border-b border-gray-100 dark:border-border">
+                  <td className="px-4 py-3 text-gray-800 dark:text-foreground">
+                    {it.description}
+                    {it.quantity > 1 && (
+                      <span className="block text-xs text-gray-400">
+                        {it.quantity} × {parseFloat(it.unit_price || 0).toLocaleString('en-KE')}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-gray-800 dark:text-foreground">
+                    {parseFloat(it.line_total || 0).toLocaleString('en-KE')}
+                  </td>
+                </tr>
+              )) : (
+                <tr className="border-b border-gray-100 dark:border-border">
+                  <td className="px-4 py-3 text-gray-800 dark:text-foreground">
+                    {inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment'}
+                    {[inv.asset_code, inv.plate_number].filter(Boolean).length > 0 && (
+                      <span className="block text-xs text-gray-400">
+                        {[inv.asset_code, inv.plate_number].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-gray-800 dark:text-foreground">{inv.amount.toLocaleString('en-KE')}</td>
+                </tr>
+              )}
               <tr className="border-b border-gray-100 dark:border-border text-gray-500">
-                <td className="px-4 py-2 text-xs">VAT (16%)</td>
+                <td className="px-4 py-2 text-xs">VAT ({inv.vat_rate ?? 16}%)</td>
                 <td className="px-4 py-2 text-right font-mono text-xs">{inv.vat_amount.toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
               </tr>
             </tbody>
@@ -447,6 +583,23 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
                 ? <><Icon name="Loader" size={14} color="currentColor" className="animate-spin" /> Sending…</>
                 : <><Icon name="Mail" size={14} color="currentColor" /> Email</>}
             </button>
+            {/* Only hand-raised invoices are editable — the rest mirror payments. */}
+            {inv.source === 'manual' && (
+              <>
+                {inv.status !== 'paid' && (
+                  <button className={S.btnSec} onClick={() => handleStatus(inv, 'paid')} disabled={busyRow === inv.id}>
+                    <Icon name="CheckCircle" size={14} color="currentColor" /> Mark Paid
+                  </button>
+                )}
+                <button
+                  className={`${S.btnGhost} text-red-500 hover:text-red-600`}
+                  onClick={() => handleDelete(inv)}
+                  disabled={busyRow === inv.id}
+                >
+                  <Icon name="Trash2" size={14} color="currentColor" /> Delete
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -469,7 +622,7 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
           <Icon name="Search" size={14} color="var(--muted-foreground)" className="absolute left-3 top-1/2 -translate-y-1/2" />
           <input className={`${S.input} pl-9`} placeholder="Search client, invoice #, reference…" value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        {['all', 'paid', 'pending', 'overdue'].map(s => (
+        {['all', 'draft', 'paid', 'pending', 'overdue'].map(s => (
           <button key={s} onClick={() => setFilter(s)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-colors ${
               filter === s ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'
@@ -477,7 +630,146 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
             {s}
           </button>
         ))}
+        <button className={S.btnPri} onClick={() => setShowForm(p => !p)}>
+          <Icon name={showForm ? 'ChevronUp' : 'Plus'} size={14} color="currentColor" />
+          {showForm ? 'Hide Form' : 'New Invoice'}
+        </button>
       </div>
+
+      {/* New invoice */}
+      {showForm && (
+        <div className={`${S.panel} border-primary/40`} style={{ background: 'rgba(26,86,219,0.03)' }}>
+          <div className={S.header}>
+            <span className="font-semibold text-foreground flex items-center gap-2">
+              <Icon name="FilePlus" size={15} color="var(--primary)" /> New Invoice
+            </span>
+            <span className="text-xs text-muted-foreground">Number is allocated automatically</span>
+          </div>
+          <div className={S.body}>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div>
+                <label className={S.label}>Client *</label>
+                <select className={`${S.input} ${S.select}`} value={form.client_id} onChange={e => pickClient(e.target.value)}>
+                  <option value="">— Select client —</option>
+                  {clients.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.full_name}{c.account_number ? ` · ${c.account_number}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={S.label}>Bill To (name on invoice) *</label>
+                <input className={S.input} placeholder="Client or company name"
+                  value={form.client_name} onChange={e => setForm(p => ({ ...p, client_name: e.target.value }))} />
+              </div>
+              <div>
+                <label className={S.label}>Email (for sending)</label>
+                <input className={S.input} placeholder="client@example.com"
+                  value={form.client_email} onChange={e => setForm(p => ({ ...p, client_email: e.target.value }))} />
+              </div>
+              <div>
+                <label className={S.label}>Asset (optional — fills a line)</label>
+                <select className={`${S.input} ${S.select}`} value={form.asset_id} onChange={e => pickAsset(e.target.value)}>
+                  <option value="">— None —</option>
+                  {assets.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.description || [a.make, a.model, a.year].filter(Boolean).join(' ') || a.asset_code}
+                      {a.plate_number ? ` · ${a.plate_number}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={S.label}>Issue Date *</label>
+                <input type="date" className={S.input} value={form.issue_date}
+                  onChange={e => setForm(p => ({ ...p, issue_date: e.target.value }))} />
+              </div>
+              <div>
+                <label className={S.label}>Due Date</label>
+                <input type="date" className={S.input} value={form.due_date}
+                  onChange={e => setForm(p => ({ ...p, due_date: e.target.value }))} />
+              </div>
+            </div>
+
+            {/* Line items */}
+            <label className={S.label}>Line Items *</label>
+            <div className="space-y-2 mb-3">
+              {form.items.map((it, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                  <input className={`${S.input} col-span-12 md:col-span-6`} placeholder="Description of goods or service"
+                    value={it.description} onChange={e => setLine(idx, { description: e.target.value })} />
+                  <input type="number" min="0" step="0.01" className={`${S.input} col-span-4 md:col-span-2`} placeholder="Qty"
+                    value={it.quantity} onChange={e => setLine(idx, { quantity: e.target.value })} />
+                  <input type="number" min="0" step="0.01" className={`${S.input} col-span-5 md:col-span-2`} placeholder="Unit price"
+                    value={it.unit_price} onChange={e => setLine(idx, { unit_price: e.target.value })} />
+                  <div className="col-span-2 md:col-span-1 text-right text-sm font-mono text-muted-foreground">
+                    {((parseFloat(it.quantity || 0)) * (parseFloat(it.unit_price || 0))).toLocaleString('en-KE', { maximumFractionDigits: 0 })}
+                  </div>
+                  <button
+                    className="col-span-1 text-muted-foreground hover:text-red-500 disabled:opacity-30"
+                    disabled={form.items.length === 1}
+                    title="Remove line"
+                    onClick={() => setForm(p => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))}
+                  >
+                    <Icon name="X" size={14} color="currentColor" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button className={S.btnGhost} onClick={() => setForm(p => ({ ...p, items: [...p.items, emptyInvoiceLine()] }))}>
+              <Icon name="Plus" size={13} color="currentColor" /> Add line
+            </button>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4 mb-4">
+              <div>
+                <label className={S.label}>VAT Rate (%)</label>
+                <input type="number" min="0" step="0.5" className={S.input} value={form.vat_rate}
+                  onChange={e => setForm(p => ({ ...p, vat_rate: e.target.value }))} />
+              </div>
+              <div>
+                <label className={S.label}>Status</label>
+                <select className={`${S.input} ${S.select}`} value={form.status}
+                  onChange={e => setForm(p => ({ ...p, status: e.target.value }))}>
+                  <option value="pending">Pending (unpaid)</option>
+                  <option value="draft">Draft</option>
+                  <option value="paid">Paid</option>
+                </select>
+              </div>
+              <div>
+                <label className={S.label}>Payment Method</label>
+                <input className={S.input} placeholder="M-Pesa, Bank, Cash…" value={form.payment_method}
+                  onChange={e => setForm(p => ({ ...p, payment_method: e.target.value }))} />
+              </div>
+              <div>
+                <label className={S.label}>Reference</label>
+                <input className={S.input} placeholder="PO / order no." value={form.reference}
+                  onChange={e => setForm(p => ({ ...p, reference: e.target.value }))} />
+              </div>
+              <div className="md:col-span-4">
+                <label className={S.label}>Notes (printed on the invoice)</label>
+                <input className={S.input} placeholder="Payment terms, thank-you note…" value={form.notes}
+                  onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
+              </div>
+            </div>
+
+            {/* Running total */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-4">
+              <div className="flex gap-6 text-sm">
+                <span className="text-muted-foreground">Subtotal <span className="font-mono font-semibold text-foreground ml-1">{fmt(formSubtotal)}</span></span>
+                <span className="text-muted-foreground">VAT <span className="font-mono font-semibold text-foreground ml-1">{fmt(formVat)}</span></span>
+                <span className="text-muted-foreground">Total <span className="font-mono font-bold text-primary ml-1">{fmt(formTotal)}</span></span>
+              </div>
+              <div className="flex gap-3">
+                <button className={S.btnPri} onClick={handleCreate} disabled={saving}>
+                  {saving ? 'Creating…' : 'Create Invoice'}
+                </button>
+                <button className={S.btnSec} onClick={() => { setShowForm(false); setForm(blankInvoiceForm()); }}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Table */}
       <div className={S.panel}>
@@ -500,10 +792,15 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
                   </tr>
                 ))
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={9}><Empty icon="FileText" text="No invoices found" sub="Payments will appear here once recorded" /></td></tr>
+                <tr><td colSpan={9}><Empty icon="FileText" text="No invoices found" sub="Create one with “New Invoice”, or record a payment" /></td></tr>
               ) : filtered.map(inv => (
                 <tr key={inv.id} className={S.row}>
-                  <td className={S.tdFirst}>{inv.invoice_no}</td>
+                  <td className={S.tdFirst}>
+                    {inv.invoice_no}
+                    {inv.source === 'manual' && (
+                      <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-primary">raised</span>
+                    )}
+                  </td>
                   <td className={S.td}>{inv.client_name}</td>
                   <td className={S.td + ' max-w-32 truncate'}>{inv.asset}</td>
                   <td className={S.td}>{fmtDate(inv.date)}</td>
@@ -512,9 +809,17 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
                   <td className={S.td}>{inv.method}</td>
                   <td className={S.td}><StatusBadge status={inv.status} /></td>
                   <td className={S.td}>
-                    <button className={S.btnGhost} onClick={() => setSelected(inv)}>
-                      <Icon name="Eye" size={13} color="currentColor" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button className={S.btnGhost} onClick={() => setSelected(inv)} title="View invoice">
+                        <Icon name="Eye" size={13} color="currentColor" />
+                      </button>
+                      {inv.source === 'manual' && inv.status !== 'paid' && (
+                        <button className={S.btnGhost} title="Mark as paid"
+                          onClick={() => handleStatus(inv, 'paid')} disabled={busyRow === inv.id}>
+                          <Icon name="CheckCircle" size={13} color="currentColor" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -529,7 +834,7 @@ const InvoicesTab = ({ invoices, loading, companyProfile, financialSummary: fs }
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB 2 — AUTO JOURNAL FEED
 // ─────────────────────────────────────────────────────────────────────────────
-const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS }) => {
+const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS, onNewEntry }) => {
   const [filter, setFilter] = useState('all');
 
   const groups = {
@@ -563,7 +868,7 @@ const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS }) => {
       </div>
 
       {/* Filter pills */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 items-center">
         {Object.entries({ all: 'All', sales: 'Sales', payments: 'Payments', penalties: 'Penalties', payroll: 'Payroll', wallet: 'Wallet' }).map(([k, v]) => (
           <button key={k} onClick={() => setFilter(k)}
             className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
@@ -572,6 +877,13 @@ const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS }) => {
             {v} ({groups[k].length})
           </button>
         ))}
+        {/* This feed is posted by the system; anything you write yourself lives
+            one tab over, so make the way there obvious from here. */}
+        {onNewEntry && (
+          <button className={`${S.btnPri} ml-auto`} onClick={onNewEntry}>
+            <Icon name="Plus" size={14} color="currentColor" /> New Journal Entry
+          </button>
+        )}
       </div>
 
       {/* Feed */}
@@ -620,57 +932,122 @@ const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TAB 3 — MANUAL JOURNAL ENTRIES
+// TAB 3 — JOURNAL ENTRIES
+//
+// Anyone with Finance Hub access can write the books here. An entry carries as
+// many lines as the transaction needs and will not post until debits equal
+// credits; the lines are stored under one entry_no and shown together. Nothing
+// is ever edited after posting — a mistake is corrected with a reversal.
 // ─────────────────────────────────────────────────────────────────────────────
-const JournalTab = ({ journalEntries, chartOfAccounts, loading, onCreate }) => {
-  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], description: '', debitAccount: '', creditAccount: '', amount: '', reference: '', entryType: 'general' });
+const todayISO = () => new Date().toISOString().split('T')[0];
+const blankHead  = () => ({ date: todayISO(), description: '', reference: '', entryType: 'general' });
+const blankLines = () => [{ account: '', debit: '', credit: '' }, { account: '', debit: '', credit: '' }];
+const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+
+const JournalTab = ({ journalEntries, chartOfAccounts, loading, onPost, onReverse }) => {
+  const [head,   setHead]   = useState(blankHead);
+  const [lines,  setLines]  = useState(blankLines);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState({});
+  const [reversing, setReversing] = useState(null);
 
-  const coaNames = chartOfAccounts.map(a => `${a.account_code} — ${a.account_name}`);
+  const coaNames = chartOfAccounts
+    .filter(a => a.is_active !== false)
+    .map(a => `${a.account_code} — ${a.account_name}`);
 
-  const filtered = journalEntries.filter(j =>
-    !search || j.description?.toLowerCase().includes(search.toLowerCase()) ||
-    j.debit_account?.toLowerCase().includes(search.toLowerCase()) ||
-    j.credit_account?.toLowerCase().includes(search.toLowerCase())
-  );
+  const totalDr  = round2(lines.reduce((s, l) => s + (parseFloat(l.debit)  || 0), 0));
+  const totalCr  = round2(lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0));
+  const balanced = totalDr === totalCr && totalDr > 0;
+
+  const setLine = (i, patch) => setLines(ls => ls.map((l, ix) => (ix === i ? { ...l, ...patch } : l)));
+
+  // Rows that belong to the same entry_no are one entry. Legacy rows posted
+  // before entry_no existed stand alone under their own id.
+  const groups = useMemo(() => {
+    const map = new Map();
+    journalEntries.forEach(j => {
+      const key = j.entry_no || j.id;
+      if (!map.has(key)) map.set(key, { key, entryNo: j.entry_no, rows: [] });
+      map.get(key).rows.push(j);
+    });
+    return [...map.values()].map(g => {
+      const first = g.rows[0];
+      return {
+        ...g,
+        date:        first.entry_date,
+        description: first.description,
+        reference:   first.reference,
+        entryType:   first.entry_type,
+        status:      g.rows.some(r => r.status === 'reversed') ? 'reversed' : (first.status || 'posted'),
+        total:       g.rows.reduce((s, r) => s + parseFloat(r.amount || 0), 0),
+      };
+    });
+  }, [journalEntries]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return groups;
+    return groups.filter(g =>
+      `${g.entryNo || ''} ${g.description || ''} ${g.reference || ''} ${g.rows.map(r => `${r.debit_account} ${r.credit_account}`).join(' ')}`
+        .toLowerCase().includes(q)
+    );
+  }, [groups, search]);
 
   const handleSave = async () => {
-    if (!form.description || !form.debitAccount || !form.creditAccount || !form.amount) {
-      toast('Please fill in all required fields', 'error'); return;
-    }
-    if (parseFloat(form.amount) <= 0) { toast('Amount must be greater than zero', 'error'); return; }
-    if (form.debitAccount === form.creditAccount) { toast('Debit and Credit accounts must differ', 'error'); return; }
+    if (!head.description.trim()) { toast('Describe what the entry is for', 'error'); return; }
+    const usable = lines.filter(l => l.account.trim() && ((parseFloat(l.debit) || 0) > 0 || (parseFloat(l.credit) || 0) > 0));
+    if (usable.length < 2)  { toast('An entry needs at least one debit and one credit line', 'error'); return; }
+    if (totalDr <= 0)       { toast('Amounts must be greater than zero', 'error'); return; }
+    if (!balanced)          { toast(`Out of balance by ${fmt(Math.abs(totalDr - totalCr))} — debits must equal credits`, 'error'); return; }
     setSaving(true);
     try {
-      await onCreate(form);
-      setForm({ date: new Date().toISOString().split('T')[0], description: '', debitAccount: '', creditAccount: '', amount: '', reference: '', entryType: 'general' });
-      toast('Journal entry posted successfully', 'success');
+      await onPost({ ...head, lines: usable });
+      setHead(blankHead());
+      setLines(blankLines());
+      toast('Journal entry posted', 'success');
     } catch (e) { toast(e.message, 'error'); }
     finally { setSaving(false); }
   };
 
+  const handleReverse = async (g) => {
+    const reason = window.prompt(
+      `Reverse ${g.entryNo || 'this entry'}?\n\nThe original stays in the ledger and a mirrored entry is posted against it. Reason (optional):`
+    );
+    if (reason === null) return;
+    setReversing(g.key);
+    try {
+      await onReverse(g.rows, reason || null);
+      toast('Entry reversed', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setReversing(null); }
+  };
+
   return (
     <div className="space-y-5">
-      {/* New entry form */}
+      {/* New entry composer */}
       <div className={S.panel}>
         <div className={S.header}>
           <div className="flex items-center gap-2">
             <Icon name="BookOpen" size={16} color="var(--primary)" />
-            <span className="font-semibold text-foreground">New Manual Entry</span>
+            <span className="font-semibold text-foreground">New Journal Entry</span>
           </div>
-          <span className="text-xs text-muted-foreground">Debits = Credits (double-entry)</span>
+          <span className={`text-xs font-semibold ${balanced ? 'text-emerald-600' : 'text-muted-foreground'}`}>
+            {balanced ? 'Balanced' : 'Debits must equal credits'}
+          </span>
         </div>
         <div className={S.body}>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
             <div>
               <label className={S.label}>Entry Date *</label>
-              <input type="date" className={S.input} value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} />
+              <input type="date" className={S.input} value={head.date} onChange={e => setHead(p => ({ ...p, date: e.target.value }))} />
             </div>
             <div>
               <label className={S.label}>Entry Type</label>
-              <select className={`${S.input} ${S.select}`} value={form.entryType} onChange={e => setForm(p => ({ ...p, entryType: e.target.value }))}>
+              <select className={`${S.input} ${S.select}`} value={head.entryType} onChange={e => setHead(p => ({ ...p, entryType: e.target.value }))}>
                 <option value="general">General</option>
+                <option value="expense">Expense</option>
+                <option value="revenue">Revenue</option>
                 <option value="depreciation">Depreciation</option>
                 <option value="accrual">Accrual</option>
                 <option value="adjustment">Adjustment</option>
@@ -679,79 +1056,159 @@ const JournalTab = ({ journalEntries, chartOfAccounts, loading, onCreate }) => {
             </div>
             <div>
               <label className={S.label}>Reference / Doc #</label>
-              <input className={S.input} placeholder="e.g. PV-001, JE-2024…" value={form.reference} onChange={e => setForm(p => ({ ...p, reference: e.target.value }))} />
+              <input className={S.input} placeholder="e.g. PV-001, receipt no…" value={head.reference} onChange={e => setHead(p => ({ ...p, reference: e.target.value }))} />
             </div>
             <div className="lg:col-span-3">
               <label className={S.label}>Description *</label>
-              <input className={S.input} placeholder="Describe the transaction clearly…" value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
-            </div>
-            <div>
-              <label className={S.label}>Debit Account *</label>
-              <input list="debit-coa" className={S.input} placeholder="Select or type account…" value={form.debitAccount} onChange={e => setForm(p => ({ ...p, debitAccount: e.target.value }))} />
-              <datalist id="debit-coa">
-                {coaNames.map(n => <option key={n} value={n} />)}
-              </datalist>
-            </div>
-            <div>
-              <label className={S.label}>Credit Account *</label>
-              <input list="credit-coa" className={S.input} placeholder="Select or type account…" value={form.creditAccount} onChange={e => setForm(p => ({ ...p, creditAccount: e.target.value }))} />
-              <datalist id="credit-coa">
-                {coaNames.map(n => <option key={n} value={n} />)}
-              </datalist>
-            </div>
-            <div>
-              <label className={S.label}>Amount (KES) *</label>
-              <input type="number" className={S.input} placeholder="0.00" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} />
+              <input className={S.input} placeholder="Describe the transaction clearly…" value={head.description} onChange={e => setHead(p => ({ ...p, description: e.target.value }))} />
             </div>
           </div>
-          {/* Double-entry preview */}
-          {form.debitAccount && form.creditAccount && parseFloat(form.amount) > 0 && (
-            <div className="mb-4 p-3 bg-muted/50 rounded-lg border border-border text-xs font-mono">
-              <div className="flex gap-8">
-                <div><span className="text-muted-foreground">DR  </span><span className="text-emerald-600 font-semibold">{form.debitAccount}</span> <span className="text-foreground">{fmt(form.amount)}</span></div>
-                <div><span className="text-muted-foreground">  CR  </span><span className="text-red-500 font-semibold">{form.creditAccount}</span> <span className="text-foreground">{fmt(form.amount)}</span></div>
-              </div>
-            </div>
-          )}
-          <button className={S.btnPri} onClick={handleSave} disabled={saving}>
-            {saving ? <><Icon name="Loader" size={14} color="currentColor" className="animate-spin" /> Posting…</> : <><Icon name="CheckCircle" size={14} color="currentColor" /> Post Entry</>}
-          </button>
+
+          {/* Lines */}
+          <div className="border border-border rounded-lg overflow-hidden mb-3">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className={S.th}>Account</th>
+                  <th className={`${S.th} w-40 text-right`}>Debit</th>
+                  <th className={`${S.th} w-40 text-right`}>Credit</th>
+                  <th className={`${S.th} w-12`} />
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={i} className="border-t border-border">
+                    <td className="p-2">
+                      <input list="je-coa" className={S.input} placeholder="Select or type account…"
+                        value={l.account} onChange={e => setLine(i, { account: e.target.value })} />
+                    </td>
+                    <td className="p-2">
+                      <input type="number" step="0.01" min="0" className={`${S.input} text-right font-mono`} placeholder="0.00"
+                        value={l.debit}
+                        onChange={e => setLine(i, { debit: e.target.value, credit: e.target.value ? '' : l.credit })} />
+                    </td>
+                    <td className="p-2">
+                      <input type="number" step="0.01" min="0" className={`${S.input} text-right font-mono`} placeholder="0.00"
+                        value={l.credit}
+                        onChange={e => setLine(i, { credit: e.target.value, debit: e.target.value ? '' : l.debit })} />
+                    </td>
+                    <td className="p-2 text-center">
+                      {lines.length > 2 && (
+                        <button className="text-muted-foreground hover:text-red-600" title="Remove line"
+                          onClick={() => setLines(ls => ls.filter((_, ix) => ix !== i))}>
+                          <Icon name="X" size={14} color="currentColor" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-border bg-muted/40">
+                  <td className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Totals</td>
+                  <td className="px-4 py-2.5 text-right font-mono font-semibold text-emerald-600">{fmt(totalDr)}</td>
+                  <td className="px-4 py-2.5 text-right font-mono font-semibold text-red-500">{fmt(totalCr)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <datalist id="je-coa">
+            {coaNames.map(n => <option key={n} value={n} />)}
+          </datalist>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button className={S.btnSec} onClick={() => setLines(ls => [...ls, { account: '', debit: '', credit: '' }])}>
+              <Icon name="Plus" size={14} color="currentColor" /> Add Line
+            </button>
+            <button className={S.btnPri} onClick={handleSave} disabled={saving || !balanced}>
+              {saving
+                ? <><Icon name="Loader" size={14} color="currentColor" className="animate-spin" /> Posting…</>
+                : <><Icon name="CheckCircle" size={14} color="currentColor" /> Post Entry</>}
+            </button>
+            {!balanced && totalDr + totalCr > 0 && (
+              <span className="text-xs font-semibold text-amber-600">
+                Out of balance by {fmt(Math.abs(totalDr - totalCr))}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Journal ledger */}
       <div className={S.panel}>
         <div className={S.header}>
-          <span className="font-semibold text-foreground">Manual Journal Ledger</span>
-          <input className={`${S.input} max-w-64`} placeholder="Search entries…" value={search} onChange={e => setSearch(e.target.value)} />
+          <span className="font-semibold text-foreground">Journal Ledger</span>
+          <input className={`${S.input} max-w-64`} placeholder="Search entries, accounts, references…" value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr>
-                {['Ref', 'Date', 'Description', 'Debit', 'Credit', 'Amount', 'Status'].map(h => (
-                  <th key={h} className={S.th}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                Array(5).fill(0).map((_, i) => <tr key={i}>{Array(7).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>)
-              ) : filtered.length === 0 ? (
-                <tr><td colSpan={7}><Empty icon="BookOpen" text="No manual entries" sub='Click "Post Entry" above to create your first manual journal entry' /></td></tr>
-              ) : filtered.map(j => (
-                <tr key={j.id} className={S.row}>
-                  <td className={S.tdFirst + ' font-mono text-xs'}>{j.reference || `JE-${j.id?.slice(-6).toUpperCase()}`}</td>
-                  <td className={S.td}>{fmtDate(j.entry_date)}</td>
-                  <td className={`${S.td} max-w-48 truncate`}>{j.description}</td>
-                  <td className={`${S.td} text-emerald-600 font-medium text-xs`}>{j.debit_account}</td>
-                  <td className={`${S.td} text-red-500 font-medium text-xs`}>{j.credit_account}</td>
-                  <td className={`${S.td} font-mono font-semibold text-foreground`}>{fmt(j.amount)}</td>
-                  <td className={S.td}><StatusBadge status={j.status || 'posted'} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className={S.body}>
+          {loading ? (
+            <div className="space-y-2">{Array(5).fill(0).map((_, i) => <Sk key={i} className="h-12 w-full" />)}</div>
+          ) : filtered.length === 0 ? (
+            <Empty icon="BookOpen" text="No journal entries yet" sub='Fill in the lines above and click "Post Entry" to write your first entry' />
+          ) : (
+            <div className="space-y-2">
+              {filtered.map(g => {
+                const open = expanded[g.key];
+                return (
+                  <div key={g.key} className={`border rounded-lg ${
+                    g.status === 'reversed' ? 'border-red-200 bg-red-50/40 dark:bg-red-900/10'
+                    : g.status === 'reversal' ? 'border-amber-200 bg-amber-50/40 dark:bg-amber-900/10'
+                    : 'border-border'}`}>
+                    <button onClick={() => setExpanded(s => ({ ...s, [g.key]: !open }))}
+                      className="w-full flex items-center gap-3 p-3 text-left">
+                      <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} color="currentColor" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs text-muted-foreground">{g.entryNo || `JE-${g.key.slice(-6).toUpperCase()}`}</span>
+                          <span className="text-sm font-medium text-foreground truncate">{g.description}</span>
+                          <StatusBadge status={g.status} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {fmtDate(g.date)}
+                          {g.entryType && ` · ${g.entryType}`}
+                          {g.reference && ` · ref ${g.reference}`}
+                          {` · ${g.rows.length} line${g.rows.length === 1 ? '' : 's'}`}
+                        </p>
+                      </div>
+                      <span className="font-mono text-sm font-semibold text-foreground whitespace-nowrap">{fmt(g.total)}</span>
+                    </button>
+
+                    {open && (
+                      <div className="px-3 pb-3">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-left text-muted-foreground border-y border-border">
+                              <th className="py-1.5 pr-3 font-medium">Debit Account</th>
+                              <th className="py-1.5 pr-3 font-medium">Credit Account</th>
+                              <th className="py-1.5 font-medium text-right w-32">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {g.rows.map(r => (
+                              <tr key={r.id} className="border-b border-border last:border-0">
+                                <td className="py-1.5 pr-3 text-emerald-600 font-medium">{r.debit_account}</td>
+                                <td className="py-1.5 pr-3 text-red-500 font-medium">{r.credit_account}</td>
+                                <td className="py-1.5 text-right font-mono text-foreground">{fmt(r.amount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {g.status === 'posted' && (
+                          <div className="mt-2">
+                            <button className={S.btnGhost} onClick={() => handleReverse(g)} disabled={reversing === g.key}>
+                              <Icon name="Undo2" size={13} color="currentColor" />
+                              {reversing === g.key ? 'Reversing…' : 'Reverse this entry'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1667,10 +2124,11 @@ const FinanceHub = () => {
 
   const {
     invoices, journalEntries, automatedEntries, chartOfAccounts,
-    payrollRecords, employees, financialSummary: fs,
+    payrollRecords, employees, clients, assets, financialSummary: fs,
     companyProfile, loading, error,
-    createJournalEntry, runPayroll, approvePayroll,
+    postJournalEntry, reverseJournalEntry, runPayroll, approvePayroll,
     addAccountToCOA, toggleAccountStatus,
+    createInvoice, updateInvoiceStatus, deleteInvoice,
     refetch, TRIGGER_LABELS,
   } = useFinanceHubContext();
 
@@ -1682,7 +2140,7 @@ const FinanceHub = () => {
   const tabs = [
     { id: 'invoices',   label: 'Invoices',            icon: 'FileText',  badge: fs.pendingInvoices  },
     { id: 'automated',  label: 'Auto Journal Feed',   icon: 'Zap',       badge: automatedEntries.length > 0 ? 0 : 0 },
-    { id: 'journal',    label: 'Manual Entries',      icon: 'BookOpen',  badge: 0 },
+    { id: 'journal',    label: 'Journal Entries',     icon: 'BookOpen',  badge: 0 },
     { id: 'coa',        label: 'Chart of Accounts',   icon: 'Layers',    badge: 0 },
     { id: 'payroll',    label: 'Payroll',             icon: 'Users',     badge: payrollRecords.filter(r => r.status === 'pending').length },
     { id: 'statements', label: 'Financial Statements',icon: 'BarChart2', badge: 0 },
@@ -1758,13 +2216,29 @@ const FinanceHub = () => {
         {/* Tab content */}
         <div>
           {activeTab === 'invoices' && (
-            <InvoicesTab invoices={invoices} loading={loading} companyProfile={companyProfile} financialSummary={fs} />
+            <InvoicesTab
+              invoices={invoices}
+              loading={loading}
+              companyProfile={companyProfile}
+              financialSummary={fs}
+              clients={clients}
+              assets={assets}
+              onCreate={createInvoice}
+              onUpdateStatus={updateInvoiceStatus}
+              onDelete={deleteInvoice}
+            />
           )}
           {activeTab === 'automated' && (
-            <AutomatedJournalTab entries={automatedEntries} loading={loading} TRIGGER_LABELS={TRIGGER_LABELS} />
+            <AutomatedJournalTab
+              entries={automatedEntries} loading={loading} TRIGGER_LABELS={TRIGGER_LABELS}
+              onNewEntry={() => setActiveTab('journal')}
+            />
           )}
           {activeTab === 'journal' && (
-            <JournalTab journalEntries={journalEntries} chartOfAccounts={chartOfAccounts} loading={loading} onCreate={createJournalEntry} />
+            <JournalTab
+              journalEntries={journalEntries} chartOfAccounts={chartOfAccounts} loading={loading}
+              onPost={postJournalEntry} onReverse={reverseJournalEntry}
+            />
           )}
           {activeTab === 'coa' && (
             <ChartOfAccountsTab

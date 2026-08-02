@@ -1,5 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Icon from '../../../components/AppIcon';
+import {
+  HELP_TYPES, DECLINE_REASONS, declineReasonLabel, needsDetail,
+} from '../../../utils/assistReasons';
 
 // The gold agent's inbox. Before this existed a bronze agent's request for help
 // was invisible to the agent being asked — the only signal was the commission
@@ -37,16 +40,26 @@ const StatusChip = ({ status }) => {
   );
 };
 
-// ── Inline text prompt shared by decline (reason) and complete (outcome) ──────
-const InlinePrompt = ({ placeholder, confirmLabel, tone = 'emerald', required, onConfirm, onCancel }) => {
+// What kind of job this is, at a glance. A gold agent triaging five requests
+// decides on this before they read a word of anyone's note.
+const HelpTypeChip = ({ code }) => {
+  if (!code) return null;
+  const t = HELP_TYPES.find(h => h.code === code);
+  if (!t) return null;
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 text-primary text-xs font-medium">
+      <Icon name={t.icon} size={10} color="currentColor" />
+      {t.label}
+    </span>
+  );
+};
+
+// ── Inline text prompt for recording what was done on completion ─────────────
+const InlinePrompt = ({ placeholder, confirmLabel, onConfirm, onCancel }) => {
   const [text, setText]     = useState('');
   const [saving, setSaving] = useState(false);
-  const toneCls = tone === 'red'
-    ? 'bg-red-600 hover:bg-red-700'
-    : 'bg-emerald-600 hover:bg-emerald-700';
 
   const confirm = async () => {
-    if (required && !text.trim()) return;
     setSaving(true);
     try { await onConfirm(text.trim()); } finally { setSaving(false); }
   };
@@ -65,10 +78,75 @@ const InlinePrompt = ({ placeholder, confirmLabel, tone = 'emerald', required, o
       <div className="flex gap-2">
         <button
           onClick={confirm}
-          disabled={saving || (required && !text.trim())}
-          className={`flex-1 py-1.5 text-xs font-semibold text-white rounded-lg disabled:opacity-60 transition-colors ${toneCls}`}
+          disabled={saving}
+          className="flex-1 py-1.5 text-xs font-semibold text-white rounded-lg disabled:opacity-60 transition-colors bg-emerald-600 hover:bg-emerald-700"
         >
           {saving ? 'Saving...' : confirmLabel}
+        </button>
+        <button
+          onClick={onCancel}
+          className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ── Declining ────────────────────────────────────────────────────────────────
+// Turning work down used to be a single optional text box, which in practice
+// meant no reason at all: the bronze agent was told "no" and left guessing
+// whether to ask someone else or fix something first. The reason is now picked
+// from a list — mandatory, countable, and readable by the super admin later.
+const DeclinePrompt = ({ onConfirm, onCancel }) => {
+  const [code, setCode]     = useState('');
+  const [text, setText]     = useState('');
+  const [saving, setSaving] = useState(false);
+  const detailNeeded = needsDetail(code);
+  const blocked      = !code || (detailNeeded && !text.trim());
+
+  const confirm = async () => {
+    if (blocked) return;
+    setSaving(true);
+    try { await onConfirm({ reasonCode: code, reason: text.trim() }); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="mt-2.5 pt-2.5 border-t border-border/60 space-y-2">
+      <p className="text-xs font-semibold text-foreground">Why can't you take this?</p>
+      <select
+        autoFocus
+        value={code}
+        onChange={e => setCode(e.target.value)}
+        className="w-full px-2.5 py-1.5 text-xs bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+      >
+        <option value="" disabled>Select a reason (required)</option>
+        {DECLINE_REASONS.map(r => (
+          <option key={r.code} value={r.code}>{r.label}</option>
+        ))}
+      </select>
+
+      <input
+        type="text"
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') confirm(); if (e.key === 'Escape') onCancel(); }}
+        placeholder={detailNeeded ? 'Say what the reason is (required)' : 'Anything else they should know (optional)'}
+        className="w-full px-2.5 py-1.5 text-xs bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+      />
+
+      <p className="text-xs text-muted-foreground">
+        The agent who asked sees this, and it is recorded for the super admin.
+      </p>
+
+      <div className="flex gap-2">
+        <button
+          onClick={confirm}
+          disabled={saving || blocked}
+          className="flex-1 py-1.5 text-xs font-semibold text-white rounded-lg disabled:opacity-60 transition-colors bg-red-600 hover:bg-red-700"
+        >
+          {saving ? 'Saving...' : 'Decline request'}
         </button>
         <button
           onClick={onCancel}
@@ -118,10 +196,13 @@ const IncomingRow = ({ assist, onRespond, onComplete }) => {
             asked {ago(assist.created_at)}
           </p>
 
-          <p className="text-xs text-foreground mt-1.5">
-            <span className="text-muted-foreground">Admin / company:</span>{' '}
-            <span className="font-semibold">{assist.admin_name || 'Unspecified'}</span>
-          </p>
+          <div className="flex flex-wrap items-center gap-2 mt-1.5">
+            <p className="text-xs text-foreground">
+              <span className="text-muted-foreground">Admin / company:</span>{' '}
+              <span className="font-semibold">{assist.admin_name || 'Unspecified'}</span>
+            </p>
+            <HelpTypeChip code={assist.help_type} />
+          </div>
 
           {assist.note && (
             <p className="text-xs text-foreground mt-1 bg-muted rounded-lg px-2 py-1.5">{assist.note}</p>
@@ -144,10 +225,7 @@ const IncomingRow = ({ assist, onRespond, onComplete }) => {
           )}
 
           {mode === 'decline' && (
-            <InlinePrompt
-              placeholder="Why can't you take this? e.g. Out of region this week"
-              confirmLabel="Decline request"
-              tone="red"
+            <DeclinePrompt
               onConfirm={async (reason) => { await onRespond(assist, 'declined', reason); setMode(null); }}
               onCancel={() => setMode(null)}
             />
@@ -227,11 +305,18 @@ const OutgoingRow = ({ assist, onCancel }) => {
           <p className="text-xs text-muted-foreground mt-0.5">
             {assist.admin_name || 'Unspecified admin'} · sent {ago(assist.created_at)}
           </p>
+          {assist.help_type && (
+            <div className="mt-1"><HelpTypeChip code={assist.help_type} /></div>
+          )}
           {assist.note && (
             <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{assist.note}</p>
           )}
-          {assist.status === 'declined' && assist.decline_reason && (
-            <p className="text-xs text-red-600 mt-1">Reason: {assist.decline_reason}</p>
+          {/* A refusal is only useful if it says why — this is what the bronze
+              agent acts on: ask someone else, or fix the thing and come back. */}
+          {assist.status === 'declined' && (
+            <p className="text-xs text-red-600 mt-1 bg-red-50 rounded-lg px-2 py-1">
+              Declined: {assist.decline_reason || declineReasonLabel(assist.decline_reason_code) || 'no reason given'}
+            </p>
           )}
           {assist.status === 'completed' && assist.outcome && (
             <p className="text-xs text-foreground mt-1 bg-muted rounded-lg px-2 py-1">{assist.outcome}</p>
@@ -264,15 +349,25 @@ const Section = ({ title, count, tone, children }) => {
 
 // ── Panel ────────────────────────────────────────────────────────────────────
 const AssistRequestsPanel = ({
-  buckets, loading, isGoldAgent,
-  onRespond, onComplete, onCancel, onRequestAssist,
+  buckets, loading, isGoldAgent, error, onRefresh,
+  onRespond, onComplete, onCancel, onRequestAssist, embedded,
 }) => {
   const { incoming = [], outgoing = [], pending = [], active = [], history = [] } = buckets || {};
   const [tab, setTab] = useState(isGoldAgent ? 'incoming' : 'outgoing');
 
+  // The agent profile that decides which side this agent is on arrives after the
+  // first render, so the initial useState value is computed while isGoldAgent is
+  // still false. Without this a gold agent landed on the empty "Sent" tab and
+  // concluded nobody had asked them for anything.
+  useEffect(() => {
+    setTab(isGoldAgent ? 'incoming' : 'outgoing');
+  }, [isGoldAgent]);
+
+  const shell = embedded ? '' : 'bg-card border border-border rounded-xl p-5';
+
   if (loading) {
     return (
-      <div className="bg-card border border-border rounded-xl p-5">
+      <div className={shell}>
         <div className="h-5 bg-muted rounded w-44 mb-4 animate-pulse" />
         {[...Array(2)].map((_, i) => (
           <div key={i} className="flex gap-3 mb-3 animate-pulse">
@@ -293,28 +388,30 @@ const AssistRequestsPanel = ({
   const activeTab    = showTabs ? tab : (showIncoming ? 'incoming' : 'outgoing');
 
   return (
-    <div className="bg-card border border-border rounded-xl p-5">
+    <div className={shell}>
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-2">
-          <Icon name="LifeBuoy" size={18} color="#d97706" />
-          <div>
-            <h3 className="font-heading font-semibold text-base text-foreground">
-              {showIncoming ? 'Assist Requests' : 'My Assist Requests'}
-            </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {showIncoming
-                ? (pending.length > 0
-                    ? `${pending.length} agent${pending.length !== 1 ? 's' : ''} waiting on you`
-                    : active.length > 0
-                    ? `${active.length} onboarding${active.length !== 1 ? 's' : ''} in progress`
-                    : 'No bronze agent needs help right now')
-                : 'Help you have asked gold agents for'}
-            </p>
+        {!embedded && (
+          <div className="flex items-center gap-2">
+            <Icon name="LifeBuoy" size={18} color="#d97706" />
+            <div>
+              <h3 className="font-heading font-semibold text-base text-foreground">
+                {showIncoming ? 'Assist Requests' : 'My Assist Requests'}
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {showIncoming
+                  ? (pending.length > 0
+                      ? `${pending.length} agent${pending.length !== 1 ? 's' : ''} waiting on you`
+                      : active.length > 0
+                      ? `${active.length} onboarding${active.length !== 1 ? 's' : ''} in progress`
+                      : 'No bronze agent needs help right now')
+                  : 'Help you have asked gold agents for'}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ml-auto">
           {showTabs && (
             <div className="flex rounded-xl border border-border overflow-hidden">
               {[
@@ -335,6 +432,15 @@ const AssistRequestsPanel = ({
               ))}
             </div>
           )}
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              title="Refresh assist requests"
+              className="p-2 rounded-xl border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <Icon name="RefreshCw" size={13} color="currentColor" />
+            </button>
+          )}
           {!isGoldAgent && onRequestAssist && (
             <button
               onClick={onRequestAssist}
@@ -347,6 +453,21 @@ const AssistRequestsPanel = ({
           )}
         </div>
       </div>
+
+      {/* A load that failed must not read as "nobody asked you for help". */}
+      {error && (
+        <div className="flex flex-wrap items-center gap-2 mb-3 px-3 py-2 rounded-xl bg-red-50 border border-red-200">
+          <Icon name="AlertTriangle" size={14} color="#dc2626" />
+          <p className="text-xs font-medium text-red-700">
+            Assist requests could not be loaded, so this list may be incomplete.
+          </p>
+          {onRefresh && (
+            <button onClick={onRefresh} className="ml-auto text-xs font-semibold text-red-700 hover:underline">
+              Try again
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Incoming — the gold agent's queue */}
       {activeTab === 'incoming' && (
@@ -393,6 +514,11 @@ const AssistRequestsPanel = ({
                         {a.bronze?.full_name || 'Bronze agent'} · {ago(a.completed_at || a.responded_at || a.created_at)}
                         {a.status === 'completed' ? ` · ${fmtMoney(a.amount)} earned` : ''}
                       </p>
+                      {a.status === 'declined' && (
+                        <p className="text-xs text-red-600 mt-1 bg-red-50 rounded-lg px-2 py-1">
+                          You declined: {a.decline_reason || declineReasonLabel(a.decline_reason_code) || 'no reason recorded'}
+                        </p>
+                      )}
                       {a.outcome && (
                         <p className="text-xs text-foreground mt-1 bg-muted rounded-lg px-2 py-1">{a.outcome}</p>
                       )}

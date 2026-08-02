@@ -926,7 +926,7 @@ const buildFollowUpReminderEmail = (data: any) => {
 // already shows this in realtime; the email is for the gold agent who is not
 // logged in, which is most of the time.
 const buildAssistRequestEmail = (data: any) => {
-  const { goldName, bronzeName, bronzeCode, bronzePhone, bronzeEmail, adminName, note, amount, portalUrl } = data;
+  const { goldName, bronzeName, bronzeCode, bronzePhone, bronzeEmail, adminName, helpType, note, amount, portalUrl } = data;
 
   return `
 <!DOCTYPE html>
@@ -946,10 +946,11 @@ const buildAssistRequestEmail = (data: any) => {
     when the onboarding is done.
   </p>
 
-  ${note ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#92400e;text-transform:uppercase;letter-spacing:0.05em">What they need</p><p style="margin:0;font-size:14px;color:#374151;line-height:1.5">${note}</p></div>` : ""}
+  ${helpType || note ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#92400e;text-transform:uppercase;letter-spacing:0.05em">What they need</p>${helpType ? `<p style="margin:0 0 6px;font-size:15px;color:#111827;font-weight:700">${helpType}</p>` : ""}${note ? `<p style="margin:0;font-size:14px;color:#374151;line-height:1.5">${note}</p>` : ""}</div>` : ""}
 
   <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
     <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Admin / company</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${adminName || "—"}</td></tr>
+    ${helpType ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Help needed</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${helpType}</td></tr>` : ""}
     <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Requested by</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${bronzeName || "—"}</td></tr>
     ${bronzePhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Their phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${bronzePhone}</td></tr>` : ""}
     ${bronzeEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Their email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${bronzeEmail}</td></tr>` : ""}
@@ -1009,6 +1010,141 @@ const buildAssistUpdateEmail = (data: any) => {
   </table>
 
   ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:${copy.accent};color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open my portal</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
+// ─── Agent tickets (the bronze ↔ gold conversation channel) ───────────────────
+// The portal shows tickets in realtime; these are for the agent who is not
+// looking at it, which is most of the time. The message body is quoted in full
+// so a short question can be answered from the phone without opening anything.
+
+const TICKET_PRIORITY_STYLE: Record<string, { bg: string; border: string; text: string }> = {
+  urgent: { bg: "#fef2f2", border: "#fecaca", text: "#991b1b" },
+  high:   { bg: "#fff7ed", border: "#fed7aa", text: "#9a3412" },
+  normal: { bg: "#eff6ff", border: "#bfdbfe", text: "#1e40af" },
+  low:    { bg: "#f9fafb", border: "#e5e7eb", text: "#4b5563" },
+};
+
+const TICKET_CATEGORY_LABEL: Record<string, string> = {
+  onboarding:   "Onboarding help",
+  lead_support: "Lead support",
+  commission:   "Commission",
+  training:     "Training",
+  system:       "System issue",
+  other:        "General",
+};
+
+const quoteBlock = (label: string, body: string, accent = "#e5e7eb") => `
+  <div style="background:#f9fafb;border-left:3px solid ${accent};border-radius:0 10px 10px 0;padding:16px;margin-bottom:24px">
+    <p style="margin:0 0 6px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">${label}</p>
+    <p style="margin:0;font-size:14px;color:#374151;line-height:1.6;white-space:pre-wrap">${body || ""}</p>
+  </div>`;
+
+const buildTicketOpenedEmail = (data: any) => {
+  const {
+    toName, ticketNo, subject, body, category, priority, fromName, fromCode,
+    fromTier, fromPhone, fromEmail, adminName, isPool, portalUrl,
+  } = data;
+  const pri = TICKET_PRIORITY_STYLE[priority] || TICKET_PRIORITY_STYLE.normal;
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,#1a56db 0%,#1e429f 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">🎫</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${isPool ? "A ticket is waiting to be picked up" : "A new ticket for you"}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${ticketNo || "Ticket"} · ${subject || ""}</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${toName || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    <strong>${fromName || "An agent"}</strong>${fromCode ? ` (${fromCode})` : ""}${fromTier ? ` · ${fromTier} agent` : ""}
+    ${isPool
+      ? "has raised a ticket for whichever gold agent can take it. The first to claim it owns the conversation, so open the portal if this is one for you."
+      : "has raised a ticket with you. Reply in your portal and the whole exchange stays on the ticket."}
+  </p>
+
+  ${quoteBlock("What they said", body, "#1a56db")}
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Ticket</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${ticketNo || "—"}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Subject</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${subject || "—"}</td></tr>
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">About</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${TICKET_CATEGORY_LABEL[category] || "General"}</td></tr>
+    ${adminName ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Admin / company</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${adminName}</td></tr>` : ""}
+    ${fromPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Their phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${fromPhone}</td></tr>` : ""}
+    ${fromEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Their email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${fromEmail}</td></tr>` : ""}
+  </table>
+
+  <div style="background:${pri.bg};border:1px solid ${pri.border};border-radius:10px;padding:14px;text-align:center;margin-bottom:24px">
+    <p style="margin:0;font-size:13px;color:${pri.text};font-weight:700;text-transform:uppercase;letter-spacing:0.05em">${priority || "normal"} priority</p>
+  </div>
+
+  ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">${isPool ? "Claim this ticket" : "Open the ticket"}</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
+const buildTicketReplyEmail = (data: any) => {
+  const { toName, ticketNo, subject, body, fromName, fromCode, portalUrl } = data;
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,#0891b2 0%,#0e7490 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">💬</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">New reply on your ticket</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${ticketNo || "Ticket"} · ${subject || ""}</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${toName || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    <strong>${fromName || "The other agent"}</strong>${fromCode ? ` (${fromCode})` : ""} has replied on
+    <strong>${subject || "your ticket"}</strong>.
+  </p>
+
+  ${quoteBlock("Their reply", body, "#0891b2")}
+
+  ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:#0891b2;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Reply on the ticket</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
+const TICKET_STATUS_COPY: Record<string, { emoji: string; title: string; accent: string; accentDark: string; lead: string }> = {
+  claimed:     { emoji: "🙋", title: "A gold agent took your ticket", accent: "#1a56db", accentDark: "#1e429f", lead: "has taken your ticket out of the pool and will work it with you." },
+  resolved:    { emoji: "✅", title: "Your ticket was resolved",      accent: "#059669", accentDark: "#047857", lead: "has marked this resolved. If it isn't, reply on the ticket and it reopens." },
+  closed:      { emoji: "📁", title: "A ticket was closed",           accent: "#6b7280", accentDark: "#4b5563", lead: "has closed this ticket. It stays on record with the whole conversation." },
+  in_progress: { emoji: "↩️", title: "A ticket was reopened",         accent: "#d97706", accentDark: "#b45309", lead: "has reopened this ticket — there is more to do on it." },
+  waiting:     { emoji: "⏳", title: "A ticket is waiting on you",     accent: "#d97706", accentDark: "#b45309", lead: "is waiting on you before this ticket can move." },
+};
+
+const buildTicketStatusEmail = (data: any) => {
+  const { toName, ticketNo, subject, status, note, actorName, actorCode, portalUrl } = data;
+  const copy = TICKET_STATUS_COPY[status] || TICKET_STATUS_COPY.in_progress;
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,${copy.accent} 0%,${copy.accentDark} 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">${copy.emoji}</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${copy.title}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${ticketNo || "Ticket"} · ${subject || ""}</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${toName || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    <strong>${actorName || "The other agent"}</strong>${actorCode ? ` (${actorCode})` : ""} ${copy.lead}
+  </p>
+
+  ${note ? quoteBlock(status === "resolved" ? "What was done" : "Their note", note, copy.accent) : ""}
+
+  ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:${copy.accent};color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open the ticket</a></div>` : ""}
 </div>
 </body></html>`;
 };
@@ -1130,6 +1266,28 @@ serve(async (req) => {
         };
         subject = assistSubjects[data?.status] || `Assist update – ${data?.adminName || "an admin"}`;
         html = buildAssistUpdateEmail(data);
+        break;
+      }
+      case "ticket_opened":
+        subject = data?.isPool
+          ? `🎫 Unclaimed ticket – ${data?.subject || "an agent needs help"}`
+          : `🎫 ${data?.ticketNo ? `${data.ticketNo} – ` : ""}${data?.subject || "New ticket for you"}`;
+        html = buildTicketOpenedEmail(data);
+        break;
+      case "ticket_reply":
+        subject = `💬 ${data?.fromName || "An agent"} replied – ${data?.subject || data?.ticketNo || "your ticket"}`;
+        html = buildTicketReplyEmail(data);
+        break;
+      case "ticket_status": {
+        const ticketSubjects: Record<string, string> = {
+          claimed:     `🙋 ${data?.actorName || "A gold agent"} took your ticket – ${data?.subject || ""}`,
+          resolved:    `✅ Ticket resolved – ${data?.subject || data?.ticketNo || ""}`,
+          closed:      `📁 Ticket closed – ${data?.subject || data?.ticketNo || ""}`,
+          in_progress: `↩️ Ticket reopened – ${data?.subject || data?.ticketNo || ""}`,
+          waiting:     `⏳ Waiting on you – ${data?.subject || data?.ticketNo || ""}`,
+        };
+        subject = ticketSubjects[data?.status] || `Ticket update – ${data?.subject || data?.ticketNo || ""}`;
+        html = buildTicketStatusEmail(data);
         break;
       }
       default:

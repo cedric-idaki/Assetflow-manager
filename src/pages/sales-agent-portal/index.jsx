@@ -10,6 +10,11 @@ import CreateCompanyModal from './components/CreateCompanyModal';
 import CreateSaccoModal from './components/CreateSaccoModal';
 import AssistModal from './components/AssistModal';
 import AssistRequestsPanel from './components/AssistRequestsPanel';
+import AssistInboxModal from './components/AssistInboxModal';
+import TicketsPanel from './components/TicketsPanel';
+import TicketsInboxModal from './components/TicketsInboxModal';
+import TicketThreadModal from './components/TicketThreadModal';
+import NewTicketModal from './components/NewTicketModal';
 import AgentActivityTrail from './components/AgentActivityTrail';
 import SalesCostTracker from './components/SalesCostTracker';
 import FollowUpsPanel from './components/FollowUpsPanel';
@@ -276,6 +281,40 @@ const ExportModal = ({ leads, expenses, walletTransactions, agentProfile, onClos
 
 const PIPELINE_STAGES = ['new_lead', 'contacted', 'qualified', 'proposal_sent', 'closed'];
 
+// ── Tier badge ────────────────────────────────────────────────────────────────
+// An agent's tier decides what they earn per registration, whether they can ask
+// for help or are the one asked, and whether they hold the ticket pool — and
+// nothing in the portal ever said which one they were. Agents worked it out from
+// which buttons they happened to have.
+const TIERS = {
+  gold: {
+    label: 'Gold Agent',
+    icon:  'Crown',
+    cls:   'bg-amber-100 text-amber-800 border-amber-300',
+    hint:  'KES 1,500 per company registered · KES 1,000 per assist you complete',
+  },
+  bronze: {
+    label: 'Bronze Agent',
+    icon:  'Award',
+    cls:   'bg-orange-100 text-orange-800 border-orange-300',
+    hint:  'KES 500 per company registered · you can ask a gold agent for help',
+  },
+};
+
+const TierBadge = ({ tier }) => {
+  const t = TIERS[tier];
+  if (!t) return null;
+  return (
+    <span
+      title={t.hint}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-bold ${t.cls}`}
+    >
+      <Icon name={t.icon} size={13} color="currentColor" />
+      {t.label}
+    </span>
+  );
+};
+
 // ── KPI Card ──────────────────────────────────────────────────────────────────
 const KPICard = ({ label, value, icon, colorClass, loading, subtext }) => (
   <div className="bg-card border border-border rounded-xl p-5">
@@ -534,11 +573,14 @@ const MyClientsSection = ({ leads, onCreateClient, isClientMode, isSaccoMode }) 
 const SalesAgentPortal = () => {
   const {
     agentProfile, agentMode, goldAgents, leads, walletTransactions, expenses,
-    completedFollowUps, followUpBuckets, assistBuckets,
+    completedFollowUps, followUpBuckets, assistBuckets, assistsError, refetchAssists,
     activityFeed, kpis, loading, connected,
     registerLead, updateLeadStage, markLeadConverted, requestWithdrawal, logExpense, assignAssist, refetch,
     respondToAssist, completeAssist, cancelAssist,
     scheduleFollowUp, rescheduleFollowUp, completeFollowUp, cancelFollowUp,
+    tickets, ticketBuckets, ticketMessages, ticketDirectory, ticketsLoading,
+    ticketMessagesLoading, ticketsError, isTicketUnread,
+    openTicket, replyToTicket, claimTicket, setTicketStatus, openThread, refetchTickets,
     activeView, setActiveView, modals, openModal, closeModal,
   } = useSalesAgentContext();
 
@@ -555,6 +597,23 @@ const SalesAgentPortal = () => {
     || isBronzeCompanyAgent
     || (assistBuckets?.incoming?.length || 0) > 0
     || (assistBuckets?.outgoing?.length || 0) > 0;
+
+  // Tickets are the bronze ↔ gold channel, so they follow the tier. An agent
+  // created by an admin registers clients, has no tier and no counterparts —
+  // the whole feature stays off for them rather than showing an empty inbox.
+  const ticketTier = (agentProfile?.agent_plan || (agentMode === 'company' ? 'bronze' : '')).toLowerCase();
+  const hasTickets = ['bronze', 'gold'].includes(ticketTier);
+
+  // The tier drives what an agent earns, who they can ask for help and who can
+  // ask them — and until now the portal never said which one they were. Agents
+  // inferred it from which buttons they happened to have.
+  const tier = agentProfile ? ticketTier : '';
+
+  // The thread modal holds an id, not a snapshot: replying and resolving both
+  // change the ticket, and the header has to show what it is now.
+  const activeTicket = modals.ticketThread
+    ? (tickets || []).find(t => t.id === modals.ticketThread.id) || modals.ticketThread
+    : null;
 
   const [toast, setToast] = useState(null);
 
@@ -579,9 +638,9 @@ const SalesAgentPortal = () => {
     openModal('createClient');
   };
 
-  const handleAssign = async ({ goldAgentId, adminName, note }) => {
+  const handleAssign = async ({ goldAgentId, adminName, helpType, note }) => {
     // The AssistModal shows its own success state; just persist + refresh here.
-    await assignAssist({ goldAgentId, adminName, note });
+    await assignAssist({ goldAgentId, adminName, helpType, note });
     refetch();
   };
 
@@ -612,6 +671,42 @@ const SalesAgentPortal = () => {
     } catch (err) {
       showToast(err?.message || 'Could not cancel the request.', 'error');
     }
+  };
+
+  // ── Tickets ────────────────────────────────────────────────────────────────
+  const handleOpenTicket = (ticket) => {
+    openModal('ticketThread', ticket);
+    // Loads the thread and clears the unread mark in one act.
+    openThread(ticket);
+  };
+
+  const handleRaiseTicket = async (payload) => {
+    const ticket = await openTicket(payload);
+    showToast(payload.assignedAgentId
+      ? `Ticket ${ticket?.ticket_no || ''} sent — they've been emailed.`
+      : `Ticket ${ticket?.ticket_no || ''} is in the gold pool — the first gold agent to claim it takes it on.`);
+    return ticket;
+  };
+
+  const handleClaimTicket = async (ticket) => {
+    try {
+      await claimTicket(ticket);
+      showToast(`Ticket ${ticket?.ticket_no || ''} is yours — the agent who raised it has been told.`);
+    } catch (err) {
+      showToast(err?.message || 'Could not claim that ticket.', 'error');
+    }
+  };
+
+  const handleTicketStatus = async (ticket, status, note) => {
+    const said = {
+      resolved:    'Ticket marked resolved.',
+      closed:      'Ticket closed.',
+      waiting:     'Marked as waiting on the other agent.',
+      in_progress: 'Ticket reopened.',
+    }[status] || 'Ticket updated.';
+    await setTicketStatus(ticket, status, note);
+    if (status === 'closed') closeModal('ticketThread');
+    showToast(said);
   };
 
   const handleScheduleFollowUp = (lead) => {
@@ -681,7 +776,10 @@ const SalesAgentPortal = () => {
         {/* ── Header ── */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Sales Agent Portal</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-bold text-foreground">Sales Agent Portal</h1>
+              <TierBadge tier={tier} />
+            </div>
             <p className="text-sm text-muted-foreground mt-0.5">
               {agentProfile
                 ? `${agentProfile.full_name} · ${agentProfile.region || 'All Regions'} · Code: ${agentProfile.agent_code}`
@@ -750,10 +848,11 @@ const SalesAgentPortal = () => {
               </button>
             )}
 
-            {/* Assist inbox — the gold agent's jump to who needs help */}
+            {/* Assist inbox — opens the requests rather than scrolling at them,
+                so it works from the Activity view too and cannot land short. */}
             {isGoldAgent && (
-              <a
-                href="#assist-requests"
+              <button
+                onClick={() => openModal('assistInbox')}
                 className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
               >
                 <Icon name="LifeBuoy" size={15} color="currentColor" />
@@ -765,7 +864,26 @@ const SalesAgentPortal = () => {
                     {assistBuckets.actionable}
                   </span>
                 )}
-              </a>
+              </button>
+            )}
+
+            {/* Tickets — the conversation channel between agents. The badge is
+                the point: an unread reply nobody notices is a phone call. */}
+            {hasTickets && (
+              <button
+                onClick={() => openModal('tickets')}
+                className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+              >
+                <Icon name="Ticket" size={15} color="currentColor" />
+                Tickets
+                {ticketBuckets?.actionable > 0 && (
+                  <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center ${
+                    ticketBuckets.unreadCount > 0 ? 'bg-blue-600' : 'bg-amber-500'
+                  }`}>
+                    {ticketBuckets.actionable}
+                  </span>
+                )}
+              </button>
             )}
 
             {/* Schedule a follow-up — badge shows what is due or overdue */}
@@ -812,6 +930,16 @@ const SalesAgentPortal = () => {
         {activeView === 'portal' && (
           <div className="space-y-5">
 
+            {/* Which tier this agent is on, spelled out rather than inferred
+                from which buttons they happen to have. */}
+            {!loading && TIERS[tier] && (
+              <div className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border ${TIERS[tier].cls}`}>
+                <Icon name={TIERS[tier].icon} size={18} color="currentColor" />
+                <p className="text-sm font-bold">You are a {TIERS[tier].label}</p>
+                <p className="text-xs font-medium opacity-90">{TIERS[tier].hint}</p>
+              </div>
+            )}
+
             {/* Assist alert — a bronze agent is waiting on this gold agent. */}
             {!loading && assistBuckets?.pending?.length > 0 && (
               <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border bg-amber-50 border-amber-200">
@@ -820,9 +948,44 @@ const SalesAgentPortal = () => {
                   {assistBuckets.pending.length} bronze agent{assistBuckets.pending.length !== 1 ? 's' : ''} asked
                   for your help onboarding an admin
                 </p>
-                <a href="#assist-requests" className="ml-auto text-xs font-semibold text-amber-700 hover:underline">
+                <button
+                  onClick={() => openModal('assistInbox')}
+                  className="ml-auto text-xs font-semibold text-amber-700 hover:underline"
+                >
                   View requests →
-                </a>
+                </button>
+              </div>
+            )}
+
+            {/* Ticket alert — someone has written and is waiting on a reply. */}
+            {!loading && hasTickets && (ticketBuckets?.unreadCount > 0 || ticketBuckets?.pool?.length > 0) && (
+              <div className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border ${
+                ticketBuckets.unreadCount > 0 ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'
+              }`}>
+                <Icon
+                  name={ticketBuckets.unreadCount > 0 ? 'MessageSquare' : 'Hand'}
+                  size={17}
+                  color={ticketBuckets.unreadCount > 0 ? '#1a56db' : '#d97706'}
+                />
+                <p className={`text-sm font-semibold ${
+                  ticketBuckets.unreadCount > 0 ? 'text-blue-800' : 'text-amber-800'
+                }`}>
+                  {ticketBuckets.unreadCount > 0 && (
+                    <>{ticketBuckets.unreadCount} ticket{ticketBuckets.unreadCount !== 1 ? 's' : ''} with something new</>
+                  )}
+                  {ticketBuckets.unreadCount > 0 && ticketBuckets.pool.length > 0 && ' · '}
+                  {ticketBuckets.pool.length > 0 && (
+                    <>{ticketBuckets.pool.length} waiting to be claimed</>
+                  )}
+                </p>
+                <button
+                  onClick={() => openModal('tickets')}
+                  className={`ml-auto text-xs font-semibold hover:underline ${
+                    ticketBuckets.unreadCount > 0 ? 'text-blue-700' : 'text-amber-700'
+                  }`}
+                >
+                  Open tickets →
+                </button>
               </div>
             )}
 
@@ -962,10 +1125,30 @@ const SalesAgentPortal = () => {
                   buckets={assistBuckets}
                   loading={loading}
                   isGoldAgent={isGoldAgent}
+                  error={assistsError}
+                  onRefresh={refetchAssists}
                   onRespond={handleRespondToAssist}
                   onComplete={handleCompleteAssist}
                   onCancel={handleCancelAssist}
                   onRequestAssist={isBronzeCompanyAgent ? () => openModal('assist') : null}
+                />
+              </div>
+            )}
+
+            {/* Tickets — the conversation channel between bronze and gold */}
+            {hasTickets && (
+              <div id="tickets" className="scroll-mt-24">
+                <TicketsPanel
+                  buckets={ticketBuckets}
+                  agentId={agentProfile?.id}
+                  isGoldAgent={isGoldAgent}
+                  loading={ticketsLoading}
+                  error={ticketsError}
+                  isUnread={isTicketUnread}
+                  onOpen={handleOpenTicket}
+                  onClaim={handleClaimTicket}
+                  onNewTicket={() => openModal('newTicket')}
+                  onRefresh={refetchTickets}
                 />
               </div>
             )}
@@ -1079,6 +1262,60 @@ const SalesAgentPortal = () => {
           onClose={() => closeModal('assist')}
           goldAgents={goldAgents}
           onAssign={handleAssign}
+        />
+      )}
+
+      {/* ── Assist inbox (what the header "Assists" button opens) ── */}
+      <AssistInboxModal
+        isOpen={!!modals.assistInbox}
+        onClose={() => closeModal('assistInbox')}
+        buckets={assistBuckets}
+        loading={loading}
+        isGoldAgent={isGoldAgent}
+        error={assistsError}
+        onRefresh={refetchAssists}
+        onRespond={handleRespondToAssist}
+        onComplete={handleCompleteAssist}
+        onCancel={handleCancelAssist}
+        onRequestAssist={isBronzeCompanyAgent ? () => { closeModal('assistInbox'); openModal('assist'); } : null}
+      />
+
+      {/* ── Tickets: the list, the thread, and raising a new one ── */}
+      <TicketsInboxModal
+        isOpen={!!modals.tickets}
+        onClose={() => closeModal('tickets')}
+        buckets={ticketBuckets}
+        agentId={agentProfile?.id}
+        isGoldAgent={isGoldAgent}
+        loading={ticketsLoading}
+        error={ticketsError}
+        isUnread={isTicketUnread}
+        onOpen={(t) => { closeModal('tickets'); handleOpenTicket(t); }}
+        onClaim={handleClaimTicket}
+        onNewTicket={() => { closeModal('tickets'); openModal('newTicket'); }}
+        onRefresh={refetchTickets}
+      />
+
+      <TicketThreadModal
+        isOpen={!!activeTicket}
+        ticket={activeTicket}
+        messages={ticketMessages?.[activeTicket?.id]}
+        agentId={agentProfile?.id}
+        isGoldAgent={isGoldAgent}
+        loading={ticketMessagesLoading}
+        onSend={replyToTicket}
+        onClaim={handleClaimTicket}
+        onStatus={handleTicketStatus}
+        onClose={() => closeModal('ticketThread')}
+      />
+
+      {modals.newTicket && (
+        <NewTicketModal
+          isOpen={modals.newTicket}
+          onClose={() => closeModal('newTicket')}
+          directory={ticketDirectory}
+          isGoldAgent={isGoldAgent}
+          onSubmit={handleRaiseTicket}
         />
       )}
 

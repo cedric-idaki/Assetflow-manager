@@ -1,12 +1,28 @@
 import React from 'react';
 import Icon from '../../../components/AppIcon';
+import AgentRejectionsModal from './AgentRejectionsModal';
 
-const SalesAgentsList = ({ agents, onCreateNew, onExport }) => {
+const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport }) => {
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
   const [exportRange, setExportRange] = React.useState('all');
   const [customFrom, setCustomFrom]   = React.useState('');
   const [customTo, setCustomTo]       = React.useState('');
+  // Which agent's refusals are open. Held by id, not a snapshot, so a rejection
+  // arriving over realtime while the modal is up shows up in it.
+  const [rejectionsFor, setRejectionsFor] = React.useState(null);
+
+  // Refusals grouped by the gold agent who made them.
+  const rejectionsByAgent = React.useMemo(() => {
+    const map = {};
+    (rejections || []).forEach(r => {
+      if (!r.gold_agent_id) return;
+      (map[r.gold_agent_id] ||= []).push(r);
+    });
+    return map;
+  }, [rejections]);
+
+  const openAgent = agents.find(a => a.id === rejectionsFor) || null;
 
   const handleExport = () => {
     const now = new Date();
@@ -35,9 +51,10 @@ const SalesAgentsList = ({ agents, onCreateNew, onExport }) => {
 
     onExport(filtered.map(a => ({
       name: a.full_name, email: a.email, phone: a.phone,
-      region: a.region, code: a.agent_code,
+      region: a.region, code: a.agent_code, tier: a.agent_plan || 'bronze',
       commission_rate: a.commission_rate, total_sales: a.total_sales,
       total_commission: a.total_commission, target: a.target_amount,
+      assists_declined: (rejectionsByAgent[a.id] || []).length,
       status: a.agent_status,
     })), 'sales_agents');
   };
@@ -118,7 +135,7 @@ const SalesAgentsList = ({ agents, onCreateNew, onExport }) => {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-muted/50">
-                {['Agent', 'Code', 'Region', 'Commission', 'Total Sales', 'Commission Earned', 'Target', 'Status'].map(h => (
+                {['Agent', 'Code', 'Tier', 'Region', 'Commission', 'Total Sales', 'Commission Earned', 'Rejections', 'Target', 'Status'].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
                     {h}
                   </th>
@@ -130,6 +147,8 @@ const SalesAgentsList = ({ agents, onCreateNew, onExport }) => {
                 const pct = agent.target_amount > 0
                   ? Math.min(100, Math.round((agent.total_sales / agent.target_amount) * 100))
                   : 0;
+                const isGold    = (agent.agent_plan || 'bronze') === 'gold';
+                const declined  = rejectionsByAgent[agent.id] || [];
                 return (
                   <tr key={agent.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
@@ -146,10 +165,34 @@ const SalesAgentsList = ({ agents, onCreateNew, onExport }) => {
                     <td className="px-4 py-3">
                       <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded text-foreground">{agent.agent_code}</span>
                     </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                        isGold ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-800'
+                      }`}>
+                        <Icon name={isGold ? 'Crown' : 'Award'} size={11} color="currentColor" />
+                        {agent.agent_plan || 'bronze'}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">{agent.region || '—'}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{agent.commission_rate}%</td>
                     <td className="px-4 py-3 font-semibold text-emerald-600">{fmt(agent.total_sales)}</td>
                     <td className="px-4 py-3 font-medium text-blue-600">{fmt(agent.total_commission)}</td>
+                    {/* Assists this gold agent refused. The count alone only says
+                        they turn work down — click through for why. */}
+                    <td className="px-4 py-3">
+                      {declined.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : (
+                        <button
+                          onClick={() => setRejectionsFor(agent.id)}
+                          title={`See the ${declined.length} assist request${declined.length !== 1 ? 's' : ''} ${agent.full_name} declined`}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+                        >
+                          <Icon name="XCircle" size={11} color="currentColor" />
+                          {declined.length}
+                        </button>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <div>
                         <div className="flex justify-between text-xs mb-0.5">
@@ -182,6 +225,15 @@ const SalesAgentsList = ({ agents, onCreateNew, onExport }) => {
             </tbody>
           </table>
         </div>
+      )}
+
+      {openAgent && (
+        <AgentRejectionsModal
+          agent={openAgent}
+          rejections={rejectionsByAgent[openAgent.id] || []}
+          onClose={() => setRejectionsFor(null)}
+          onExport={onExport}
+        />
       )}
     </div>
   );

@@ -26,6 +26,10 @@ export const SaccoMemberProvider = ({ children }) => {
   const [members,       setMembers]       = useState([]);     // names only, for marketplace/voting
   const [contributions, setContributions] = useState([]);
   const [contributionTypes, setContributionTypes] = useState([]); // active types = expected contributions
+  // Server-computed figures (expected, outstanding, missed months). Derived in
+  // one place — sacco_member_contribution_stats — so the member portal and the
+  // treasurer's defaulters report can never disagree about who is behind.
+  const [contributionStats, setContributionStats] = useState(null);
   const [loanProducts,  setLoanProducts]  = useState([]);
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
@@ -34,6 +38,13 @@ export const SaccoMemberProvider = ({ children }) => {
   const [transfers,     setTransfers]     = useState([]);
   const [sharePrices,   setSharePrices]   = useState([]);
   const [saccoTotals,   setSaccoTotals]   = useState({ totalShares: 0, totalMarketValue: 0, shareholders: 0 });
+  // Share engine (20260801200000_sacco_share_engine)
+  const [shareSettings, setShareSettings] = useState(null);
+  const [shareTxns,     setShareTxns]     = useState([]);
+  const [certificates,  setCertificates]  = useState([]);
+  const [dividends,     setDividends]     = useState([]);
+  const [dividendAllocations, setDividendAllocations] = useState([]);
+  const [treasury,      setTreasury]      = useState(null);
   const [motions,       setMotions]       = useState([]);
   const [votes,         setVotes]         = useState([]);
   const [elections,          setElections]          = useState([]);
@@ -69,9 +80,18 @@ export const SaccoMemberProvider = ({ children }) => {
   }, []);
 
   const fetchContributions = useCallback(async () => {
+    // RLS returns only this member's rows. Ordered by when the money actually
+    // moved, falling back to when the entry was raised for still-pending ones.
     const { data } = await supabase.from('sacco_contributions').select('*')
-      .order('due_date', { ascending: false });
+      .order('paid_at', { ascending: false, nullsFirst: true })
+      .order('created_at', { ascending: false });
     setContributions(data || []);
+  }, []);
+
+  const fetchContributionStats = useCallback(async () => {
+    const { data, error } = await supabase.rpc('sacco_member_contribution_stats');
+    if (error) { setContributionStats(null); return; }
+    setContributionStats(Array.isArray(data) ? data[0] || null : data);
   }, []);
 
   // Active types the admin has published — what the member is expected to pay.
@@ -124,6 +144,42 @@ export const SaccoMemberProvider = ({ children }) => {
     const { data } = await supabase.from('sacco_share_prices').select('*')
       .order('effective_date', { ascending: false });
     setSharePrices(data || []);
+  }, []);
+
+  // ── Share engine (RLS: each of these returns only the member's own rows) ──
+  // The market's rules — fee, floor, limits, hours — so the portal can explain
+  // a refusal before the server has to.
+  const fetchShareSettings = useCallback(async () => {
+    const { data } = await supabase.from('sacco_share_settings').select('*').limit(1).maybeSingle();
+    setShareSettings(data);
+  }, []);
+
+  // My own share ledger: every purchase, sale, transfer and dividend.
+  const fetchShareTxns = useCallback(async () => {
+    const { data } = await supabase.from('sacco_share_transactions').select('*')
+      .order('created_at', { ascending: false });
+    setShareTxns(data || []);
+  }, []);
+
+  const fetchMyCertificates = useCallback(async () => {
+    const { data } = await supabase.from('sacco_share_certificates').select('*')
+      .order('created_at', { ascending: false });
+    setCertificates(data || []);
+  }, []);
+
+  // Declarations are sacco-wide news; allocations are strictly mine.
+  const fetchMyDividends = useCallback(async () => {
+    const [{ data: decls }, { data: allocs }] = await Promise.all([
+      supabase.from('sacco_dividend_declarations').select('*').order('record_date', { ascending: false }),
+      supabase.from('sacco_dividend_allocations').select('*'),
+    ]);
+    setDividends(decls || []);
+    setDividendAllocations(allocs || []);
+  }, []);
+
+  const fetchTreasury = useCallback(async () => {
+    const { data } = await supabase.from('sacco_share_treasury').select('*').limit(1).maybeSingle();
+    setTreasury(data);
   }, []);
 
   // Privacy-preserving aggregate (own sacco only) → drives "% of total shares".
@@ -194,23 +250,30 @@ export const SaccoMemberProvider = ({ children }) => {
     const meRow = await fetchMe();
     await Promise.all([
       fetchSacco(meRow?.sacco_id),
-      fetchMembers(), fetchContributions(), fetchContributionTypes(), fetchLoanProducts(), fetchLoans(),
+      fetchMembers(), fetchContributions(), fetchContributionStats(), fetchContributionTypes(), fetchLoanProducts(), fetchLoans(),
       fetchSchedules(), fetchShares(), fetchListings(), fetchTransfers(), fetchSharePrices(), fetchSaccoTotals(),
       fetchMotions(), fetchVotes(), fetchDocuments(), fetchContracts(meRow?.id),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(), fetchMyVoterRows(),
+      fetchShareSettings(), fetchShareTxns(), fetchMyCertificates(), fetchMyDividends(), fetchTreasury(),
     ]);
     setLoading(false);
   }, [
-    fetchMe, fetchSacco, fetchMembers, fetchContributions, fetchContributionTypes, fetchLoanProducts,
+    fetchMe, fetchSacco, fetchMembers, fetchContributions, fetchContributionStats, fetchContributionTypes, fetchLoanProducts,
     fetchLoans, fetchSchedules, fetchShares, fetchListings, fetchTransfers, fetchSharePrices, fetchSaccoTotals,
     fetchMotions, fetchVotes, fetchDocuments, fetchContracts,
     fetchElections, fetchElectionPositions, fetchElectionCandidates, fetchMyVoterRows,
+    fetchShareSettings, fetchShareTxns, fetchMyCertificates, fetchMyDividends, fetchTreasury,
   ]);
 
   // ── Derived stats (portal home mini-cards, BRS 5.1) ───────────────────────
-  const totalSavings = contributions
-    .filter((c) => c.status === 'paid')
-    .reduce((s, c) => s + parseFloat(c.amount || 0), 0);
+  // 'paid' is the pre-20260801 spelling of 'completed'; both count as settled.
+  const settled = contributions.filter((c) => ['completed', 'paid'].includes(c.status));
+  const sum = (rows) => rows.reduce((s, c) => s + parseFloat(c.amount || 0), 0);
+  const totalSavings      = sum(settled);
+  const totalShareCapital = sum(settled.filter((c) => c.account === 'share_capital'));
+  const totalDeposits     = sum(settled.filter((c) => (c.account || 'deposits') === 'deposits'));
+  const lastContribution  = settled[0] || null; // fetchContributions orders by paid_at desc
+  const pendingContributions = contributions.filter((c) => c.status === 'pending');
   const unpaidSchedule = schedules.filter((s) => !s.paid);
   const loanBalance = unpaidSchedule.reduce((s, r) => s + parseFloat(r.payment || 0), 0);
   const nextDue = unpaidSchedule
@@ -229,7 +292,18 @@ export const SaccoMemberProvider = ({ children }) => {
     return !!reg && !reg.voted_at;
   }).length;
 
-  const stats = { totalSavings, loanBalance, nextDue, shareValue, openMotions, openElections };
+  const stats = {
+    totalSavings, totalDeposits, totalShareCapital, lastContribution,
+    pendingContributions: pendingContributions.length,
+    // Server-side figures win when available — they know the member's monthly
+    // obligation and start date, which the client-side ledger alone does not.
+    outstanding:   parseFloat(contributionStats?.outstanding || 0),
+    missedMonths:  parseInt(contributionStats?.missed_months, 10) || 0,
+    nextDueDate:   contributionStats?.next_due_date || null,
+    monthlyTarget: parseFloat(contributionStats?.monthly_contribution || me?.monthly_contribution || 0),
+    thisMonth:     parseFloat(contributionStats?.this_month || 0),
+    loanBalance, nextDue, shareValue, openMotions, openElections,
+  };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const updateProfile = useCallback(async (patch) => {
@@ -240,6 +314,64 @@ export const SaccoMemberProvider = ({ children }) => {
     if (error) throw error;
     await fetchMe();
   }, [me?.id, fetchMe]);
+
+  // ── Contributions (member self-service) ───────────────────────────────────
+  // Always through the RPC: there is no member INSERT policy on
+  // sacco_contributions, precisely so a member cannot write a completed row.
+  const submitContribution = useCallback(async (form) => {
+    const { data, error } = await supabase.rpc('sacco_member_submit_contribution', {
+      p_amount: parseFloat(form.amount) || 0,
+      p_contribution_type: form.contribution_type || 'monthly',
+      p_account: form.account || 'deposits',
+      p_payment_method: form.payment_method || 'mpesa',
+      p_reference: form.reference || null,
+      p_notes: form.notes || null,
+      p_period_month: form.period_month || null,
+    });
+    if (error) throw error;
+    await Promise.all([fetchContributions(), fetchContributionStats()]);
+    return Array.isArray(data) ? data[0] : data;
+  }, [fetchContributions, fetchContributionStats]);
+
+  const cancelContribution = useCallback(async (id) => {
+    const { error } = await supabase.rpc('sacco_member_cancel_contribution', { p_id: id });
+    if (error) throw error;
+    await Promise.all([fetchContributions(), fetchContributionStats()]);
+  }, [fetchContributions, fetchContributionStats]);
+
+  /**
+   * Fire the STK push for a contribution that already exists as pending.
+   * The edge function re-reads that row and pushes for ITS amount, so nothing
+   * sent from here is trusted as an instruction to move money.
+   *
+   * accountRef is the contribution's own transaction number: contributions are
+   * collected on the platform paybill, so the reference on the M-Pesa statement
+   * has to identify the exact entry, not just the member (member numbers are
+   * only unique within one sacco). 'CTR-' + 8 digits is exactly the 12
+   * characters Daraja allows.
+   */
+  const payContributionByMpesa = useCallback(async (contribution, phone) => {
+    const { data, error } = await supabase.functions.invoke('mpesa-stk-push', {
+      body: {
+        purpose: 'sacco_contribution',
+        contributionId: contribution.id,
+        phone,
+        amount: Math.round(parseFloat(contribution.amount) || 0),
+        accountRef: contribution.txn_no || me?.member_no || 'CONTRIB',
+      },
+    });
+    if (error || data?.error) throw new Error(data?.error || error?.message || 'M-Pesa request failed');
+    return data;
+  }, [me?.member_no]);
+
+  /** Poll the transaction the push created — the callback settles it server-side. */
+  const checkMpesaContribution = useCallback(async (checkoutRequestId) => {
+    const { data } = await supabase.from('mpesa_transactions')
+      .select('status, result_desc, mpesa_receipt_number')
+      .eq('checkout_request_id', checkoutRequestId)
+      .maybeSingle();
+    return data || null;
+  }, []);
 
   const applyLoan = useCallback(async (form) => {
     const { error } = await supabase.from('sacco_loans').insert({
@@ -256,54 +388,83 @@ export const SaccoMemberProvider = ({ children }) => {
     await fetchLoans();
   }, [me, fetchLoans]);
 
+  // ── Share market ──────────────────────────────────────────────────────────
+  // Members no longer write the order book directly: every action goes through
+  // the share engine's SECURITY DEFINER RPCs, which own the escrow, the holding
+  // limits and the cost basis, and settle the trade in one transaction.
+  const shareRpc = useCallback(async (fn, args = {}) => {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) throw new Error(error.message || 'The share market rejected that action.');
+    return data;
+  }, []);
+
+  const refreshMarket = useCallback(async () => {
+    await Promise.all([
+      fetchShares(), fetchListings(), fetchTransfers(), fetchSharePrices(),
+      fetchSaccoTotals(), fetchShareTxns(), fetchMyCertificates(), fetchMyDividends(),
+    ]);
+  }, [fetchShares, fetchListings, fetchTransfers, fetchSharePrices,
+      fetchSaccoTotals, fetchShareTxns, fetchMyCertificates, fetchMyDividends]);
+
+  // Post a sell (or buy) order onto the book.
   const createListing = useCallback(async (form) => {
-    const { error } = await supabase.from('sacco_share_listings').insert({
-      admin_id: me?.admin_id, sacco_id: me?.sacco_id, seller_member_id: me?.id,
-      shares: parseInt(form.shares, 10) || 0,
-      price_per_share: parseFloat(form.price_per_share) || 0,
-      status: 'open', expiry_date: form.expiry_date || null,
+    const data = await shareRpc('sacco_share_place_order', {
+      p_side: form.side || 'sell',
+      p_shares: parseInt(form.shares, 10) || 0,
+      p_price: parseFloat(form.price_per_share) || 0,
+      p_expiry: form.expiry_date || null,
+      p_member_id: null,
+      p_as_treasury: false,
     });
-    if (error) throw error;
-    await fetchListings();
-  }, [me, fetchListings]);
+    await refreshMarket();
+    return data;
+  }, [shareRpc, refreshMarket]);
 
   const cancelListing = useCallback(async (listing) => {
-    const { error } = await supabase.from('sacco_share_listings')
-      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-      .eq('id', listing.id);
-    if (error) throw error;
-    await fetchListings();
-  }, [fetchListings]);
+    const data = await shareRpc('sacco_share_cancel_order', { p_id: listing.id, p_reason: null });
+    await refreshMarket();
+    return data;
+  }, [shareRpc, refreshMarket]);
 
-  // Seller edits their own OPEN listing (price/qty/expiry). RLS keeps it open
-  // and pins ownership; settlement stays admin-only.
   const updateListing = useCallback(async (listing, patch) => {
-    const body = { updated_at: new Date().toISOString() };
-    if (patch.price_per_share !== undefined) body.price_per_share = parseFloat(patch.price_per_share) || 0;
-    if (patch.shares !== undefined) body.shares = parseInt(patch.shares, 10) || 0;
-    if (patch.expiry_date !== undefined) body.expiry_date = patch.expiry_date || null;
-    const { error } = await supabase.from('sacco_share_listings').update(body).eq('id', listing.id);
-    if (error) throw error;
-    await fetchListings();
-  }, [fetchListings]);
-
-  // Buyer expression of interest (BRS 5.3.2 step 3) — settlement is admin-side.
-  // The seller may be the house (treasury listing) — carry the flag through.
-  const buyListing = useCallback(async (listing) => {
-    const { error } = await supabase.from('sacco_share_transfers').insert({
-      admin_id: me?.admin_id, sacco_id: me?.sacco_id, listing_id: listing.id,
-      seller_member_id: listing.seller_member_id,
-      seller_is_treasury: !!listing.seller_is_treasury,
-      buyer_member_id: me?.id,
-      shares: listing.shares, price: listing.shares * listing.price_per_share,
-      status: 'pending',
+    const data = await shareRpc('sacco_share_update_order', {
+      p_id: listing.id,
+      p_shares: patch.shares !== undefined ? (parseInt(patch.shares, 10) || 0) : listing.shares,
+      p_price: patch.price_per_share !== undefined
+        ? (parseFloat(patch.price_per_share) || 0) : listing.price_per_share,
+      p_expiry: patch.expiry_date !== undefined ? (patch.expiry_date || null) : (listing.expiry_date || null),
     });
-    if (error) throw error;
-    await supabase.from('sacco_share_listings')
-      .update({ status: 'pending_approval', updated_at: new Date().toISOString() })
-      .eq('id', listing.id);
-    await Promise.all([fetchTransfers(), fetchListings()]);
-  }, [me, fetchTransfers, fetchListings]);
+    await refreshMarket();
+    return data;
+  }, [shareRpc, refreshMarket]);
+
+  // Take an order off the book. Partial fills are allowed when the society's
+  // rules permit them, so `shares` may be fewer than the order's full size.
+  const buyListing = useCallback(async (listing, shareCount) => {
+    const data = await shareRpc('sacco_share_execute_order', {
+      p_listing_id: listing.id,
+      p_shares: shareCount ? parseInt(shareCount, 10) : null,
+      p_member_id: null,
+      p_as_treasury: false,
+    });
+    await refreshMarket();
+    return data;
+  }, [shareRpc, refreshMarket]);
+
+  // Gift/transfer shares to a fellow member, when the society allows it.
+  const transferShares = useCallback(async ({ to_member, shares: qty, reason }) => {
+    const data = await shareRpc('sacco_share_direct_transfer', {
+      p_shares: parseInt(qty, 10) || 0,
+      p_price: 0,
+      p_from_member: null,
+      p_to_member: to_member,
+      p_from_treasury: false,
+      p_to_treasury: false,
+      p_reason: reason || null,
+    });
+    await refreshMarket();
+    return data;
+  }, [shareRpc, refreshMarket]);
 
   const proposeMotion = useCallback(async (form) => {
     const { error } = await supabase.from('sacco_motions').insert({
@@ -427,11 +588,16 @@ export const SaccoMemberProvider = ({ children }) => {
       .subscribe();
 
     const chs = [
-      mk('contribs', 'sacco_contributions', fetchContributions),
+      mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionStats(); }),
       mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); }),
       mk('shares', 'sacco_shares', fetchShares),
       mk('share_prices', 'sacco_share_prices', fetchSharePrices),
       mk('listings', 'sacco_share_listings', fetchListings),
+      // A live market: an order taken by someone else must vanish immediately.
+      mk('share_transfers', 'sacco_share_transfers', () => { fetchTransfers(); fetchShareTxns(); }),
+      mk('share_treasury', 'sacco_share_treasury', fetchTreasury),
+      mk('share_certs', 'sacco_share_certificates', fetchMyCertificates),
+      mk('dividends', 'sacco_dividend_declarations', fetchMyDividends),
       mk('motions', 'sacco_motions', fetchMotions),
       mk('votes', 'sacco_votes', fetchVotes),
       mk('elections', 'sacco_elections', fetchElections),
@@ -446,13 +612,15 @@ export const SaccoMemberProvider = ({ children }) => {
   }, [isMember]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
-    me, sacco, members, contributions, contributionTypes, loanProducts, loans, schedules,
+    me, sacco, members, contributions, contributionStats, contributionTypes, loanProducts, loans, schedules,
     shares: myShares, sharePrices, currentMarketValue, saccoTotals, listings, transfers, motions, votes, documents, contracts,
     elections, electionPositions, electionCandidates, myVoterRows,
+    shareSettings, shareTxns, certificates, dividends, dividendAllocations, treasury,
     stats, loading,
     refetch: fetchAll,
     updateProfile, applyLoan,
-    createListing, cancelListing, updateListing, buyListing,
+    submitContribution, cancelContribution, payContributionByMpesa, checkMpesaContribution,
+    createListing, cancelListing, updateListing, buyListing, transferShares, refreshMarket,
     proposeMotion, secondMotion, castVote, getMotionResults,
     nominateCandidate, withdrawCandidacy, castBallot,
     getElectionTally, getElectionTurnout, verifyReceipt,

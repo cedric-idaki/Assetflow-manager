@@ -15,6 +15,10 @@ export const useSuperAdminDashboard = () => {
   const [staffUsers, setStaffUsers]             = useState([]);
   const [contracts, setContracts]               = useState([]);
   const [clients, setClients]                   = useState([]);
+  // Every assist a gold agent turned down. Refusals used to be visible only to
+  // the two agents involved, so a gold agent who declined everything looked the
+  // same from up here as one nobody had asked.
+  const [assistRejections, setAssistRejections] = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const channelsRef = useRef([]);
@@ -121,6 +125,54 @@ export const useSuperAdminDashboard = () => {
       setSalesAgents(data || []);
     } catch (err) {
       console.error('fetchSalesAgents error:', err.message);
+    }
+  }, []);
+
+  // Declined assists, newest first — read via the platform-wide select policy
+  // added in 20260802090000. The embed needs the FK constraint names; if either
+  // side fails to resolve the names are stitched on from a second query rather
+  // than dropping the row, because a rejection with no gold agent attached is
+  // exactly the one worth reading.
+  const fetchAssistRejections = useCallback(async () => {
+    const cols = 'id, full_name, agent_code, region, email, phone, agent_plan';
+    try {
+      const { data, error } = await supabase
+        .from('agent_assists')
+        .select(
+          `*,
+           bronze:agents!agent_assists_bronze_agent_id_fkey(${cols}),
+           gold:agents!agent_assists_gold_agent_id_fkey(${cols})`
+        )
+        .eq('status', 'declined')
+        .order('responded_at', { ascending: false, nullsFirst: false });
+      if (error) throw error;
+      setAssistRejections(data || []);
+    } catch (err) {
+      console.error('fetchAssistRejections embed failed, retrying flat:', err?.message);
+      try {
+        const { data, error: flatErr } = await supabase
+          .from('agent_assists')
+          .select('*')
+          .eq('status', 'declined')
+          .order('responded_at', { ascending: false, nullsFirst: false });
+        if (flatErr) throw flatErr;
+
+        const rows = data || [];
+        const ids  = [...new Set(rows.flatMap(r => [r.bronze_agent_id, r.gold_agent_id]).filter(Boolean))];
+        let byId = {};
+        if (ids.length) {
+          const { data: people } = await supabase.from('agents').select(cols).in('id', ids);
+          byId = Object.fromEntries((people || []).map(p => [p.id, p]));
+        }
+        setAssistRejections(rows.map(r => ({
+          ...r,
+          bronze: byId[r.bronze_agent_id] || null,
+          gold:   byId[r.gold_agent_id]   || null,
+        })));
+      } catch (flatErr) {
+        console.error('fetchAssistRejections error:', flatErr?.message);
+        setAssistRejections([]);
+      }
     }
   }, []);
 
@@ -300,9 +352,10 @@ export const useSuperAdminDashboard = () => {
       fetchStaffUsers(),
       fetchContracts(),
       fetchClients(),
+      fetchAssistRejections(),
     ]);
     setLoading(false);
-  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchContracts, fetchClients]);
+  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchContracts, fetchClients, fetchAssistRejections]);
 
   useEffect(() => {
     fetchAll();
@@ -336,16 +389,21 @@ export const useSuperAdminDashboard = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'user_profiles' }, fetchStaffUsers)
       .subscribe();
 
-    channelsRef.current = [auditCh, clientsCh, paymentsCh, agentsCh, staffCh];
+    // A rejection is worth seeing when it happens, not at the next page load.
+    const assistsCh = supabase.channel(`sa_assists_${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists' }, fetchAssistRejections)
+      .subscribe();
+
+    channelsRef.current = [auditCh, clientsCh, paymentsCh, agentsCh, staffCh, assistsCh];
     return () => {
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, [fetchAll, fetchAuditTrail, fetchStats, fetchCompanyAnalytics, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers]);
+  }, [fetchAll, fetchAuditTrail, fetchStats, fetchCompanyAnalytics, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchAssistRejections]);
 
   return {
     stats, assetBreakdown, companyAnalytics, auditTrail,
-    salesAgents, salesTarget, staffUsers, contracts, clients,
+    salesAgents, salesTarget, staffUsers, contracts, clients, assistRejections,
     loading, connectionStatus,
     refetch: fetchAll, createSalesAgent, uploadContract, exportCSV,
   };

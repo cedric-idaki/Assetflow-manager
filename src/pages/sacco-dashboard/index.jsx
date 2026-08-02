@@ -9,7 +9,7 @@ import OverviewTab      from './components/OverviewTab';
 import MembersTab       from './components/MembersTab';
 import ContributionsTab from './components/ContributionsTab';
 import LoansTab         from './components/LoansTab';
-import SharesTab        from './components/SharesTab';
+import SharesTab        from './components/shares';
 import VotingTab        from './components/VotingTab';
 import ElectionsTab     from './components/ElectionsTab';
 import GovernanceTab    from './components/GovernanceTab';
@@ -57,7 +57,7 @@ const SaccoDashboard = () => {
   const tabs = [
     { id: 'overview',      label: 'Overview',      icon: 'LayoutDashboard' },
     { id: 'members',       label: 'Members',       icon: 'Users' },
-    { id: 'contributions', label: 'Contributions', icon: 'PiggyBank' },
+    { id: 'contributions', label: 'Contributions', icon: 'PiggyBank', badge: stats.pendingContributions },
     { id: 'loans',         label: 'Loans',         icon: 'Banknote' },
     { id: 'shares',        label: 'Shares',        icon: 'PieChart' },
     { id: 'voting',        label: 'Voting',        icon: 'Vote',       badge: stats.openMotions },

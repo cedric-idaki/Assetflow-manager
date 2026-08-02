@@ -82,7 +82,8 @@ const CSS = `
   transition:background 0.2s ease,border-color 0.2s ease;
 }
 .arr .nav-cta:hover{background:var(--ink-3);border-color:var(--ink-3);}
-@media (max-width:520px){.arr .nav-link-btn{display:none;}}
+@media (max-width:900px){.arr .nav-link-btn{padding:8px 6px;font-size:13px;}}
+@media (max-width:720px){.arr .nav-link-btn{display:none;}}
 
 /* ---------- HERO ---------- */
 .arr .hero{
@@ -127,6 +128,14 @@ const CSS = `
 }
 .arr .btn-primary{background:var(--accent);color:var(--ink);}
 .arr .btn-primary:hover{background:var(--ink);color:var(--paper);transform:translateY(-1px);}
+.arr .hero-link{
+  display:inline-flex;align-items:center;gap:7px;margin-top:22px;
+  font-family:'Space Grotesk',sans-serif;font-size:14.5px;font-weight:600;
+  color:var(--accent-deep);text-decoration:none;
+  border-bottom:1px solid rgba(18,117,140,0.35);padding-bottom:2px;
+  transition:color 0.2s ease,border-color 0.2s ease;
+}
+.arr .hero-link:hover{color:var(--ink);border-color:var(--ink);}
 .arr .btn-ghost{background:transparent;color:var(--ink);border-color:var(--ink);}
 .arr .btn-ghost:hover{background:var(--ink);color:var(--paper);}
 
@@ -241,6 +250,16 @@ const CSS = `
 .arr .sub-left .stitle{margin-bottom:12px;font-family:'Fraunces',serif;font-weight:600;color:var(--ink);font-size:clamp(24px,3vw,34px);line-height:1.15;}
 .arr .sub-left .sdesc{font-size:15.5px;color:var(--text-muted);max-width:44ch;line-height:1.65;}
 
+.arr .sub-toggle{display:flex;gap:8px;margin-bottom:12px;}
+.arr .sub-toggle button{
+  flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  background:var(--card);border:1px solid var(--line);border-radius:3px;
+  padding:11px 10px;cursor:pointer;
+  font-family:'Space Grotesk',sans-serif;font-size:13.5px;font-weight:600;
+  color:var(--text-muted);transition:background 0.2s ease,color 0.2s ease,border-color 0.2s ease;
+}
+.arr .sub-toggle button:hover{border-color:var(--accent);color:var(--accent-deep);}
+.arr .sub-toggle button.on{background:var(--ink);border-color:var(--ink);color:var(--paper);}
 .arr .sub-field{display:flex;background:var(--card);border:1px solid var(--line);border-radius:3px;overflow:hidden;}
 .arr .sub-field input{
   flex:1;border:none;background:transparent;padding:16px 18px;
@@ -340,6 +359,8 @@ const LandingPage = () => {
   const rootRef = useRef(null);
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState('');
+  // Which kind of organization the subscribe form registers ('company' | 'sacco').
+  const [orgType, setOrgType] = useState('company');
 
   // Fade sections in as they scroll into view.
   useEffect(() => {
@@ -376,6 +397,10 @@ const LandingPage = () => {
     rootRef.current?.querySelector(`#${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // Every registration CTA lands on the same form — `orgType` preselects the
+  // "I'm registering a" choice on its first step (company vs sacco/chama).
+  const goRegister = (type) => () => navigate('/admin-registration', { state: { orgType: type } });
+
   // "Subscribe" starts the real onboarding flow — the email is carried over
   // and prefilled on the company registration form.
   const handleSubscribe = (e) => {
@@ -386,7 +411,7 @@ const LandingPage = () => {
       return;
     }
     setEmailError('');
-    navigate('/admin-registration', { state: { email: value } });
+    navigate('/admin-registration', { state: { email: value, orgType } });
   };
 
   return (
@@ -401,7 +426,8 @@ const LandingPage = () => {
             Ararat
           </div>
           <div className="nav-actions">
-            <button className="nav-link-btn" onClick={() => navigate('/admin-registration')}>Register Company</button>
+            <button className="nav-link-btn" onClick={goRegister('company')}>Register Your Company</button>
+            <button className="nav-link-btn" onClick={goRegister('sacco')}>Register Your Chama / Sacco</button>
             <button className="nav-cta" onClick={() => navigate('/login')}>Log In</button>
           </div>
         </div>
@@ -437,12 +463,19 @@ const LandingPage = () => {
             </div>
 
             <div className="ctas">
-              <button className="btn btn-primary" onClick={() => navigate('/admin-registration')}>
-                Get started free
+              <button className="btn btn-primary" onClick={goRegister('company')}>
+                Register your company
                 <Icon name="ArrowRight" size={16} color="currentColor" />
               </button>
-              <a className="btn btn-ghost" href="#platform" onClick={scrollTo('platform')}>See what's inside</a>
+              <button className="btn btn-ghost" onClick={goRegister('sacco')}>
+                Register your chama / sacco
+                <Icon name="ArrowRight" size={16} color="currentColor" />
+              </button>
             </div>
+            <a className="hero-link" href="#platform" onClick={scrollTo('platform')}>
+              See what's inside
+              <Icon name="ArrowDown" size={14} color="currentColor" />
+            </a>
           </div>
 
           <div className="hero-visual">
@@ -582,6 +615,25 @@ const LandingPage = () => {
             </div>
             <div>
               <form onSubmit={handleSubscribe} noValidate>
+                {/* Carried into the registration form so the visitor lands on the
+                    right set of questions (company details vs sacco details). */}
+                <div className="sub-toggle" role="group" aria-label="What are you registering?">
+                  {[
+                    { id: 'company', label: 'Company', icon: 'Building2' },
+                    { id: 'sacco', label: 'Chama / Sacco', icon: 'Users' },
+                  ].map(opt => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className={orgType === opt.id ? 'on' : ''}
+                      aria-pressed={orgType === opt.id}
+                      onClick={() => setOrgType(opt.id)}
+                    >
+                      <Icon name={opt.icon} size={14} color="currentColor" />
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="sub-field">
                   <input
                     type="email"
@@ -618,8 +670,12 @@ const LandingPage = () => {
               visibility into your finances and customers.
             </p>
             <div className="ctas">
-              <button className="btn btn-primary" onClick={() => navigate('/admin-registration')}>
-                Subscribe to start your journey
+              <button className="btn btn-primary" onClick={goRegister('company')}>
+                Register your company
+                <Icon name="ArrowRight" size={16} color="currentColor" />
+              </button>
+              <button className="btn btn-primary" onClick={goRegister('sacco')}>
+                Register your chama / sacco
                 <Icon name="ArrowRight" size={16} color="currentColor" />
               </button>
               <button className="btn btn-ghost" onClick={() => navigate('/login')}>Sign In</button>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
+import { HELP_TYPES, needsDetail } from '../../../utils/assistReasons';
 
 // Bronze agents use this to ask a gold agent to take an admin they registered
 // through system onboarding. The request lands in the gold agent's portal; the
@@ -9,6 +10,9 @@ const ASSIST_FEE = 1000;
 const AssistModal = ({ isOpen, onClose, goldAgents = [], onAssign, prefillAdminName = '' }) => {
   const [adminName, setAdminName]     = useState(prefillAdminName || '');
   const [goldAgentId, setGoldAgentId] = useState('');
+  // What kind of help this is. Free text alone made two agents describe the same
+  // job two ways, so the platform could never count sales help against training.
+  const [helpType, setHelpType]       = useState('');
   const [note, setNote]               = useState('');
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState('');
@@ -17,9 +21,12 @@ const AssistModal = ({ isOpen, onClose, goldAgents = [], onAssign, prefillAdminN
   if (!isOpen) return null;
 
   const selectedGold = goldAgents.find(g => g.id === goldAgentId);
+  const selectedType = HELP_TYPES.find(t => t.code === helpType);
+  const detailNeeded = needsDetail(helpType);
 
   const handleClose = () => {
-    setAdminName(''); setGoldAgentId(''); setNote(''); setError(''); setDone(null); setLoading(false);
+    setAdminName(''); setGoldAgentId(''); setHelpType(''); setNote('');
+    setError(''); setDone(null); setLoading(false);
     onClose();
   };
 
@@ -27,9 +34,15 @@ const AssistModal = ({ isOpen, onClose, goldAgents = [], onAssign, prefillAdminN
     setError('');
     if (!adminName.trim()) { setError('Enter the admin / company that needs help.'); return; }
     if (!goldAgentId)      { setError('Select a gold agent to ask.'); return; }
+    if (!helpType)         { setError('Pick what you need help with.'); return; }
+    // "Other" names nothing on its own — the gold agent would be accepting blind.
+    if (detailNeeded && !note.trim()) {
+      setError('You picked "Other" — say what you actually need in the box below.');
+      return;
+    }
     setLoading(true);
     try {
-      await onAssign({ goldAgentId, adminName: adminName.trim(), note: note.trim() });
+      await onAssign({ goldAgentId, adminName: adminName.trim(), helpType, note: note.trim() });
       setDone({ adminName: adminName.trim(), gold: selectedGold });
     } catch (err) {
       setError(err.message || 'Could not send the assist request. Please try again.');
@@ -123,17 +136,37 @@ const AssistModal = ({ isOpen, onClose, goldAgents = [], onAssign, prefillAdminN
 
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-              What do you need help with?
+              What do you need help with? *
+            </label>
+            <select
+              value={helpType}
+              onChange={e => { setHelpType(e.target.value); setError(''); }}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 bg-white"
+              style={{ color: helpType ? undefined : '#9ca3af' }}
+            >
+              <option value="" disabled>Select the kind of help you need</option>
+              {HELP_TYPES.map(t => (
+                <option key={t.code} value={t.code} style={{ color: '#111827' }}>{t.label}</option>
+              ))}
+            </select>
+            {selectedType && (
+              <p className="text-xs text-gray-400 mt-1">{selectedType.hint}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+              Details {detailNeeded ? '*' : '(optional)'}
             </label>
             <textarea
               rows={3}
               value={note}
-              onChange={e => setNote(e.target.value)}
+              onChange={e => { setNote(e.target.value); setError(''); }}
               placeholder="e.g. Client is ready but I can't run the training — needs a full system walkthrough this week"
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 bg-white resize-none"
             />
             <p className="text-xs text-gray-400 mt-1">
-              This is the first thing the gold agent sees — say what's actually needed.
+              The gold agent reads this before deciding — say what's actually needed.
             </p>
           </div>
 

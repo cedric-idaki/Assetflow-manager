@@ -431,22 +431,37 @@ const LoginPage = () => {
               <div className="mt-6 p-4 rounded-xl"
                 style={{ border: '1px solid ' + C.border, background: C.bg }}>
                 <p className="text-sm font-medium text-center mb-1" style={{ color: C.navy }}>
-                  Are you a new company or sacco?
+                  Are you a new company, chama or sacco?
                 </p>
                 <p className="text-xs text-center mb-3" style={{ color: C.textMuted }}>
-                  Register your business and choose a subscription plan
+                  Register your organization and choose a subscription plan
                 </p>
-                <button
-                  onClick={function() { navigate('/admin-registration'); }}
-                  className="w-full py-2.5 rounded-lg text-sm font-bold transition-all"
-                  style={{
-                    background: 'linear-gradient(135deg, #0c2037, #1a3a5c)',
-                    color: '#34c1dd',
-                    boxShadow: '0 4px 14px rgba(12,32,55,0.25)',
-                  }}
-                >
-                  Register Your Company / Saccos
-                </button>
+                {/* Two entry points — `orgType` preselects the "I'm registering a"
+                    choice on the first step of the registration form. */}
+                <div className="space-y-2">
+                  <button
+                    onClick={function() { navigate('/admin-registration', { state: { orgType: 'company' } }); }}
+                    className="w-full py-2.5 rounded-lg text-sm font-bold transition-all"
+                    style={{
+                      background: 'linear-gradient(135deg, #0c2037, #1a3a5c)',
+                      color: '#34c1dd',
+                      boxShadow: '0 4px 14px rgba(12,32,55,0.25)',
+                    }}
+                  >
+                    Register Your Company
+                  </button>
+                  <button
+                    onClick={function() { navigate('/admin-registration', { state: { orgType: 'sacco' } }); }}
+                    className="w-full py-2.5 rounded-lg text-sm font-bold transition-all"
+                    style={{
+                      background: C.card,
+                      color: C.navy,
+                      border: '1.5px solid ' + C.navy,
+                    }}
+                  >
+                    Register Your Chama / Sacco
+                  </button>
+                </div>
               </div>
             </div>
           )}

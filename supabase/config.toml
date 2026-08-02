@@ -65,6 +65,41 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/ingest-assets/index.ts"
 
+# M-Pesa Daraja callback. Safaricom POSTs the STK result here with NO auth header
+# of any kind, so verify_jwt MUST be false — otherwise every callback is rejected
+# with 401 and payments never get confirmed. The function trusts nothing from the
+# body: it looks the CheckoutRequestID up in mpesa_transactions (which we created)
+# and ignores callbacks that do not match a request we initiated.
+[functions.mpesa-callback]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/mpesa-callback/index.ts"
+
+# STK push initiator. Called from the app by a signed-in user, so verify_jwt stays
+# true — the caller's JWT is what scopes the payment to their tenant.
+[functions.mpesa-stk-push]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/mpesa-stk-push/index.ts"
+
+# M-Pesa configuration status. Super-admin only, enforced inside the function
+# against user_profiles.role; verify_jwt stays true so an unauthenticated caller
+# never reaches that check.
+[functions.mpesa-config]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/mpesa-config/index.ts"
+
+# Tenant M-Pesa credentials (flow 2 — a company/sacco collecting into its OWN
+# paybill). The caller's JWT is what decides whose credentials these are, so
+# verify_jwt MUST stay true; admin_id is never read from the request body. The
+# function is the only write path to mpesa_tenant_credentials, which has RLS on
+# with zero policies.
+[functions.mpesa-credentials]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/mpesa-credentials/index.ts"
+
 # E-signature API & embedded signing. Authenticated by a per-tenant API key in
 # the x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the
 # caller is the client team's own server/app. The function resolves the tenant

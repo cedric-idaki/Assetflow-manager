@@ -3,6 +3,9 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { auditLogsService } from '../services/supabaseService';
 import { sendAssistRequest, sendAssistUpdate } from '../services/emailService';
+import {
+  helpTypeLabel, declineReasonLabel, isHelpType, isDeclineReason,
+} from '../utils/assistReasons';
 
 // What a gold agent earns for taking an admin through onboarding on a bronze
 // agent's behalf. Paid on completion, not on request.
@@ -33,6 +36,10 @@ export const useSalesAgentPortal = () => {
   // Assist requests this agent is party to — as the bronze agent who asked for
   // help, or the gold agent being asked. RLS returns both sides.
   const [assists, setAssists] = useState([]);
+  // A failed fetch and a genuinely empty inbox look identical once the rows are
+  // gone, and "no bronze agent needs help" is the more believable of the two —
+  // so the gold agent would sit on unanswered requests thinking there were none.
+  const [assistsError, setAssistsError] = useState(null);
   const [walletTransactions, setWalletTransactions] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [followUps, setFollowUps] = useState([]);
@@ -187,6 +194,7 @@ export const useSalesAgentPortal = () => {
         .order('created_at', { ascending: false });
       if (err) throw err;
       setAssists(data || []);
+      setAssistsError(null);
     } catch (err) {
       // The embed depends on the FK constraint names and on agents RLS letting
       // this agent read their counterpart. Neither is worth an empty inbox —
@@ -212,9 +220,11 @@ export const useSalesAgentPortal = () => {
           bronze: byId[r.bronze_agent_id] || null,
           gold:   byId[r.gold_agent_id]   || null,
         })));
+        setAssistsError(null);
       } catch (flatErr) {
         console.error('fetchAssists error:', flatErr?.message);
         setAssists([]);
+        setAssistsError(flatErr?.message || 'Could not load assist requests.');
       }
     }
   }, []);
@@ -692,7 +702,7 @@ export const useSalesAgentPortal = () => {
   // A bronze agent ASKS a gold agent for help onboarding an admin. The request
   // starts at 'requested' (the DB trigger forces it) and the gold agent's
   // KES 1000 is only credited when they mark the assist complete.
-  const assignAssist = useCallback(async ({ goldAgentId, adminName, adminId, note }) => {
+  const assignAssist = useCallback(async ({ goldAgentId, adminName, adminId, helpType, note }) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready. Please refresh the page.');
     if (!goldAgentId) throw new Error('Please select a gold agent.');
     const { data, error: err } = await supabase
@@ -702,6 +712,7 @@ export const useSalesAgentPortal = () => {
         gold_agent_id:   goldAgentId,
         admin_id:        adminId   || null,
         admin_name:      adminName || null,
+        help_type:       isHelpType(helpType) ? helpType : 'other',
         note:            note      || null,
         amount:          ASSIST_FEE,
         status:          'requested',
@@ -712,10 +723,10 @@ export const useSalesAgentPortal = () => {
     await auditLogsService.log(
       'create',
       'agent_assists',
-      `Agent ${agentProfile?.agent_code || ''} asked a gold agent for help onboarding admin ${adminName || ''} (KES ${ASSIST_FEE} on completion)`,
+      `Agent ${agentProfile?.agent_code || ''} asked a gold agent for help onboarding admin ${adminName || ''} — ${helpTypeLabel(helpType)} (KES ${ASSIST_FEE} on completion)`,
       data?.id,
       null,
-      { gold_agent_id: goldAgentId, admin_name: adminName, amount: ASSIST_FEE, note, bronze_agent_code: agentProfile?.agent_code }
+      { gold_agent_id: goldAgentId, admin_name: adminName, amount: ASSIST_FEE, help_type: helpType, note, bronze_agent_code: agentProfile?.agent_code }
     );
 
     // Email the gold agent — most of the time they are not looking at the portal.
@@ -728,6 +739,7 @@ export const useSalesAgentPortal = () => {
         bronzePhone: agentProfile?.phone,
         bronzeEmail: agentProfile?.email,
         adminName,
+        helpType:    helpTypeLabel(helpType),
         note,
         amount:      ASSIST_FEE,
         portalUrl:   portalUrl(),
@@ -736,15 +748,34 @@ export const useSalesAgentPortal = () => {
     return data;
   }, [agentProfile, goldAgents]);
 
-  // Gold side: accept or decline a pending request.
+  // Gold side: accept or decline a pending request. A decline carries a reason —
+  // the DB guard rejects one without it, so the picker in the panel is not the
+  // only thing standing between the bronze agent and an unexplained "no".
   const respondToAssist = useCallback(async (assist, decision, reason) => {
     if (!['accepted', 'declined'].includes(decision)) throw new Error('Invalid response.');
-    const assistId = assist?.id || assist;
+    // Callers pass { reasonCode, reason } now; a bare string is still honoured so
+    // an older call site degrades to "other" rather than throwing.
+    const { reasonCode, reasonText } = typeof reason === 'string'
+      ? { reasonCode: null, reasonText: reason }
+      : { reasonCode: reason?.reasonCode || null, reasonText: reason?.reason || '' };
+
+    if (decision === 'declined' && !reasonCode && !reasonText.trim()) {
+      throw new Error('Pick a reason before declining — the agent who asked needs to know why.');
+    }
+
+    const assistId  = assist?.id || assist;
+    const label     = declineReasonLabel(reasonCode);
+    // What the bronze agent reads: the picked reason, plus their words when given.
+    const fullReason = decision === 'declined'
+      ? [label, reasonText.trim()].filter(Boolean).join(' — ')
+      : null;
+
     const { data, error: err } = await supabase
       .from('agent_assists')
       .update({
-        status:         decision,
-        decline_reason: decision === 'declined' ? (reason || null) : null,
+        status:              decision,
+        decline_reason_code: decision === 'declined' ? (isDeclineReason(reasonCode) ? reasonCode : 'other') : null,
+        decline_reason:      fullReason,
       })
       .eq('id', assistId)
       .select()
@@ -760,17 +791,17 @@ export const useSalesAgentPortal = () => {
         actorCode:     agentProfile?.agent_code,
         status:        decision,
         adminName:     assist.admin_name,
-        declineReason: decision === 'declined' ? reason : null,
+        declineReason: fullReason,
         portalUrl:     portalUrl(),
       }));
     }
     await auditLogsService.log(
       'update',
       'agent_assists',
-      `Gold agent ${agentProfile?.agent_code || ''} ${decision} the assist for admin ${data?.admin_name || ''}${reason ? ` — ${reason}` : ''}`,
+      `Gold agent ${agentProfile?.agent_code || ''} ${decision} the assist for admin ${data?.admin_name || ''}${fullReason ? ` — ${fullReason}` : ''}`,
       assistId,
       null,
-      { status: decision, reason, gold_agent_code: agentProfile?.agent_code }
+      { status: decision, reason: fullReason, decline_reason_code: data?.decline_reason_code, gold_agent_code: agentProfile?.agent_code }
     );
     return data;
   }, [agentProfile]);
@@ -929,6 +960,8 @@ export const useSalesAgentPortal = () => {
     logExpense,
     assists,
     assistBuckets,
+    assistsError,
+    refetchAssists: () => fetchAssists(agentProfile?.id),
     assignAssist,
     respondToAssist,
     completeAssist,

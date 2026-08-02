@@ -40,6 +40,38 @@ export const calcKenyaTax = (gross) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// JOURNAL HELPERS
+//
+// journal_entries stores one debit/credit pair per row. A multi-line entry is
+// therefore written as the smallest set of pairs that reproduces it exactly:
+// each debit is matched off against credits until both sides are exhausted.
+// The rows share an entry_no — that is what the ledger groups on — and every
+// downstream consumer (statements, auto feed, the summary maths) keeps reading
+// plain debit_account / credit_account pairs, unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+export const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+
+export const pairJournalLines = (lines) => {
+  const debits  = lines.filter(l => round2(l.debit)  > 0).map(l => ({ account: l.account, left: round2(l.debit)  }));
+  const credits = lines.filter(l => round2(l.credit) > 0).map(l => ({ account: l.account, left: round2(l.credit) }));
+  const pairs = [];
+  let i = 0, j = 0;
+  while (i < debits.length && j < credits.length) {
+    const amount = round2(Math.min(debits[i].left, credits[j].left));
+    if (amount <= 0) break;                       // never spin on a zero-value line
+    pairs.push({ debit_account: debits[i].account, credit_account: credits[j].account, amount });
+    debits[i].left  = round2(debits[i].left  - amount);
+    credits[j].left = round2(credits[j].left - amount);
+    if (debits[i].left  <= 0) i += 1;
+    if (credits[j].left <= 0) j += 1;
+  }
+  return pairs;
+};
+
+const nextEntryNo = (date) =>
+  `JE-${String(date).replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TRIGGER LABELS
 // ─────────────────────────────────────────────────────────────────────────────
 export const TRIGGER_LABELS = {
@@ -74,6 +106,8 @@ export const useFinanceHub = () => {
   const [automatedEntries, setAutomatedEntries] = useState([]);
   const [payrollRecords,   setPayrollRecords]   = useState([]);
   const [employees,        setEmployees]        = useState([]);
+  const [clients,          setClients]          = useState([]);
+  const [assets,           setAssets]           = useState([]);
   const [chartOfAccounts,  setChartOfAccounts]  = useState([]);
   const [financialSummary, setFinancialSummary] = useState({
     totalRevenue: 0, totalExpenses: 0, netProfit: 0,
@@ -124,6 +158,55 @@ export const useFinanceHub = () => {
     return data || [];
   }, []);
 
+  // Invoices raised by hand in the Finance Hub (company_invoices + line items).
+  // These are real records — unlike the payment-derived ones below, which only
+  // ever describe money already received.
+  const fetchManualInvoices = useCallback(async (aId) => {
+    const { data, error: iErr } = await supabase
+      .from('company_invoices')
+      .select('*, items:company_invoice_items(id, description, quantity, unit_price, line_total, sort_order)')
+      .eq('admin_id', aId)
+      .order('issue_date', { ascending: false })
+      .order('created_at',  { ascending: false })
+      .limit(300);
+    if (iErr) throw iErr;
+
+    const today = new Date().toISOString().split('T')[0];
+    return (data || []).map(inv => {
+      const items = [...(inv.items || [])].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      // Persisted status stays 'pending'; overdue is a function of the due date
+      // so it flips on its own the morning after the invoice falls due.
+      const status = inv.status === 'pending' && inv.due_date && inv.due_date < today
+        ? 'overdue'
+        : inv.status;
+      return {
+        id:           inv.id,
+        source:       'manual',
+        invoice_no:   inv.invoice_no,
+        date:         inv.issue_date,
+        due_date:     inv.due_date,
+        client_id:    inv.client_id,
+        client_name:  inv.client_name  || 'Unknown',
+        client_email: inv.client_email || '',
+        client_phone: inv.client_phone || '',
+        account_no:   inv.account_no   || '',
+        asset:        items[0]?.description || '—',
+        asset_code:   '',
+        asset_type:   '',
+        plate_number: '',
+        amount:       parseFloat(inv.subtotal   || 0),
+        vat_amount:   parseFloat(inv.vat_amount || 0),
+        vat_rate:     parseFloat(inv.vat_rate   || 0),
+        total:        parseFloat(inv.total      || 0),
+        status,
+        method:       inv.payment_method || '—',
+        reference:    inv.reference      || '—',
+        notes:        inv.notes          || '',
+        items,
+      };
+    });
+  }, []);
+
   const fetchInvoices = useCallback(async (aId) => {
     try {
       const { data: payments, error: pErr } = await supabase
@@ -170,6 +253,7 @@ export const useFinanceHub = () => {
         const isOverdue = p.payment_status !== 'completed' && dueDate < now;
         return {
           id:           p.id,
+          source:       'payment',
           invoice_no:   `INV-${String(2000 + i).padStart(4, '0')}`,
           date:         p.payment_date || p.created_at,
           due_date:     dueDate.toISOString().split('T')[0],
@@ -183,16 +267,28 @@ export const useFinanceHub = () => {
           plate_number: asset?.plate_number || '',
           amount:       parseFloat(p.amount   || 0),
           vat_amount:   parseFloat(p.amount   || 0) * 0.16,
+          vat_rate:     16,
+          total:        parseFloat(p.amount   || 0) * 1.16,
           status:       p.payment_status === 'completed' ? 'paid' : isOverdue ? 'overdue' : 'pending',
           method:       p.payment_method   || '—',
           reference:    p.reference_number || '—',
           notes:        p.notes            || '',
+          items:        null,
         };
       });
-      setInvoices(mapped);
-      return mapped;
+
+      // Manual invoices are additive: a failure to read them (e.g. the
+      // migration not yet applied) must not blank out the payment-derived list.
+      let manual = [];
+      try { manual = await fetchManualInvoices(aId); } catch { manual = []; }
+
+      const all = [...manual, ...mapped].sort(
+        (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+      );
+      setInvoices(all);
+      return all;
     } catch { setInvoices([]); return []; }
-  }, []);
+  }, [fetchManualInvoices]);
 
   const fetchJournalEntries = useCallback(async (aId) => {
     try {
@@ -215,6 +311,35 @@ export const useFinanceHub = () => {
         .eq('admin_id', aId).order('pay_month', { ascending: false }).limit(200);
       setPayrollRecords(data || []);
     } catch { setPayrollRecords([]); }
+  }, []);
+
+  // Bill-to list + sellable assets for the "New Invoice" form.
+  const fetchClients = useCallback(async (aId) => {
+    try {
+      const { data } = await supabase
+        .from('clients')
+        .select('id, full_name, email, phone, account_number')
+        .eq('admin_id', aId)
+        .order('full_name');
+      setClients(data || []);
+    } catch { setClients([]); }
+  }, []);
+
+  const fetchAssets = useCallback(async (aId) => {
+    try {
+      // assets are keyed by registered_by, so the tenant's set is "registered by
+      // the admin or by anyone under them" — staff-registered assets count too.
+      const { data: staff } = await supabase
+        .from('user_profiles').select('id').eq('admin_id', aId);
+      const registrants = [aId, ...(staff || []).map(s => s.id)];
+      const { data } = await supabase
+        .from('assets')
+        .select('id, asset_code, description, asset_type, make, model, year, plate_number, selling_price, linked_client_id')
+        .in('registered_by', registrants)
+        .order('created_at', { ascending: false })
+        .limit(500);
+      setAssets(data || []);
+    } catch { setAssets([]); }
   }, []);
 
   const fetchEmployees = useCallback(async (aId) => {
@@ -288,6 +413,8 @@ export const useFinanceHub = () => {
         fetchEmployees(aId),
         fetchCompanyProfile(aId),
         fetchCOA(aId),
+        fetchClients(aId),
+        fetchAssets(aId),
       ]);
       computeSummary(journals, invList);
     } catch (err) {
@@ -296,7 +423,8 @@ export const useFinanceHub = () => {
       setLoading(false);
     }
   }, [resolveAdminId, fetchInvoices, fetchJournalEntries, fetchPayrollRecords,
-      fetchEmployees, fetchCompanyProfile, fetchCOA, computeSummary]);
+      fetchEmployees, fetchCompanyProfile, fetchCOA, fetchClients, fetchAssets,
+      computeSummary]);
 
   useEffect(() => { loadAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -338,30 +466,230 @@ const { data, error: err } = await supabase
     setChartOfAccounts(prev => prev.map(a => a.id === accountId ? { ...a, is_active: isActive } : a));
   }, []);
 
-  const createJournalEntry = useCallback(async (entryData) => {
-    const aId = adminIdRef.current;
-    if (!aId) throw new Error('Not ready');
-    const { data, error: err } = await supabase
-      .from('journal_entries')
-      .insert({
-        admin_id:       aId,
-        entry_date:     entryData.date || new Date().toISOString().split('T')[0],
-        description:    entryData.description,
-        debit_account:  entryData.debitAccount,
-        credit_account: entryData.creditAccount,
-        amount:         parseFloat(entryData.amount),
-        entry_type:     entryData.entryType || 'general',
-        reference:      entryData.reference || null,
-        status:         'posted',
-        is_automated:   false,
-      })
-      .select().maybeSingle();
-    if (err) throw err;
+  // ── Journal ──────────────────────────────────────────────────────────────────
+  const refreshLedger = useCallback(async (aId) => {
     const journals = await fetchJournalEntries(aId);
     const invs     = await fetchInvoices(aId);
     computeSummary(journals, invs);
-    return data;
   }, [fetchJournalEntries, fetchInvoices, computeSummary]);
+
+  const postJournalEntry = useCallback(async (entry) => {
+    const aId = adminIdRef.current;
+    if (!aId) throw new Error('Not ready');
+
+    const date        = entry.date || new Date().toISOString().split('T')[0];
+    const description = (entry.description || '').trim();
+    if (!description) throw new Error('Describe what the entry is for');
+
+    const lines = (entry.lines || [])
+      .map(l => ({
+        account: (l.account || '').trim(),
+        debit:   round2(l.debit),
+        credit:  round2(l.credit),
+      }))
+      .filter(l => l.account && (l.debit > 0 || l.credit > 0));
+
+    const totalDr = round2(lines.reduce((s, l) => s + l.debit,  0));
+    const totalCr = round2(lines.reduce((s, l) => s + l.credit, 0));
+    if (totalDr <= 0 || totalCr <= 0) throw new Error('An entry needs at least one debit and one credit line');
+    if (totalDr !== totalCr) {
+      throw new Error(`Out of balance by ${Math.abs(totalDr - totalCr).toLocaleString('en-KE')} — debits must equal credits`);
+    }
+
+    const pairs = pairJournalLines(lines);
+    if (pairs.length === 0) throw new Error('Nothing to post');
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const entryNo = entry.entryNo || nextEntryNo(date);
+
+    const { data, error: err } = await supabase
+      .from('journal_entries')
+      .insert(pairs.map(p => ({
+        admin_id:       aId,
+        entry_no:       entryNo,
+        entry_date:     date,
+        description,
+        debit_account:  p.debit_account,
+        credit_account: p.credit_account,
+        amount:         p.amount,
+        entry_type:     entry.entryType || 'general',
+        reference:      (entry.reference || '').trim() || null,
+        status:         'posted',
+        is_automated:   false,
+        period_month:   date.slice(0, 7),
+        posted_by:      session?.user?.id || null,
+      })))
+      .select();
+    if (err) throw err;
+    await refreshLedger(aId);
+    return data;
+  }, [refreshLedger]);
+
+  // Kept for the single debit/credit callers — one pair is just a two-line entry.
+  const createJournalEntry = useCallback((entryData) => postJournalEntry({
+    date:        entryData.date,
+    description: entryData.description,
+    entryType:   entryData.entryType,
+    reference:   entryData.reference,
+    lines: [
+      { account: entryData.debitAccount,  debit:  entryData.amount },
+      { account: entryData.creditAccount, credit: entryData.amount },
+    ],
+  }), [postJournalEntry]);
+
+  // Corrections are reversals, never edits: the original stays in the ledger
+  // marked 'reversed' and a mirrored entry is posted against it. Neither counts
+  // towards the statements (which sum status = 'posted'), so the pair nets out.
+  const reverseJournalEntry = useCallback(async (rows, reason) => {
+    const aId = adminIdRef.current;
+    if (!aId) throw new Error('Not ready');
+
+    const live = (Array.isArray(rows) ? rows : [rows])
+      .filter(r => r.status !== 'reversed' && r.status !== 'reversal');
+    if (live.length === 0) throw new Error('This entry has already been reversed');
+
+    const date = new Date().toISOString().split('T')[0];
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId    = session?.user?.id || null;
+    const originNo  = live[0].entry_no || `JE-${live[0].id.slice(0, 8).toUpperCase()}`;
+    const reversalNo = `REV-${originNo.replace(/^JE-/, '')}`;
+
+    const { error: insErr } = await supabase
+      .from('journal_entries')
+      .insert(live.map(r => ({
+        admin_id:       aId,
+        entry_no:       reversalNo,
+        entry_date:     date,
+        description:    `Reversal of ${originNo} — ${r.description}${reason ? ` (${reason})` : ''}`.slice(0, 500),
+        debit_account:  r.credit_account,   // mirrored
+        credit_account: r.debit_account,
+        amount:         parseFloat(r.amount),
+        entry_type:     r.entry_type || 'general',
+        reference:      r.reference || null,
+        status:         'reversal',
+        is_automated:   false,
+        period_month:   date.slice(0, 7),
+        posted_by:      userId,
+        reversal_of:    r.id,
+      })));
+    if (insErr) throw insErr;
+
+    const { error: updErr } = await supabase
+      .from('journal_entries')
+      .update({ status: 'reversed', reversed_by: userId })
+      .in('id', live.map(r => r.id));
+    if (updErr) throw updErr;
+
+    await refreshLedger(aId);
+  }, [refreshLedger]);
+
+  // ── Invoices ─────────────────────────────────────────────────────────────────
+  // Next number in this tenant's manual series (INV-0001, INV-0002, …). The
+  // payment-derived list starts at INV-2000, so the two never collide.
+  const nextInvoiceNo = useCallback(async (aId) => {
+    const { data } = await supabase
+      .from('company_invoices')
+      .select('invoice_no')
+      .eq('admin_id', aId);
+    const highest = (data || []).reduce((max, r) => {
+      const n = parseInt(String(r.invoice_no).replace(/\D/g, ''), 10);
+      return Number.isFinite(n) && n < 2000 && n > max ? n : max;
+    }, 0);
+    return `INV-${String(highest + 1).padStart(4, '0')}`;
+  }, []);
+
+  const createInvoice = useCallback(async (form) => {
+    const aId = adminIdRef.current;
+    if (!aId) throw new Error('Not ready');
+
+    const items = (form.items || [])
+      .filter(it => it.description?.trim())
+      .map((it, idx) => {
+        const qty  = parseFloat(it.quantity   || 0);
+        const unit = parseFloat(it.unit_price || 0);
+        return {
+          description: it.description.trim(),
+          quantity:    qty,
+          unit_price:  unit,
+          line_total:  Math.round(qty * unit * 100) / 100,
+          sort_order:  idx,
+        };
+      });
+    if (items.length === 0) throw new Error('Add at least one line item');
+
+    const subtotal  = items.reduce((s, it) => s + it.line_total, 0);
+    const vatRate   = parseFloat(form.vat_rate || 0);
+    const vatAmount = Math.round(subtotal * (vatRate / 100) * 100) / 100;
+
+    const { data: { session } } = await supabase.auth.getSession();
+
+    const header = {
+      admin_id:       aId,
+      client_id:      form.client_id || null,
+      client_name:    form.client_name  || null,
+      client_email:   form.client_email || null,
+      client_phone:   form.client_phone || null,
+      account_no:     form.account_no   || null,
+      asset_id:       form.asset_id     || null,
+      issue_date:     form.issue_date   || new Date().toISOString().split('T')[0],
+      due_date:       form.due_date     || null,
+      subtotal,
+      vat_rate:       vatRate,
+      vat_amount:     vatAmount,
+      total:          Math.round((subtotal + vatAmount) * 100) / 100,
+      status:         form.status         || 'pending',
+      payment_method: form.payment_method || null,
+      reference:      form.reference      || null,
+      notes:          form.notes          || null,
+      created_by:     session?.user?.id   || null,
+    };
+
+    // The invoice number is unique per tenant, so two staff saving at the same
+    // moment can collide — take the next free number and retry.
+    let invoice = null;
+    for (let attempt = 0; attempt < 4 && !invoice; attempt++) {
+      const invoice_no = await nextInvoiceNo(aId);
+      const { data, error: err } = await supabase
+        .from('company_invoices')
+        .insert({ ...header, invoice_no })
+        .select().maybeSingle();
+      if (!err) { invoice = data; break; }
+      if (err.code !== '23505') throw err;
+    }
+    if (!invoice) throw new Error('Could not allocate an invoice number — please try again');
+
+    const { error: itemErr } = await supabase
+      .from('company_invoice_items')
+      .insert(items.map(it => ({ ...it, invoice_id: invoice.id, admin_id: aId })));
+    if (itemErr) {
+      // Never leave a header with no lines behind.
+      await supabase.from('company_invoices').delete().eq('id', invoice.id);
+      throw itemErr;
+    }
+
+    const invs = await fetchInvoices(aId);
+    computeSummary(await fetchJournalEntries(aId), invs);
+    return invoice;
+  }, [nextInvoiceNo, fetchInvoices, fetchJournalEntries, computeSummary]);
+
+  const updateInvoiceStatus = useCallback(async (invoiceId, status) => {
+    const aId = adminIdRef.current;
+    const { error: err } = await supabase
+      .from('company_invoices')
+      .update({ status, paid_at: status === 'paid' ? new Date().toISOString() : null })
+      .eq('id', invoiceId);
+    if (err) throw err;
+    const invs = await fetchInvoices(aId);
+    computeSummary(await fetchJournalEntries(aId), invs);
+  }, [fetchInvoices, fetchJournalEntries, computeSummary]);
+
+  const deleteInvoice = useCallback(async (invoiceId) => {
+    const aId = adminIdRef.current;
+    const { error: err } = await supabase.from('company_invoices').delete().eq('id', invoiceId);
+    if (err) throw err;
+    const invs = await fetchInvoices(aId);
+    computeSummary(await fetchJournalEntries(aId), invs);
+  }, [fetchInvoices, fetchJournalEntries, computeSummary]);
 
   const runPayroll = useCallback(async (employeeId, grossSalary, payMonth) => {
     const aId = adminIdRef.current;
@@ -406,12 +734,19 @@ const { data, error: err } = await supabase
     chartOfAccounts,
     payrollRecords,
     employees,
+    clients,
+    assets,
     financialSummary,
     loading,
     error,
     addAccountToCOA,
     toggleAccountStatus,
     createJournalEntry,
+    postJournalEntry,
+    reverseJournalEntry,
+    createInvoice,
+    updateInvoiceStatus,
+    deleteInvoice,
     runPayroll,
     approvePayroll,
     refetch: loadAll,

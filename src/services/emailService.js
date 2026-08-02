@@ -79,7 +79,7 @@ export const sendSignatureAlert = async (toEmail, { ownerName, documentName, act
 /**
  * Tell a gold agent that a bronze agent has asked them for onboarding help.
  * @param {string} toEmail - The gold agent's email
- * @param {{ goldName, bronzeName, bronzeCode, bronzePhone, bronzeEmail, adminName, note, amount, portalUrl }} data
+ * @param {{ goldName, bronzeName, bronzeCode, bronzePhone, bronzeEmail, adminName, helpType, note, amount, portalUrl }} data
  */
 export const sendAssistRequest = async (toEmail, data) => {
   return callEmailFunction('assist_request', toEmail, data);
@@ -93,6 +93,35 @@ export const sendAssistRequest = async (toEmail, data) => {
  */
 export const sendAssistUpdate = async (toEmail, data) => {
   return callEmailFunction('assist_update', toEmail, data);
+};
+
+/**
+ * Tell an agent a ticket has been raised with them. Sent to the named agent, or
+ * to every gold agent when the ticket was left for the pool.
+ * @param {string} toEmail - The recipient agent's email
+ * @param {{ toName, ticketNo, subject, body, category, priority, fromName, fromCode, fromTier, fromPhone, fromEmail, adminName, isPool, portalUrl }} data
+ */
+export const sendTicketOpened = async (toEmail, data) => {
+  return callEmailFunction('ticket_opened', toEmail, data);
+};
+
+/**
+ * Tell the other agent on a ticket that a reply has landed.
+ * @param {string} toEmail - The counterparty's email
+ * @param {{ toName, ticketNo, subject, body, fromName, fromCode, portalUrl }} data
+ */
+export const sendTicketReply = async (toEmail, data) => {
+  return callEmailFunction('ticket_reply', toEmail, data);
+};
+
+/**
+ * Tell the other agent a ticket changed state — claimed, resolved, closed or
+ * reopened.
+ * @param {string} toEmail - The counterparty's email
+ * @param {{ toName, ticketNo, subject, status, note, actorName, actorCode, portalUrl }} data
+ */
+export const sendTicketStatus = async (toEmail, data) => {
+  return callEmailFunction('ticket_status', toEmail, data);
 };
 
 /**

@@ -21,6 +21,7 @@ import SettlementsTab from './components/SettlementsTab';
 import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 import KYCReviewTab from './components/KYCReviewTab';
+import MpesaSettingsTab from './components/MpesaSettingsTab';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -71,7 +72,7 @@ const SuperAdminDashboard = () => {
   const navigate = useNavigate();
   const {
     stats, assetBreakdown, companyAnalytics,
-    auditTrail, salesAgents, salesTarget, contracts, clients,
+    auditTrail, salesAgents, salesTarget, contracts, clients, assistRejections,
     loading, connectionStatus, refetch, createSalesAgent, uploadContract, exportCSV,
   } = useSuperAdminDashboard();
 
@@ -165,6 +166,7 @@ const SuperAdminDashboard = () => {
     { id: 'settlements',  label: 'Settlements',             icon: 'Award' },
     { id: 'reminders',    label: 'Reminders',               icon: 'Bell' },
     { id: 'companies',    label: 'Companies',               icon: 'Building2' },
+    { id: 'mpesa',        label: 'M-Pesa',                  icon: 'Smartphone' },
     { id: 'audit',        label: 'Audit Trail',             icon: 'Shield', badge: auditTrail?.filter(a => a.action === 'delete').length || 0 },
   ];
 
@@ -305,6 +307,7 @@ const SuperAdminDashboard = () => {
             {loading ? <Sk className="h-64" /> : (
               <SalesAgentsList
                 agents={salesAgents}
+                rejections={assistRejections}
                 onCreateNew={() => setShowCreateAgent(true)}
                 onExport={exportCSV}
               />
@@ -360,6 +363,9 @@ const SuperAdminDashboard = () => {
             )}
           </div>
         )}
+
+        {/* M-PESA TAB */}
+        {activeTab === 'mpesa' && <MpesaSettingsTab />}
 
         {/* PAYMENT REMINDERS TAB */}
         {activeTab === 'reminders' && (

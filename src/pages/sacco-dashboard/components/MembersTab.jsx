@@ -3,14 +3,18 @@ import { useToast } from '../../../components/Toast';
 import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import Icon from '../../../components/AppIcon';
-import { Card, Table, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput, Select, EmptyState, fmtDate } from './_shared';
+import { Card, Table, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput, NumberInput, Select, EmptyState, KES, fmtDate } from './_shared';
 
 const MEMBER_ROLES = ['member', 'treasurer', 'chairman', 'secretary', 'auditor'];
 const STATUSES = ['active', 'inactive', 'suspended'];
+// How the member prefers to pay. The obligation itself is always the monthly
+// amount — this only shapes how they are reminded and how they pay.
+const FREQUENCIES = ['monthly', 'weekly', 'daily'];
 
 const emptyForm = {
   full_name: '', member_no: '', phone: '', email: '', national_id: '', gender: '',
   member_role: 'member', status: 'active', kyc_status: 'pending',
+  monthly_contribution: '', contribution_frequency: 'monthly', joined_at: '',
   next_of_kin_name: '', next_of_kin_relationship: '', next_of_kin_phone: '', next_of_kin_id: '',
 };
 
@@ -48,8 +52,16 @@ const MembersTab = ({ ctx }) => {
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
-  const openNew = () => { setEditing(null); setForm(emptyForm); setOpen(true); };
-  const openEdit = (m) => { setEditing(m); setForm({ ...emptyForm, ...m }); setOpen(true); };
+  const openNew = () => {
+    setEditing(null);
+    setForm({ ...emptyForm, joined_at: new Date().toISOString().slice(0, 10) });
+    setOpen(true);
+  };
+  const openEdit = (m) => {
+    setEditing(m);
+    setForm({ ...emptyForm, ...m, monthly_contribution: String(m.monthly_contribution ?? '') });
+    setOpen(true);
+  };
 
   const openCreateLogin = (m) => {
     setLoginFor(m);
@@ -203,6 +215,10 @@ const MembersTab = ({ ctx }) => {
     ['gender', 'Gender'],
     ['member_role', 'Role'],
     ['status', 'Status'],
+    // The contribution engine derives expected, outstanding and missed months
+    // from this figure — a member registered without one is invisible to the
+    // defaulters report, so it is captured at registration, not later.
+    ['monthly_contribution', 'Monthly contribution amount'],
     ['next_of_kin_name', 'Next of kin name'],
     ['next_of_kin_relationship', 'Next of kin relationship'],
     ['next_of_kin_phone', 'Next of kin phone'],
@@ -218,9 +234,18 @@ const MembersTab = ({ ctx }) => {
     const taken = members.some((m) =>
       (m.member_no || '').toLowerCase() === memberNo.toLowerCase() && m.id !== editing?.id);
     if (taken) { toast.error(`Member number ${memberNo} is already used by another member.`); return; }
+    if (!(parseFloat(form.monthly_contribution) > 0)) {
+      toast.error('Monthly contribution amount must be greater than 0.');
+      return;
+    }
     setSaving(true);
     try {
-      const payload = { ...form, member_no: memberNo };
+      const payload = {
+        ...form,
+        member_no: memberNo,
+        monthly_contribution: parseFloat(form.monthly_contribution) || 0,
+        joined_at: form.joined_at || undefined,
+      };
       if (editing) await updateMember(editing.id, payload);
       else await addMember(payload);
       toast.success(editing ? 'Member updated.' : 'Member added.');
@@ -254,7 +279,7 @@ const MembersTab = ({ ctx }) => {
       {filtered.length === 0 ? (
         <EmptyState icon="Users" title="No members yet" hint="Add your first member to start tracking contributions, loans and shares." />
       ) : (
-        <Table columns={['Member', 'Role', 'Phone', 'Status', 'KYC', 'Portal', 'Joined', '']}>
+        <Table columns={['Member', 'Role', 'Phone', 'Monthly', 'Status', 'KYC', 'Portal', 'Joined', '']}>
           {filtered.map((m) => (
             <tr key={m.id} className="border-b border-border/60">
               <td className="py-2.5 pr-4">
@@ -263,6 +288,11 @@ const MembersTab = ({ ctx }) => {
               </td>
               <td className="py-2.5 pr-4 capitalize text-foreground">{m.member_role}</td>
               <td className="py-2.5 pr-4 text-muted-foreground">{m.phone || '—'}</td>
+              <td className="py-2.5 pr-4 whitespace-nowrap">
+                {parseFloat(m.monthly_contribution) > 0
+                  ? <span className="text-foreground">{KES(m.monthly_contribution)}</span>
+                  : <span className="text-amber-600 text-xs font-medium">Not set</span>}
+              </td>
               <td className="py-2.5 pr-4"><Badge status={m.status} /></td>
               <td className="py-2.5 pr-4"><Badge status={m.kyc_status} /></td>
               <td className="py-2.5 pr-4">
@@ -315,6 +345,35 @@ const MembersTab = ({ ctx }) => {
           <Field label="Role *"><Select value={form.member_role} onChange={(e) => set('member_role', e.target.value)}>{MEMBER_ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}</Select></Field>
           <Field label="Status *"><Select value={form.status} onChange={(e) => set('status', e.target.value)}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></Field>
         </div>
+
+        <p className="text-xs font-semibold text-muted-foreground mt-5 mb-2 uppercase tracking-wide">Contributions</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Monthly contribution amount (KES) *">
+            <NumberInput value={form.monthly_contribution} onChange={(e) => set('monthly_contribution', e.target.value)} placeholder="2000" />
+          </Field>
+          <Field label="Preferred payment frequency">
+            <Select value={form.contribution_frequency} onChange={(e) => set('contribution_frequency', e.target.value)}>
+              {FREQUENCIES.map((f) => <option key={f} value={f}>{f}</option>)}
+            </Select>
+          </Field>
+          <Field label="Registration date">
+            <TextInput type="date" value={(form.joined_at || '').slice(0, 10)} onChange={(e) => set('joined_at', e.target.value)} />
+          </Field>
+          {editing && (
+            <Field label="Member accounts">
+              <div className="px-3 py-2 text-sm rounded-lg border border-border bg-muted/40 text-muted-foreground font-mono">
+                {editing.deposit_account_no || '—'} · {editing.share_capital_account_no || '—'}
+              </div>
+            </Field>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          What the member owes each month. Weekly and daily are just ways of paying it — the
+          obligation, and everything derived from it (outstanding, missed months, defaulters), is
+          always monthly. Their deposit and share-capital account numbers are generated from the
+          member number.
+        </p>
+
         <p className="text-xs font-semibold text-muted-foreground mt-5 mb-2 uppercase tracking-wide">Next of kin</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Name *"><TextInput value={form.next_of_kin_name} onChange={(e) => set('next_of_kin_name', e.target.value)} /></Field>
