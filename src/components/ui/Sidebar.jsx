@@ -113,10 +113,12 @@ var Sidebar = function(props) {
   ];
 
   // Sacco / Chama admin — the dashboard page carries its own tab bar
-  // (Members, Contributions, Loans, Shares, Voting, Governance, Contracts,
-  // Billing), so the sidebar only links to the dashboard itself.
+  // (Members, Contributions, Loans, Voting, Governance, Contracts, Billing),
+  // so the sidebar links to the dashboard itself. Shares is promoted out of
+  // that tab bar into the sidebar as its own module.
   var saccoAdminItems = [
-    { label: 'Dashboard',     path: '/sacco-dashboard', icon: 'LayoutDashboard' },
+    { label: 'Dashboard',     path: '/sacco-dashboard', icon: 'LayoutDashboard', tab: 'overview' },
+    { label: 'Shares',        path: '/sacco-dashboard', icon: 'PieChart',        tab: 'shares'   },
     // Shared back-office modules (same pages as a company admin; data stays
     // tenant-isolated). Sales agents are created under Staff & System.
     { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool' },

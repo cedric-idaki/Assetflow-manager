@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
+import { html, rawHtml } from '../../../utils/htmlEscape';
 
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -28,7 +29,7 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
       const co = companyProfile || {};
       const cl = clientProfile  || {};
 
-      const rows = filteredPayments.map(p => `
+      const rows = filteredPayments.map(p => html`
         <tr>
           <td>${fmtDate(p.payment_date || p.created_at)}</td>
           <td>${p.transaction_id || '—'}</td>
@@ -38,7 +39,7 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
         </tr>
       `).join('');
 
-      const html = `
+      const doc = html`
         <!DOCTYPE html>
         <html>
         <head>
@@ -109,7 +110,7 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
               </tr>
             </thead>
             <tbody>
-              ${rows || '<tr><td colspan="5" style="text-align:center; padding:20px; color:#64748b">No transactions in this period</td></tr>'}
+              ${rawHtml(rows || '<tr><td colspan="5" style="text-align:center; padding:20px; color:#64748b">No transactions in this period</td></tr>')}
             </tbody>
             <tfoot>
               <tr>
@@ -129,7 +130,7 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
       `;
 
       const w = window.open('', '_blank');
-      w.document.write(html);
+      w.document.write(doc);
       w.document.close();
       setTimeout(() => w.print(), 500);
       setGenerating(false);

@@ -1,5 +1,6 @@
 import Stripe from 'https://esm.sh/stripe@14.21.0';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
@@ -32,6 +33,21 @@ function addInterval(date: Date, frequency: string): Date {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
+  }
+
+  // Actually charges a stored card. Staff-only, or the service role when a
+  // scheduler drives the recurring run.
+  const auth = await authenticateCaller(req);
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  const denied = requireStaff(auth.caller);
+  if (denied) {
+    return new Response(JSON.stringify({ error: denied.error }), {
+      status: denied.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 
   try {

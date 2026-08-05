@@ -332,6 +332,9 @@ export const AuthProvider = ({ children }) => {
     signOut,
     signUp,
     updateProfile,
+    // Lets a guard retry a profile fetch that failed transiently, instead of
+    // stranding the user on the "profile unavailable" screen. See RoleGuard.
+    reloadProfile: () => loadProfile(currentUserIdRef.current),
     isAuthenticated: !!user,
     getRoleRedirectPath,
   };

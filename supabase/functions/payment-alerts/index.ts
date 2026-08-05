@@ -1,6 +1,7 @@
 // @ts-ignore: Deno global is available in Deno runtime
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
 
 declare const Deno: { env: { get(key: string): string | undefined } };
 
@@ -224,6 +225,21 @@ const sendSMS = async (to: string, body: string) => {
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
+  // Drives email + SMS to a caller-supplied recipient. Only reached from the
+  // admin/super-admin Payment Reminders panels, so staff-only.
+  const auth = await authenticateCaller(req);
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  const denied = requireStaff(auth.caller);
+  if (denied) {
+    return new Response(JSON.stringify({ error: denied.error }), {
+      status: denied.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
   try {
     const body = await req.json();

@@ -60,7 +60,7 @@ serve(async (req: Request) => {
     // Fetch role using verified user ID
     const { data: callerProfile, error: profileErr } = await adminClient
       .from('user_profiles')
-      .select('role')
+      .select('role, admin_id')
       .eq('id', callerUser.id)
       .single();
 
@@ -75,11 +75,57 @@ serve(async (req: Request) => {
       );
     }
 
+    // ── Tenant guard ────────────────────────────────────────────────────────
+    // Everything below runs with the service role, which bypasses RLS, so the
+    // caller's role alone is NOT enough: clientId arrives from the request body
+    // and must be proven to belong to the caller's own tenant. Without this an
+    // admin at tenant A could bind tenant B's client row to an auth account
+    // they control and read B's data through the client portal.
+    const callerTenant = callerProfile.admin_id || callerUser.id;
+
+    const { data: targetClient, error: targetErr } = await adminClient
+      .from('clients')
+      .select('id, admin_id')
+      .eq('id', clientId)
+      .maybeSingle();
+
+    if (targetErr || !targetClient) {
+      return new Response(
+        JSON.stringify({ error: 'Client not found.' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // super_admin is the platform-wide operator; everyone else is tenant-bound.
+    if (callerProfile.role !== 'super_admin' && targetClient.admin_id !== callerTenant) {
+      return new Response(
+        JSON.stringify({ error: 'Client not found.' }), // no cross-tenant existence oracle
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Check if auth user already exists
     const { data: existingList } = await adminClient.auth.admin.listUsers();
     const alreadyExists = existingList?.users?.find((u: any) => u.email === email.toLowerCase());
 
     if (alreadyExists) {
+      // Never rewrite an existing profile that is not already a client: this
+      // path would otherwise let anyone holding a staff account demote an
+      // admin (or another tenant's user) to role 'client' by provisioning
+      // against their email address.
+      const { data: existingProfile } = await adminClient
+        .from('user_profiles')
+        .select('role')
+        .eq('id', alreadyExists.id)
+        .maybeSingle();
+
+      if (existingProfile && existingProfile.role !== 'client') {
+        return new Response(
+          JSON.stringify({ error: 'That email already belongs to a non-client account.' }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       await adminClient.from('user_profiles').upsert({
         id: alreadyExists.id, role: 'client', full_name: fullName,
         email: email.toLowerCase(), phone: phone || null,

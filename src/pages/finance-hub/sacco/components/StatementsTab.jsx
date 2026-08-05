@@ -10,6 +10,7 @@
 import React, { useMemo, useState } from 'react';
 import Icon from '../../../../components/AppIcon';
 import { Card, GhostButton, EmptyState, Badge } from '../../../sacco-dashboard/components/_shared';
+import { html, rawHtml } from '../../../../utils/htmlEscape';
 import {
   buildIncomeStatement, buildBalanceSheet, buildCashFlow, buildAppropriation,
   fmtPlain,
@@ -37,18 +38,20 @@ const IntegrityBanner = ({ ok, okText, badText }) => (
 
 /** Opens a clean, print-ready window for whichever statement is on screen. */
 const printStatement = ({ title, saccoName, subtitle, sections, currency }) => {
-  const rowsHtml = sections.map((sec) => `
-    ${sec.heading ? `<tr class="head"><td colspan="2">${sec.heading}</td></tr>` : ''}
-    ${sec.rows.map((r) => `
+  // Account labels and headings come from the tenant's own chart of accounts,
+  // so they are escaped; only the assembled row fragments are marked raw.
+  const rowsHtml = sections.map((sec) => html`
+    ${sec.heading ? rawHtml(html`<tr class="head"><td colspan="2">${sec.heading}</td></tr>`) : ''}
+    ${rawHtml(sec.rows.map((r) => html`
       <tr class="${r.strong ? 'strong' : ''}${r.emphasis ? ' emph' : ''}">
         <td>${r.label}</td>
         <td class="r">${fmtPlain(r.value)}</td>
-      </tr>`).join('')}
+      </tr>`).join(''))}
   `).join('');
 
   const w = window.open('', '_blank', 'width=900,height=1000');
   if (!w) return;
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+  w.document.write(html`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
     <style>
       body { font-family: Georgia, 'Times New Roman', serif; color:#111; padding:40px; max-width:760px; margin:0 auto; }
       h1 { font-size:20px; margin:0 0 2px; }
@@ -66,7 +69,7 @@ const printStatement = ({ title, saccoName, subtitle, sections, currency }) => {
       <h1>${saccoName}</h1>
       <h2>${title}</h2>
       <p class="sub">${subtitle} · all amounts in ${currency}</p>
-      <table>${rowsHtml}</table>
+      <table>${rawHtml(rowsHtml)}</table>
       <footer>Generated ${new Date().toLocaleString()} from the general ledger. Prepared on the double-entry
       records of the society; subject to audit.</footer>
       <script>window.onload=function(){window.print();}</script>

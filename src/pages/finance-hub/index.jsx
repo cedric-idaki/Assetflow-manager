@@ -7,6 +7,7 @@ import { useFinanceHubContext } from '../../contexts/FinanceHubContext';
 import { sendInvoiceEmail } from '../../services/emailService';
 import Icon from '../../components/AppIcon';
 import SaccoFinanceHub from './sacco';
+import { html, rawHtml } from '../../utils/htmlEscape';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -152,11 +153,13 @@ const printPayslip = ({ company, employee, month, data }) => {
   const w = window.open('', '_blank');
   if (!w) { toast('Allow pop-ups to print the payslip', 'error'); return; }
   const coName = company?.company_name || 'Ararat Company';
+  // These return pre-marked raw fragments, so `${earn(...)}` inside the escaped
+  // template below renders as markup while its label/value stay escaped.
   const earn = (label, value) =>
-    `<div class="row"><span>${label}</span><span>${fmt(value)}</span></div>`;
+    rawHtml(html`<div class="row"><span>${label}</span><span>${fmt(value)}</span></div>`);
   const ded = (label, value) =>
-    `<div class="row"><span>${label}</span><span class="neg">(${fmt(value)})</span></div>`;
-  w.document.write(`
+    rawHtml(html`<div class="row"><span>${label}</span><span class="neg">(${fmt(value)})</span></div>`);
+  w.document.write(html`
     <html><head><title>Payslip — ${employee.full_name || 'Employee'} — ${fmtMonth(month)}</title>
     <style>
       body { font-family: Arial, sans-serif; max-width: 640px; margin: 32px auto; color: #111; }
@@ -178,8 +181,8 @@ const printPayslip = ({ company, employee, month, data }) => {
       <div class="head">
         <div>
           <div class="co">${coName}</div>
-          ${company?.kra_pin ? `<div class="muted">KRA PIN: ${company.kra_pin}</div>` : ''}
-          ${company?.physical_address ? `<div class="muted">${company.physical_address}</div>` : ''}
+          ${company?.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${company.kra_pin}</div>`) : ''}
+          ${company?.physical_address ? rawHtml(html`<div class="muted">${company.physical_address}</div>`) : ''}
         </div>
         <div>
           <div class="title">PAYSLIP</div>
@@ -190,8 +193,8 @@ const printPayslip = ({ company, employee, month, data }) => {
         <div>
           <div class="lbl">Employee</div>
           <div style="font-weight:600;">${employee.full_name || '—'}</div>
-          ${employee.department ? `<div class="muted">${employee.department}</div>` : ''}
-          ${employee.email ? `<div class="muted">${employee.email}</div>` : ''}
+          ${employee.department ? rawHtml(html`<div class="muted">${employee.department}</div>`) : ''}
+          ${employee.email ? rawHtml(html`<div class="muted">${employee.email}</div>`) : ''}
         </div>
         <div>
           <div class="lbl">Employee ID</div>
@@ -233,17 +236,17 @@ const printInvoice = ({ company, invoice: inv }) => {
   // A hand-raised invoice carries its own line items; a payment-derived one is
   // always the single asset line.
   const itemRows = (inv.items && inv.items.length > 0)
-    ? inv.items.map(it => `
+    ? inv.items.map(it => html`
           <tr>
-            <td>${it.description}${it.quantity > 1 ? `<div class="muted">${it.quantity} × ${money(it.unit_price)}</div>` : ''}</td>
+            <td>${it.description}${it.quantity > 1 ? rawHtml(html`<div class="muted">${it.quantity} × ${money(it.unit_price)}</div>`) : ''}</td>
             <td class="r">${money(it.line_total)}</td>
           </tr>`).join('')
-    : `
+    : html`
           <tr>
-            <td>${assetDesc}${assetRef ? `<div class="muted">${assetRef}</div>` : ''}</td>
+            <td>${assetDesc}${assetRef ? rawHtml(html`<div class="muted">${assetRef}</div>`) : ''}</td>
             <td class="r">${money(inv.amount)}</td>
           </tr>`;
-  w.document.write(`
+  w.document.write(html`
     <html><head><title>Invoice — ${inv.invoice_no} — ${inv.client_name || 'Client'}</title>
     <style>
       body { font-family: Arial, sans-serif; max-width: 680px; margin: 32px auto; color: #111; }
@@ -268,8 +271,8 @@ const printInvoice = ({ company, invoice: inv }) => {
       <div class="head">
         <div>
           <div class="co">${coName}</div>
-          ${company?.kra_pin ? `<div class="muted">KRA PIN: ${company.kra_pin}</div>` : ''}
-          ${company?.physical_address ? `<div class="muted">${company.physical_address}</div>` : ''}
+          ${company?.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${company.kra_pin}</div>`) : ''}
+          ${company?.physical_address ? rawHtml(html`<div class="muted">${company.physical_address}</div>`) : ''}
         </div>
         <div>
           <div class="title">INVOICE</div>
@@ -280,9 +283,9 @@ const printInvoice = ({ company, invoice: inv }) => {
         <div>
           <div class="lbl">Bill To</div>
           <div style="font-weight:600;">${inv.client_name || '—'}</div>
-          ${inv.account_no ? `<div class="muted">${inv.account_no}</div>` : ''}
-          ${inv.client_email ? `<div class="muted">${inv.client_email}</div>` : ''}
-          ${inv.client_phone ? `<div class="muted">${inv.client_phone}</div>` : ''}
+          ${inv.account_no ? rawHtml(html`<div class="muted">${inv.account_no}</div>`) : ''}
+          ${inv.client_email ? rawHtml(html`<div class="muted">${inv.client_email}</div>`) : ''}
+          ${inv.client_phone ? rawHtml(html`<div class="muted">${inv.client_phone}</div>`) : ''}
         </div>
         <div style="text-align:right;">
           <div class="lbl">Details</div>
@@ -295,7 +298,7 @@ const printInvoice = ({ company, invoice: inv }) => {
       <table class="items">
         <thead><tr><th>Description</th><th class="r">Amount (KES)</th></tr></thead>
         <tbody>
-          ${itemRows}
+          ${rawHtml(itemRows)}
           <tr class="vat">
             <td>VAT (${inv.vat_rate ?? 16}%)</td>
             <td class="r">${money(inv.vat_amount)}</td>
@@ -306,7 +309,7 @@ const printInvoice = ({ company, invoice: inv }) => {
         <span style="font-weight:700;">TOTAL DUE</span>
         <span class="amt">${fmt(total)}</span>
       </div>
-      ${inv.notes ? `<div class="note">Note: ${inv.notes}</div>` : ''}
+      ${inv.notes ? rawHtml(html`<div class="note">Note: ${inv.notes}</div>`) : ''}
       <div class="foot">Generated by ${coName} on ${fmtDate(new Date())} · Computer-generated invoice.</div>
     </body></html>
   `);

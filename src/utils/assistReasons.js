@@ -12,7 +12,7 @@
 export const HELP_TYPES = [
   {
     code:  'sales_assist',
-    label: 'Assistant to make sales',
+    label: 'Assistance to make sales',
     hint:  'The client is interested but needs a stronger pitch to close.',
     icon:  'TrendingUp',
   },

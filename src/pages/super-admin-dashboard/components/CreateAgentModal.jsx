@@ -3,10 +3,12 @@ import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 import { getPasswordError } from '../../../utils/validation';
 
-// Agent tiers — the plan sets the commission earned per admin/company the agent registers.
+// Agent tiers — the plan sets the commission earned per account the agent
+// registers. Agents created here register BOTH companies (admin accounts) and
+// saccos (sacco admin accounts); the same fee applies either way.
 const AGENT_PLANS = [
-  { id: 'bronze', name: 'Bronze', fee: 500,  blurb: 'Registers admin accounts and uses the sales agent portal.' },
-  { id: 'gold',   name: 'Gold',   fee: 1500, blurb: 'Registers admins and onboards/trains them on the system.' },
+  { id: 'bronze', name: 'Bronze', fee: 500,  blurb: 'Registers company admin and sacco admin accounts from the sales agent portal.' },
+  { id: 'gold',   name: 'Gold',   fee: 1500, blurb: 'Registers companies and saccos, and onboards/trains them on the system.' },
 ];
 
 const CreateAgentModal = ({ onClose, onCreate }) => {
@@ -107,7 +109,7 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
             >
               {AGENT_PLANS.map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.name} — KES {p.fee.toLocaleString()} per admin
+                  {p.name} — KES {p.fee.toLocaleString()} per company / sacco
                 </option>
               ))}
             </select>

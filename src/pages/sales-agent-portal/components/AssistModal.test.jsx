@@ -29,7 +29,7 @@ describe('AssistModal — asking for help', () => {
     const labels = Array.from(helpType.options).map(o => o.textContent);
     expect(labels).toEqual([
       'Select the kind of help you need',
-      'Assistant to make sales',
+      'Assistance to make sales',
       'Installation and training',
       'Other',
     ]);

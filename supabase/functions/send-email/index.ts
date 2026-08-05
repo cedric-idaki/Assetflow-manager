@@ -1,5 +1,6 @@
 // @ts-ignore: Deno global is available in Deno runtime
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
+import { authenticateCaller } from "../_shared/auth.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 // Set EMAIL_FROM to a verified-domain sender (e.g. "Ararat <noreply@yourco.com>")
@@ -1159,6 +1160,20 @@ serve(async (req) => {
         "Access-Control-Allow-Methods": "POST, OPTIONS",
         "Access-Control-Allow-Headers": "*",
       },
+    });
+  }
+
+  // `to`, `portalUrl` and the template payload are all caller-controlled, and
+  // this sends from a verified Resend domain — unauthenticated, it is a
+  // ready-made phishing relay (the staffCredentials/clientCredentials templates
+  // even render a password and a login link). Any signed-in user may send
+  // (clients email their own statements from the portal); sibling Edge
+  // Functions call in with the service-role key.
+  const auth = await authenticateCaller(req);
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status,
+      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
     });
   }
 

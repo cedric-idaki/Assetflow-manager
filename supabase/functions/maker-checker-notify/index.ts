@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
 
 // Declare Deno global for type safety
 declare const Deno: {
@@ -15,6 +16,23 @@ const corsHeaders = {
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
+  }
+
+  // initiator_email / initiator_phone / title / description / checker_comment are
+  // all caller-supplied and go straight into the outgoing mail and SMS body, so
+  // unauthenticated this was an arbitrary-content relay. Reached only from the
+  // System Administration maker-checker panel: staff-only.
+  const auth = await authenticateCaller(req);
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  const denied = requireStaff(auth.caller);
+  if (denied) {
+    return new Response(JSON.stringify({ error: denied.error }), {
+      status: denied.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 
   try {

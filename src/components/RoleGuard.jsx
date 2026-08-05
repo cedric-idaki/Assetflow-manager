@@ -14,7 +14,7 @@ import Icon from './AppIcon';
  *  - children: ReactNode
  */
 const RoleGuard = ({ allowedRoles = [], children }) => {
-  const { user, userProfile, loading, profileLoading } = useAuth();
+  const { user, userProfile, loading, profileLoading, reloadProfile, signOut } = useAuth();
 
   // Wait for both auth and profile to resolve
   if (loading || profileLoading) {
@@ -43,11 +43,43 @@ const RoleGuard = ({ allowedRoles = [], children }) => {
 
   const role = userProfile?.role;
 
-  // Profile not yet loaded but user exists — wait a tick; avoid premature redirect
-  // If role is still null after loading is done, fall through to default dashboard
+  // Fail CLOSED. This used to `return children` when the role was unknown, which
+  // meant anyone without a resolvable profile row reached whatever dashboard they
+  // asked for — including the super-admin one. Loading is already handled above,
+  // so reaching here means the profile genuinely did not resolve: either the
+  // fetch failed, or the account has no user_profiles row. Neither is a reason
+  // to grant access. Offer a retry so a transient network blip is recoverable
+  // without an unexplained redirect loop.
   if (!role) {
-    // No role info available — allow through (ProtectedRoute already confirmed auth)
-    return children;
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="max-w-md w-full text-center flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center">
+            <Icon name="ShieldAlert" size={24} className="text-amber-500" />
+          </div>
+          <h1 className="text-lg font-semibold text-foreground">We couldn't verify your access</h1>
+          <p className="text-sm text-muted-foreground">
+            Your profile could not be loaded, so we can't tell which workspace to open.
+            This is usually temporary — try again, or sign in with a different account.
+            If it keeps happening, ask your administrator to check that your account is set up.
+          </p>
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              onClick={() => reloadProfile?.()}
+              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90"
+            >
+              Try again
+            </button>
+            <button
+              onClick={() => signOut?.()}
+              className="px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Check if the user's role is permitted for this route

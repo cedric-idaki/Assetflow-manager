@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { sendStatementEmail } from '../../../services/emailService';
+import { html, rawHtml } from '../../../utils/htmlEscape';
 
 const Statements = ({ assets, payments, clientInfo }) => {
   const [generating, setGenerating] = useState(null);
@@ -17,7 +18,7 @@ const Statements = ({ assets, payments, clientInfo }) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
-    const html = `
+    const doc = html`
       <!DOCTYPE html>
       <html>
       <head>
@@ -52,16 +53,16 @@ const Statements = ({ assets, payments, clientInfo }) => {
           <div class="meta-item"><label>Email</label><span>${clientInfo?.email || 'N/A'}</span></div>
           <div class="meta-item"><label>Generated</label><span>${new Date()?.toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' })}</span></div>
         </div>
-        ${summaryLines}
+        ${rawHtml(summaryLines)}
         <table>
-          <thead><tr>${rows?.headers?.map(h => `<th>${h}</th>`)?.join('')}</tr></thead>
-          <tbody>${rows?.data?.map(row => `<tr>${row?.map(cell => `<td>${cell}</td>`)?.join('')}</tr>`)?.join('')}</tbody>
+          <thead><tr>${rawHtml(rows?.headers?.map(h => html`<th>${h}</th>`)?.join('') || '')}</tr></thead>
+          <tbody>${rawHtml(rows?.data?.map(row => html`<tr>${rawHtml(row?.map(cell => html`<td>${cell}</td>`)?.join('') || '')}</tr>`)?.join('') || '')}</tbody>
         </table>
         <div class="footer">This statement was generated automatically by Ararat. For queries, contact your account manager.</div>
       </body>
       </html>
     `;
-    printWindow?.document?.write(html);
+    printWindow?.document?.write(doc);
     printWindow?.document?.close();
     setTimeout(() => printWindow?.print(), 500);
   };
@@ -73,7 +74,7 @@ const Statements = ({ assets, payments, clientInfo }) => {
     const totalPaid = assetPayments?.filter(p => p?.payment_status === 'completed')?.reduce((s, p) => s + Number(p?.amount || 0), 0);
     const totalPending = assetPayments?.filter(p => p?.payment_status === 'pending')?.reduce((s, p) => s + Number(p?.amount || 0), 0);
 
-    const summaryLines = `
+    const summaryLines = html`
       <div class="summary">
         <h2>Asset Summary</h2>
         <div class="summary-grid">
@@ -107,7 +108,7 @@ const Statements = ({ assets, payments, clientInfo }) => {
     const totalPaid = payments?.filter(p => p?.payment_status === 'completed')?.reduce((s, p) => s + Number(p?.amount || 0), 0);
     const totalPending = payments?.filter(p => p?.payment_status === 'pending')?.reduce((s, p) => s + Number(p?.amount || 0), 0);
 
-    const summaryLines = `
+    const summaryLines = html`
       <div class="summary">
         <h2>Account Summary</h2>
         <div class="summary-grid">

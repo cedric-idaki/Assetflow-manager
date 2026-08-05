@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { html } from '../../../utils/htmlEscape';
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 const fmt = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -9,7 +10,10 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
 
   const handlePrint = () => {
     const co = companyProfile || {};
-    const html = `
+    // `html` tagged template: every ${...} below is escaped, so a tenant-supplied
+    // name or address cannot inject script into the print window (which shares
+    // this app's origin). See src/utils/htmlEscape.js.
+    const doc = html`
       <!DOCTYPE html>
       <html>
       <head>
@@ -148,7 +152,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
     `;
 
     const w = window.open('', '_blank');
-    w.document.write(html);
+    w.document.write(doc);
     w.document.close();
     setTimeout(() => w.print(), 500);
   };

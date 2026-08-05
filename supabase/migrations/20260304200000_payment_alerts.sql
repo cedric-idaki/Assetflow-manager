@@ -42,14 +42,43 @@ CREATE INDEX IF NOT EXISTS idx_payment_alerts_log_payment_id ON public.payment_a
 ALTER TABLE public.payment_alert_configs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.payment_alerts_log ENABLE ROW LEVEL SECURITY;
 
--- 4. RLS Policies - open access for app use
+-- 4. RLS Policies
+--
+-- SECURITY FIX 2026-08-02: this block used to create
+--   FOR ALL TO public USING (true) WITH CHECK (true)
+-- on both tables ("open access for app use"). Role `public` includes `anon`, so
+-- these tables were readable and writable with NO LOGIN — confirmed live, an
+-- anonymous GET returned real rows. Rewritten here so a fresh `db reset` or a
+-- new environment cannot recreate the hole; 20260802150000_lock_down_payment_
+-- alert_tables.sql applies the same end state to the existing project.
+--
+-- The only consumer is the payment-alerts Edge Function, which uses the
+-- service-role key and therefore bypasses RLS. End users get a super_admin /
+-- director read path and nothing more.
 DROP POLICY IF EXISTS "open_access_payment_alert_configs" ON public.payment_alert_configs;
-CREATE POLICY "open_access_payment_alert_configs"
-  ON public.payment_alert_configs FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "open_access_payment_alerts_log" ON public.payment_alerts_log;
-CREATE POLICY "open_access_payment_alerts_log"
-  ON public.payment_alerts_log FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS payment_alert_configs_read ON public.payment_alert_configs;
+CREATE POLICY payment_alert_configs_read ON public.payment_alert_configs
+  FOR SELECT TO authenticated USING (public.is_global_viewer());
+
+DROP POLICY IF EXISTS payment_alert_configs_update ON public.payment_alert_configs;
+CREATE POLICY payment_alert_configs_update ON public.payment_alert_configs
+  FOR UPDATE TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.user_profiles up
+                 WHERE up.id = auth.uid() AND up.role = 'super_admin'::public.user_role))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.user_profiles up
+                      WHERE up.id = auth.uid() AND up.role = 'super_admin'::public.user_role));
+
+-- Append-only: no INSERT/UPDATE/DELETE policy, service_role is the only writer.
+DROP POLICY IF EXISTS payment_alerts_log_read ON public.payment_alerts_log;
+CREATE POLICY payment_alerts_log_read ON public.payment_alerts_log
+  FOR SELECT TO authenticated USING (public.is_global_viewer());
+
+REVOKE ALL ON public.payment_alert_configs FROM anon;
+REVOKE ALL ON public.payment_alerts_log FROM anon;
+REVOKE INSERT, DELETE ON public.payment_alert_configs FROM authenticated;
+REVOKE INSERT, UPDATE, DELETE ON public.payment_alerts_log FROM authenticated;
 
 -- 5. Seed default alert configs
 DO $$

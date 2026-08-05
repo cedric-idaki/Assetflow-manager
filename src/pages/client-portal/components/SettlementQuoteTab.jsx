@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
+import { html } from '../../../utils/htmlEscape';
 
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -54,7 +55,7 @@ const SettlementQuoteTab = ({ installmentPlans, clientProfile }) => {
   const handlePrint = () => {
     if (!quote) return;
     const w = window.open('', '_blank');
-    w.document.write(`
+    w.document.write(html`
       <html><head><title>Settlement Quote — ${quote.quoteRef}</title>
       <style>
         body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; color: #111; }

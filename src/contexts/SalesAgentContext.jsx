@@ -18,7 +18,11 @@ export const SalesAgentProvider = ({ children }) => {
   const [activeView, setActiveView] = useState('portal');
   const [modals, setModals] = useState({
     leadRegistration: false,
+    // createClient covers the agent's default entity (a client for admin-created
+    // agents, a company for super-admin ones); createSacco is its own modal so a
+    // super-admin agent can register either without changing agent mode.
     createClient: false,
+    createSacco: false,
     leadDetail: null,
     showExport: false,
     selectedLead: null,

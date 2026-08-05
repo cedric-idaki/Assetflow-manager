@@ -109,7 +109,7 @@ describe('AssistRequestsPanel — gold agent inbox', () => {
         onRespond={noop} onComplete={noop} onCancel={noop} />
     );
 
-    expect(screen.getByText('Assistant to make sales')).toBeInTheDocument();
+    expect(screen.getByText('Assistance to make sales')).toBeInTheDocument();
     expect(screen.getByText('Installation and training')).toBeInTheDocument();
   });
 });

@@ -54,12 +54,16 @@ const SaccoDashboard = () => {
   const activeTab = searchParams.get('tab') || 'overview';
   const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
 
+  // Shares is its own sidebar module: it carries its own sub-tab bar, so the
+  // dashboard header + tab bar step aside when it is open.
+  const isSharesModule = activeTab === 'shares';
+
   const tabs = [
     { id: 'overview',      label: 'Overview',      icon: 'LayoutDashboard' },
     { id: 'members',       label: 'Members',       icon: 'Users' },
     { id: 'contributions', label: 'Contributions', icon: 'PiggyBank', badge: stats.pendingContributions },
     { id: 'loans',         label: 'Loans',         icon: 'Banknote' },
-    { id: 'shares',        label: 'Shares',        icon: 'PieChart' },
+    // Shares lives in the left sidebar now (still rendered here via ?tab=shares).
     { id: 'voting',        label: 'Voting',        icon: 'Vote',       badge: stats.openMotions },
     { id: 'elections',     label: 'Elections',     icon: 'Award',      badge: (stats.activeElections || 0) + (stats.pendingCandidates || 0) },
     { id: 'governance',    label: 'Governance',    icon: 'ScrollText' },
@@ -73,12 +77,16 @@ const SaccoDashboard = () => {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'linear-gradient(135deg, #34c1dd, #1da8c5)' }}>
-              <Icon name="Landmark" size={20} color="#fff" />
+              <Icon name={isSharesModule ? 'PieChart' : 'Landmark'} size={20} color="#fff" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-foreground">{sacco?.name || 'Sacco Dashboard'}</h1>
+              <h1 className="text-2xl font-bold text-foreground">
+                {isSharesModule ? 'Shares' : (sacco?.name || 'Sacco Dashboard')}
+              </h1>
               <p className="text-sm text-muted-foreground">
-                Welcome, {userProfile?.full_name || 'Admin'} · {stats.tier?.name} tier · {stats.totalMembers} members
+                {isSharesModule
+                  ? `${sacco?.name || 'Sacco'} · share register, treasury & trading`
+                  : `Welcome, ${userProfile?.full_name || 'Admin'} · ${stats.tier?.name} tier · ${stats.totalMembers} members`}
               </p>
             </div>
           </div>
@@ -101,12 +109,14 @@ const SaccoDashboard = () => {
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex gap-1 flex-wrap">
-          {tabs.map((t) => (
-            <Tab key={t.id} active={activeTab === t.id} label={t.label} icon={t.icon} badge={t.badge} onClick={() => setActiveTab(t.id)} />
-          ))}
-        </div>
+        {/* Tabs — hidden inside the Shares module, which brings its own */}
+        {!isSharesModule && (
+          <div className="flex gap-1 flex-wrap">
+            {tabs.map((t) => (
+              <Tab key={t.id} active={activeTab === t.id} label={t.label} icon={t.icon} badge={t.badge} onClick={() => setActiveTab(t.id)} />
+            ))}
+          </div>
+        )}
 
         {/* Content */}
         {loading ? (

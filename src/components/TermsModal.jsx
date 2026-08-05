@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import Icon from './AppIcon';
 
 // Google Drive preview of the Ararat Terms & Conditions / Privacy Policy.
-export const TERMS_DOC_URL = 'https://drive.google.com/file/d/19p9vOz4-XwcIdxglQIM6WN7edi-vXIzF/preview';
+export const TERMS_DOC_URL = 'https://drive.google.com/file/d/1t8fTwvCcbiYa-iDAPZ9mQv8SOd-Ly6IA/preview';
 
 // Full-screen overlay that shows the Terms & Privacy Policy document in the
 // same tab (no new window). Used during account registration.

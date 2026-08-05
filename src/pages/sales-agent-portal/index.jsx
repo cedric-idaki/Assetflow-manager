@@ -337,7 +337,7 @@ const KPICard = ({ label, value, icon, colorClass, loading, subtext }) => (
 );
 
 // ── Lead Detail Modal ─────────────────────────────────────────────────────────
-const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onScheduleFollowUp, isClientMode, isSaccoMode }) => {
+const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onScheduleFollowUp, isClientMode, isSaccoMode, canRegisterSacco }) => {
   const [newStage, setNewStage] = useState(lead?.stage || 'new_lead');
   const [saving, setSaving]     = useState(false);
   const isConverted = Boolean(lead?.converted_at);
@@ -445,6 +445,8 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onSc
                   ? 'Convert them into a client with a portal login. Their details are prefilled.'
                   : isSaccoMode
                   ? 'Register them as a sacco with a sacco admin portal account. Their details are prefilled.'
+                  : canRegisterSacco
+                  ? 'Register them as a company (admin portal) or as a sacco (sacco admin portal). Their details are prefilled either way.'
                   : 'Register them as a company with an admin portal account. Their details are prefilled.'}
                 {' '}The lead closes automatically once the account exists.
               </p>
@@ -454,6 +456,16 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onSc
               >
                 {isClientMode ? 'Convert to Client →' : isSaccoMode ? 'Register as Sacco →' : 'Register as Company →'}
               </button>
+              {/* Super-admin agents sell both products, so the same lead can be
+                  closed as a sacco instead of a company. */}
+              {canRegisterSacco && (
+                <button
+                  onClick={() => { onClose(); onConvertToClient(lead, 'sacco'); }}
+                  className="w-full mt-2 py-2 text-xs font-semibold bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg transition-colors"
+                >
+                  Register as Sacco →
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -487,7 +499,7 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onSc
 };
 
 // ── My Clients Section ────────────────────────────────────────────────────────
-const MyClientsSection = ({ leads, onCreateClient, isClientMode, isSaccoMode }) => {
+const MyClientsSection = ({ leads, onCreateClient, onCreateSacco, isClientMode, isSaccoMode, canRegisterSacco }) => {
   const closedLeads = (leads || []).filter(l => l.stage === 'closed');
   const registerLabel = isClientMode ? 'Create Client' : isSaccoMode ? 'Register Sacco' : 'Register Company';
   const registerNoun  = isClientMode ? 'client' : isSaccoMode ? 'sacco' : 'company';
@@ -499,27 +511,51 @@ const MyClientsSection = ({ leads, onCreateClient, isClientMode, isSaccoMode }) 
           <h3 className="text-base font-semibold text-foreground">My Clients</h3>
           <p className="text-xs text-muted-foreground mt-0.5">Leads you converted to client accounts</p>
         </div>
-        <button
-          onClick={() => onCreateClient(null)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white"
-          style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
-        >
-          <Icon name={isClientMode ? 'UserPlus' : isSaccoMode ? 'PiggyBank' : 'Building2'} size={13} color="white" />
-          {registerLabel}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onCreateClient(null)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white"
+            style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
+          >
+            <Icon name={isClientMode ? 'UserPlus' : isSaccoMode ? 'PiggyBank' : 'Building2'} size={13} color="white" />
+            {registerLabel}
+          </button>
+          {canRegisterSacco && (
+            <button
+              onClick={() => onCreateSacco(null)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white"
+              style={{ background: 'linear-gradient(135deg, #0891b2, #0e7490)' }}
+            >
+              <Icon name="PiggyBank" size={13} color="white" />
+              Register Sacco
+            </button>
+          )}
+        </div>
       </div>
 
       {closedLeads.length === 0 ? (
         <div className="text-center py-8 text-muted-foreground">
           <Icon name="Users" size={28} color="currentColor" />
           <p className="text-xs mt-2 font-medium">No converted clients yet</p>
-          <p className="text-xs opacity-60 mt-0.5">Convert a lead or register a new {registerNoun}</p>
-          <button
-            onClick={() => onCreateClient(null)}
-            className="mt-3 text-xs text-emerald-600 hover:underline font-semibold"
-          >
-            Register a {registerNoun} →
-          </button>
+          <p className="text-xs opacity-60 mt-0.5">
+            Convert a lead or register a new {registerNoun}{canRegisterSacco ? ' or sacco' : ''}
+          </p>
+          <div className="flex items-center justify-center gap-3 mt-3">
+            <button
+              onClick={() => onCreateClient(null)}
+              className="text-xs text-emerald-600 hover:underline font-semibold"
+            >
+              Register a {registerNoun} →
+            </button>
+            {canRegisterSacco && (
+              <button
+                onClick={() => onCreateSacco(null)}
+                className="text-xs text-cyan-600 hover:underline font-semibold"
+              >
+                Register a sacco →
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="space-y-2">
@@ -588,6 +624,11 @@ const SalesAgentPortal = () => {
   // companies; sacco-oversight-created agents (agent_type 'sacco') register saccos.
   const isClientMode = agentMode === 'client';
   const isSaccoMode  = agentMode === 'sacco';
+  // Super-admin agents sell the whole platform, not just the company product —
+  // they can register a sacco alongside a company, so they get both entry
+  // points. Admin-created (client) agents stay on their own tenant's clients,
+  // and sacco-side agents already register saccos as their default.
+  const canRegisterSacco = agentMode === 'company';
   // Only super-admin BRONZE agents can ask a gold agent to onboard an admin.
   const isBronzeCompanyAgent = agentMode === 'company' && (agentProfile?.agent_plan || 'bronze') === 'bronze';
   // Gold agents are on the receiving end — they get the request inbox.
@@ -632,11 +673,20 @@ const SalesAgentPortal = () => {
     try { await updateLeadStage(leadId, newStage); } catch (err) {}
   };
 
-  const handleConvertToClient = (lead) => {
+  // What this agent registers by default — the sacco path is the explicit
+  // second option a super-admin agent gets on top of it.
+  const defaultEntity = isClientMode ? 'client' : isSaccoMode ? 'sacco' : 'company';
+
+  // Every register/convert entry point goes through here so the modal that
+  // opens is stated, never inferred: a super-admin agent can open either.
+  const openRegister = (entity, lead = null) => {
     closeModal('leadDetail');
-    openModal('prefillLead', lead);
-    openModal('createClient');
+    if (lead) openModal('prefillLead', lead);
+    else      closeModal('prefillLead');
+    openModal(entity === 'sacco' ? 'createSacco' : 'createClient');
   };
+
+  const handleConvertToClient = (lead, entity = defaultEntity) => openRegister(entity, lead);
 
   const handleAssign = async ({ goldAgentId, adminName, helpType, note }) => {
     // The AssistModal shows its own success state; just persist + refresh here.
@@ -748,14 +798,16 @@ const SalesAgentPortal = () => {
     }
   };
 
-  const handleClientCreated = async (account) => {
+  // entity comes from the modal that produced the account, not from the agent
+  // mode — a super-admin agent creates companies AND saccos from the same portal.
+  const handleClientCreated = async (account, entity = defaultEntity) => {
     // Stamp the lead as converted so it moves into "My Clients" and can never
     // be registered a second time. Every create modal (client / company / sacco)
     // returns leadId when it was opened from a lead.
     if (account?.leadId) {
       try {
         await markLeadConverted(account.leadId, {
-          entity: isClientMode ? 'client' : isSaccoMode ? 'sacco' : 'company',
+          entity,
           refId:  account.clientId || account.adminId || account.saccoId || null,
         });
       } catch (err) {
@@ -828,13 +880,26 @@ const SalesAgentPortal = () => {
             {/* Create a client (admin agents), register a company (super-admin
                 agents) or register a sacco (sacco-oversight agents) */}
             <button
-              onClick={() => { closeModal('prefillLead'); openModal('createClient'); }}
+              onClick={() => openRegister(defaultEntity)}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
             >
               <Icon name={isClientMode ? 'UserPlus' : isSaccoMode ? 'PiggyBank' : 'Building2'} size={15} color="white" />
               {isClientMode ? 'Create Client' : isSaccoMode ? 'Register Sacco' : 'Register Company'}
             </button>
+
+            {/* Second product for super-admin agents — same commission plan,
+                different tenant type. */}
+            {canRegisterSacco && (
+              <button
+                onClick={() => openRegister('sacco')}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
+                style={{ background: 'linear-gradient(135deg, #0891b2, #0e7490)' }}
+              >
+                <Icon name="PiggyBank" size={15} color="white" />
+                Register Sacco
+              </button>
+            )}
 
             {/* Assist — bronze agents hand an admin to a gold agent for onboarding */}
             {isBronzeCompanyAgent && (
@@ -929,16 +994,6 @@ const SalesAgentPortal = () => {
         {/* ── Portal View ── */}
         {activeView === 'portal' && (
           <div className="space-y-5">
-
-            {/* Which tier this agent is on, spelled out rather than inferred
-                from which buttons they happen to have. */}
-            {!loading && TIERS[tier] && (
-              <div className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl border ${TIERS[tier].cls}`}>
-                <Icon name={TIERS[tier].icon} size={18} color="currentColor" />
-                <p className="text-sm font-bold">You are a {TIERS[tier].label}</p>
-                <p className="text-xs font-medium opacity-90">{TIERS[tier].hint}</p>
-              </div>
-            )}
 
             {/* Assist alert — a bronze agent is waiting on this gold agent. */}
             {!loading && assistBuckets?.pending?.length > 0 && (
@@ -1094,7 +1149,14 @@ const SalesAgentPortal = () => {
 
             {/* My Clients + Commission */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <MyClientsSection leads={leads} onCreateClient={handleConvertToClient} isClientMode={isClientMode} isSaccoMode={isSaccoMode} />
+              <MyClientsSection
+                leads={leads}
+                onCreateClient={() => openRegister(defaultEntity)}
+                onCreateSacco={() => openRegister('sacco')}
+                isClientMode={isClientMode}
+                isSaccoMode={isSaccoMode}
+                canRegisterSacco={canRegisterSacco}
+              />
               <CommissionDashboard
                 kpis={kpis}
                 walletTransactions={walletTransactions}
@@ -1212,6 +1274,7 @@ const SalesAgentPortal = () => {
           onScheduleFollowUp={handleScheduleFollowUp}
           isClientMode={isClientMode}
           isSaccoMode={isSaccoMode}
+          canRegisterSacco={canRegisterSacco}
         />
       )}
 
@@ -1226,7 +1289,7 @@ const SalesAgentPortal = () => {
         />
       )}
 
-      {/* ── Convert / register modal — client, sacco or company per agent type ── */}
+      {/* ── Convert / register modal — the agent's default entity ── */}
       {modals.createClient && (
         isClientMode ? (
           <CreateClientModal
@@ -1234,15 +1297,7 @@ const SalesAgentPortal = () => {
             onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
             agentProfile={agentProfile}
             prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
-            onSuccess={handleClientCreated}
-          />
-        ) : isSaccoMode ? (
-          <CreateSaccoModal
-            isOpen={modals.createClient}
-            onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
-            agentProfile={agentProfile}
-            prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
-            onSuccess={handleClientCreated}
+            onSuccess={(account) => handleClientCreated(account, 'client')}
           />
         ) : (
           <CreateCompanyModal
@@ -1250,9 +1305,21 @@ const SalesAgentPortal = () => {
             onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
             agentProfile={agentProfile}
             prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
-            onSuccess={handleClientCreated}
+            onSuccess={(account) => handleClientCreated(account, 'company')}
           />
         )
+      )}
+
+      {/* ── Register a sacco — the default for sacco-side agents, and the
+             second product for super-admin agents ── */}
+      {modals.createSacco && (
+        <CreateSaccoModal
+          isOpen={modals.createSacco}
+          onClose={() => { closeModal('createSacco'); closeModal('prefillLead'); }}
+          agentProfile={agentProfile}
+          prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
+          onSuccess={(account) => handleClientCreated(account, 'sacco')}
+        />
       )}
 
       {/* ── Assist modal (bronze agents → gold agent onboarding) ── */}

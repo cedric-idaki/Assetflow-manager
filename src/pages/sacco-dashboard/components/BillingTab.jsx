@@ -1,6 +1,7 @@
 import React from 'react';
 import Icon from '../../../components/AppIcon';
 import { Card, StatCard, Table, Badge, KES, fmtDate } from './_shared';
+import { html, rawHtml } from '../../../utils/htmlEscape';
 
 // ── Invoice download ─────────────────────────────────────────────────────────
 const invoiceNo = (row) => {
@@ -14,7 +15,9 @@ const fmtPeriod = (d) => (d ? new Date(d).toLocaleDateString('en-KE', { month: '
 const buildInvoiceHtml = (row, sacco) => {
   const statusColor = row.status === 'paid' ? '#15803d' : row.status === 'overdue' ? '#b91c1c' : '#b45309';
   const tierLabel = String(row.tier || '—');
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${invoiceNo(row)}</title>
+  // Escaped by default — the sacco name / reg no / email / phone below are
+  // tenant-entered and land in a print window that shares this app's origin.
+  return html`<!doctype html><html><head><meta charset="utf-8"><title>${invoiceNo(row)}</title>
 <style>
   *{box-sizing:border-box;font-family:'Segoe UI',Arial,sans-serif;}
   body{margin:0;padding:40px;color:#0c2037;}
@@ -40,8 +43,8 @@ const buildInvoiceHtml = (row, sacco) => {
   <div class="grid">
     <div>
       <strong>Billed to</strong><br>${sacco?.name || '—'}<br>
-      ${sacco?.registration_no ? `Reg. No. ${sacco.registration_no}<br>` : ''}
-      ${sacco?.email || ''}${sacco?.email ? '<br>' : ''}
+      ${sacco?.registration_no ? rawHtml(html`Reg. No. ${sacco.registration_no}<br>`) : ''}
+      ${sacco?.email || ''}${sacco?.email ? rawHtml('<br>') : ''}
       ${sacco?.phone || ''}
     </div>
     <div class="right">

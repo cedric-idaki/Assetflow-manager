@@ -1,5 +1,7 @@
 /// <reference lib="deno.ns" />
 
+import { authenticateCaller } from '../_shared/auth.ts';
+
 const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID');
 const TWILIO_AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN');
 const TWILIO_PHONE_NUMBER = Deno.env.get('TWILIO_PHONE_NUMBER');
@@ -46,6 +48,18 @@ const buildPaymentConfirmationMessage = (data: any): string => {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
+  }
+
+  // Twilio sends cost real money and the caller controls the destination
+  // number, so this must never be reachable with the public anon key. Any
+  // signed-in user may send (clients trigger e-sign and payment SMS from the
+  // portal); other Edge Functions call in with the service-role key.
+  const auth = await authenticateCaller(req);
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 
   try {

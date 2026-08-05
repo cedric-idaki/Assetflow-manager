@@ -11,6 +11,7 @@ import useAdminSubscription from '../../hooks/useAdminSubscription';
 import { useSaccoDashboardContext } from '../../contexts/SaccoDashboardContext';
 import SaccoBillingSection from '../sacco-dashboard/components/BillingTab';
 import { PASSWORD_POLICY } from '../../utils/validation';
+import { html } from '../../utils/htmlEscape';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 const fmtKES  = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -502,7 +503,8 @@ const invoiceNo = (row) => {
 const buildInvoiceHtml = (row, billTo) => {
   const meta = tierMeta(row.plan_name);
   const statusColor = row.status === 'active' || row.status === 'paid' ? '#15803d' : row.status === 'pending' ? '#b45309' : '#b91c1c';
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${invoiceNo(row)}</title>
+  // Escaped by default — billTo comes from tenant-entered company/sacco details.
+  return html`<!doctype html><html><head><meta charset="utf-8"><title>${invoiceNo(row)}</title>
 <style>
   *{box-sizing:border-box;font-family:'Segoe UI',Arial,sans-serif;}
   body{margin:0;padding:40px;color:#0c2037;}

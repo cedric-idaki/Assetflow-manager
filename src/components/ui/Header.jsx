@@ -58,11 +58,13 @@ const mapAuditToNotif = (row) => {
   };
 };
 
-/* Portal roles that must NEVER see the company-wide activity trail — they only
-   ever get notifications about themselves. RLS enforces this too
-   (portal_view_own_audit_logs, 20260721090000); this is the client-side half so
+/* Self-service roles that must NEVER see the company-wide activity trail — the
+   bell only ever shows them what concerns them. A sales agent belongs here with
+   clients and members: they work a tenant's leads, they don't observe the
+   tenant. RLS enforces this too (self_view_own_audit_logs +
+   sees_tenant_activity_feed, 20260802120000); this is the client-side half so
    the bell never even asks for rows it shouldn't render. */
-const PORTAL_ROLES = ['client', 'sacco_member'];
+const SELF_SCOPED_ROLES = ['client', 'sacco_member', 'sales_agent', 'sales'];
 
 const RoleBadge = ({ role }) => {
   const styles = {
@@ -125,19 +127,24 @@ const Header = function (props) {
   const userId       = user?.id;
   const userEmail    = user?.email;
   const role         = userProfile?.role;
-  const isPortalUser = PORTAL_ROLES.includes(role);
+  const isSelfScoped = SELF_SCOPED_ROLES.includes(role);
 
   const unread = notifications.filter(n => !n.read).length;
 
   /* ── fetchNotifs ──────────────────────────────────────────
-     Staff see their tenant's activity trail. Portal users are
-     scoped to rows that name them: a client by their client
-     record, anyone by their own user_id. Without this a client
-     saw company-internal events (e.g. "staff user deleted").
+     Observers of a tenant (admin, sacco_admin, internal staff)
+     see their tenant's activity trail; super_admin/director see
+     every tenant. Self-service roles — sales agents, clients,
+     sacco members — are scoped to rows that name them: a client
+     by their client record, anyone by their own user_id.
+
+     Without this a bronze agent's bell filled up with what every
+     OTHER agent in the company was doing, and a client saw
+     company-internal events (e.g. "staff user deleted").
   ───────────────────────────────────────────────────────── */
   const fetchNotifs = useCallback(async function () {
     // Wait for the profile — role decides the scope, and querying before it
-    // lands would briefly show a portal user the tenant-wide feed.
+    // lands would briefly show a self-scoped user the tenant-wide feed.
     if (!userId || !role) return;
     setLoadingNotif(true);
     try {
@@ -145,9 +152,12 @@ const Header = function (props) {
         .from('audit_logs')
         .select('id, action, description, severity, created_at');
 
-      if (isPortalUser) {
+      if (isSelfScoped) {
         // Resolve the caller's own client row (RLS: clients_read_own_row).
-        // Sacco members have none, so they fall back to their own actions.
+        // Agents and sacco members have none, so they fall back to the rows
+        // that carry their user_id — their own actions plus the system
+        // notices addressed to them (e.g. follow-up reminders, which
+        // agent-followup-reminders writes with user_id = the agent).
         let clientId = null;
         if (role === 'client' && userEmail) {
           const { data: own } = await supabase
@@ -174,7 +184,7 @@ const Header = function (props) {
     } finally {
       setLoadingNotif(false);
     }
-  }, [userId, userEmail, role, isPortalUser]);
+  }, [userId, userEmail, role, isSelfScoped]);
 
   // Keep a ref to fetchNotifs so the realtime callback always calls the latest version
   // without needing to recreate the channel subscription
@@ -192,19 +202,22 @@ const Header = function (props) {
 
   /* ── Realtime subscription ─────────────────────────────── */
   useEffect(function () {
-    if (!userId) return;
+    if (!userId || !role) return;
 
     // Use a globally unique channel name — module-level counter ensures
     // StrictMode's double-invoke never reuses the same name on a still-subscribed channel
     const channelName = `hdr_notifs_${userId}_${++_headerChannelSeq}`;
 
+    // Self-scoped users only care about rows carrying their user_id, so filter
+    // server-side rather than waking every agent's browser on every tenant
+    // action. Observers keep the unfiltered feed — RLS still bounds what the
+    // follow-up fetch returns either way.
+    const auditFilter = { event: 'INSERT', schema: 'public', table: 'audit_logs' };
+    if (isSelfScoped) auditFilter.filter = `user_id=eq.${userId}`;
+
     const channel = supabase
       .channel(channelName, { config: { broadcast: { self: false } } })
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'audit_logs' },
-        () => fetchNotifsRef.current()
-      )
+      .on('postgres_changes', auditFilter, () => fetchNotifsRef.current())
       .subscribe();
 
     channelRef.current = channel;
@@ -229,7 +242,7 @@ const Header = function (props) {
       channelRef.current = null;
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [userId]); // only re-run when the user changes (login/logout)
+  }, [userId, role, isSelfScoped]); // re-run on login/logout, and once the role resolves the scope
 
   /* ── Click-outside handler for dropdowns ──────────────── */
   useEffect(function () {
