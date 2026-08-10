@@ -13,18 +13,46 @@ const ACTION_META = {
 };
 
 const FILTER_OPTIONS = [
-  { value: 'all',    label: 'All Activity' },
-  { value: 'delete', label: 'Deletions' },
-  { value: 'update', label: 'Amendments' },
-  { value: 'create', label: 'Additions' },
+  { value: 'all',          label: 'All Activity' },
+  { value: 'delete',       label: 'Deletions' },
+  { value: 'update',       label: 'Amendments' },
+  { value: 'create',       label: 'Additions' },
+  { value: 'sales',        label: 'Sales' },
+  { value: 'sales_leads',  label: 'Sales Leads' },
 ];
 
 const AuditTrail = ({ data, onExport }) => {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
 
+  const matchesScope = (log, scope) => {
+    const tableName = (log.table_name || '').toLowerCase();
+    const description = (log.description || '').toLowerCase();
+
+    if (scope === 'sales') {
+      const isSalesTable = tableName === 'sales' || tableName === 'sale';
+      const isSalesDescription = (description.includes('sales') || description.includes('sale')) && !description.includes('lead');
+      return isSalesTable || isSalesDescription;
+    }
+
+    if (scope === 'sales_leads') {
+      const isLeadTable = tableName === 'leads' || tableName === 'lead' || tableName === 'sales_leads' || tableName === 'sales_lead';
+      const isLeadDescription = description.includes('lead') || description.includes('sales lead');
+      return isLeadTable || isLeadDescription;
+    }
+
+    return true;
+  };
+
   const filtered = data.filter(log => {
-    if (filter !== 'all' && log.action !== filter) return false;
+    if (filter !== 'all') {
+      if (filter === 'sales' || filter === 'sales_leads') {
+        if (!matchesScope(log, filter)) return false;
+      } else if (log.action !== filter) {
+        return false;
+      }
+    }
+
     if (search) {
       const q = search.toLowerCase();
       return (
@@ -60,7 +88,7 @@ const AuditTrail = ({ data, onExport }) => {
             ))}
           </div>
           <button
-            onClick={() => onExport(data, 'audit_trail')}
+            onClick={() => onExport?.(filtered, 'audit_trail')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
           >
             <Icon name="Download" size={13} color="currentColor" />

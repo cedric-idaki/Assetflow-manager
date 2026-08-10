@@ -2,7 +2,7 @@ import React from 'react';
 import Icon from '../../../components/AppIcon';
 import AgentRejectionsModal from './AgentRejectionsModal';
 
-const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport }) => {
+const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport, onUpgradeAgent, onDowngradeAgent }) => {
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
   const [exportRange, setExportRange] = React.useState('all');
@@ -166,12 +166,32 @@ const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport }) => 
                       <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded text-foreground">{agent.agent_code}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
-                        isGold ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-800'
-                      }`}>
-                        <Icon name={isGold ? 'Crown' : 'Award'} size={11} color="currentColor" />
-                        {agent.agent_plan || 'bronze'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                          isGold ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-800'
+                        }`}>
+                          <Icon name={isGold ? 'Crown' : 'Award'} size={11} color="currentColor" />
+                          {agent.agent_plan || 'bronze'}
+                        </span>
+                        {!isGold && onUpgradeAgent && (
+                          <button
+                            type="button"
+                            onClick={() => onUpgradeAgent(agent.id)}
+                            className="px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 transition-colors"
+                          >
+                            Upgrade to Gold
+                          </button>
+                        )}
+                        {isGold && onDowngradeAgent && (
+                          <button
+                            type="button"
+                            onClick={() => onDowngradeAgent(agent.id)}
+                            className="px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
+                          >
+                            Downgrade to Bronze
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{agent.region || '—'}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{agent.commission_rate}%</td>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '/src/lib/supabase.js';
 import { emailLoginCredentials } from '../services/credentialsEmailService';
+import { auditLogsService } from '../services/supabaseService';
 
 export const useSuperAdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -256,6 +257,46 @@ export const useSuperAdminDashboard = () => {
     await fetchContracts();
   }, [fetchContracts]);
 
+  const updateSalesAgentPlan = useCallback(async (agentId, plan) => {
+    const { data, error } = await supabase
+      .from('agents')
+      .update({
+        agent_plan: plan,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', agentId)
+      .select()
+      .maybeSingle();
+
+    if (error) throw error;
+
+    try {
+      const { data: agentProfile } = await supabase
+        .from('agents')
+        .select('full_name, email')
+        .eq('id', agentId)
+        .maybeSingle();
+
+      const actionLabel = plan === 'gold' ? 'upgraded' : 'downgraded';
+      await auditLogsService.log(
+        'update',
+        'agents',
+        `Super admin ${actionLabel} sales agent "${agentProfile?.full_name || 'Unknown Agent'}" to ${plan} tier`,
+        agentId,
+        { agent_plan: plan === 'gold' ? 'bronze' : 'gold' },
+        { agent_plan: plan }
+      );
+    } catch (auditErr) {
+      console.warn('Agent plan audit log skipped:', auditErr?.message);
+    }
+
+    await fetchSalesAgents();
+    return data;
+  }, [fetchSalesAgents]);
+
+  const upgradeSalesAgentToGold = useCallback(async (agentId) => updateSalesAgentPlan(agentId, 'gold'), [updateSalesAgentPlan]);
+  const downgradeSalesAgentToBronze = useCallback(async (agentId) => updateSalesAgentPlan(agentId, 'bronze'), [updateSalesAgentPlan]);
+
   const createSalesAgent = useCallback(async (agentData) => {
     // The super admin creating the agent becomes the agent's admin. Without this,
     // agents.admin_id stays null and the agent's portal can't resolve an admin when
@@ -405,7 +446,7 @@ export const useSuperAdminDashboard = () => {
     stats, assetBreakdown, companyAnalytics, auditTrail,
     salesAgents, salesTarget, staffUsers, contracts, clients, assistRejections,
     loading, connectionStatus,
-    refetch: fetchAll, createSalesAgent, uploadContract, exportCSV,
+    refetch: fetchAll, createSalesAgent, upgradeSalesAgentToGold, downgradeSalesAgentToBronze, uploadContract, exportCSV,
   };
 };
 

@@ -73,7 +73,7 @@ const SuperAdminDashboard = () => {
   const {
     stats, assetBreakdown, companyAnalytics,
     auditTrail, salesAgents, salesTarget, contracts, clients, assistRejections,
-    loading, connectionStatus, refetch, createSalesAgent, uploadContract, exportCSV,
+    loading, connectionStatus, refetch, createSalesAgent, upgradeSalesAgentToGold, downgradeSalesAgentToBronze, uploadContract, exportCSV,
   } = useSuperAdminDashboard();
 
   const [activeTab, setActiveTab] = useState('overview');
@@ -310,6 +310,8 @@ const SuperAdminDashboard = () => {
                 rejections={assistRejections}
                 onCreateNew={() => setShowCreateAgent(true)}
                 onExport={exportCSV}
+                onUpgradeAgent={upgradeSalesAgentToGold}
+                onDowngradeAgent={downgradeSalesAgentToBronze}
               />
             )}
           </div>

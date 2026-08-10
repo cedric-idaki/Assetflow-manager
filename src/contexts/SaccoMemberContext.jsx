@@ -351,7 +351,7 @@ export const SaccoMemberProvider = ({ children }) => {
    * characters Daraja allows.
    */
   const payContributionByMpesa = useCallback(async (contribution, phone) => {
-    const { data, error } = await supabase.functions.invoke('mpesa-stk-push', {
+    const data = await invokeSupabaseFunction('mpesa-stk-push', {
       body: {
         purpose: 'sacco_contribution',
         contributionId: contribution.id,
@@ -360,7 +360,7 @@ export const SaccoMemberProvider = ({ children }) => {
         accountRef: contribution.txn_no || me?.member_no || 'CONTRIB',
       },
     });
-    if (error || data?.error) throw new Error(data?.error || error?.message || 'M-Pesa request failed');
+    if (data?.error) throw new Error(data.error || 'M-Pesa request failed');
     return data;
   }, [me?.member_no]);
 

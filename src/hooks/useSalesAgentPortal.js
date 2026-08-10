@@ -397,6 +397,21 @@ export const useSalesAgentPortal = () => {
     if (!agentProfile?.id) return;
     const agentId = agentProfile.id;
 
+    const agentProfileChannel = supabase
+      .channel(`agent_profile_${agentId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'agents', filter: `id=eq.${agentId}` }, async (payload) => {
+        if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+          const nextProfile = payload.new || payload?.new?.[0] || null;
+          if (nextProfile) {
+            setAgentProfile(prev => ({ ...(prev || {}), ...nextProfile }));
+            if (nextProfile.agent_plan !== agentProfile?.agent_plan) {
+              await loadAll();
+            }
+          }
+        }
+      })
+      .subscribe();
+
     const leadsChannel = supabase
       .channel(`leads_${agentId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads', filter: `agent_id=eq.${agentId}` }, () => fetchLeads(agentId))
@@ -438,7 +453,7 @@ export const useSalesAgentPortal = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists', filter: `bronze_agent_id=eq.${agentId}` }, () => fetchAssists(agentId))
       .subscribe();
 
-    channelsRef.current = [leadsChannel, walletChannel, expensesChannel, followUpsChannel, auditChannel, assistsInChannel, assistsOutChannel];
+    channelsRef.current = [agentProfileChannel, leadsChannel, walletChannel, expensesChannel, followUpsChannel, auditChannel, assistsInChannel, assistsOutChannel];
 
     return () => {
       channelsRef.current.forEach((ch) => supabase.removeChannel(ch));

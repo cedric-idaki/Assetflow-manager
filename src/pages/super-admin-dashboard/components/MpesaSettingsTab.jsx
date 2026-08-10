@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../../../components/AppIcon';
-import { supabase } from '../../../lib/supabase';
+import { invokeSupabaseFunction, supabase } from '../../../lib/supabase';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 
 /**
@@ -53,8 +53,8 @@ const MpesaSettingsTab = () => {
     setLoading(true);
     setError('');
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke('mpesa-config');
-      if (fnErr || data?.error) throw new Error(data?.error || fnErr?.message);
+      const data = await invokeSupabaseFunction('mpesa-config');
+      if (data?.error) throw new Error(data.error);
       setConfig(data);
     } catch (e) {
       setError(e?.message || 'Could not load M-Pesa configuration');
@@ -115,7 +115,7 @@ const MpesaSettingsTab = () => {
 
     setTesting(true);
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke('mpesa-stk-push', {
+      const data = await invokeSupabaseFunction('mpesa-stk-push', {
         body: {
           purpose: 'test',
           phone,
@@ -123,7 +123,7 @@ const MpesaSettingsTab = () => {
           accountRef: 'MPESA-TEST',
         },
       });
-      if (fnErr || data?.error) throw new Error(data?.error || fnErr?.message || 'Test failed');
+      if (data?.error) throw new Error(data.error || 'Test failed');
       startPolling(data.checkoutRequestId);
     } catch (e) {
       setTesting(false);

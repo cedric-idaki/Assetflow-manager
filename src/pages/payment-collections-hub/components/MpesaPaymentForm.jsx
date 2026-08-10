@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
-import { supabase } from '../../../lib/supabase';
+import { invokeSupabaseFunction, supabase } from '../../../lib/supabase';
 
 const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -97,11 +97,11 @@ const MpesaPaymentForm = ({ amount, clientId, accountRef, planId, chargeId, onSu
     setError('');
 
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke('mpesa-stk-push', {
+      const data = await invokeSupabaseFunction('mpesa-stk-push', {
         body: { phone, amount: Math.round(amount), accountRef, clientId, planId, chargeId },
       });
 
-      if (fnErr || data?.error) throw new Error(data?.error || fnErr?.message || 'STK push failed');
+      if (data?.error) throw new Error(data.error || 'STK push failed');
 
       setCheckoutRequestId(data.checkoutRequestId);
       setStep(STEPS.WAITING);

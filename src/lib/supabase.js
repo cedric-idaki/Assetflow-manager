@@ -106,3 +106,52 @@ export const getAccessToken = async () => {
     return null;
   }
 };
+
+export const invokeSupabaseFunction = async (name, { body, method = 'POST' } = {}) => {
+  const url = `${supabaseUrl}/functions/v1/${name}`;
+  const { data: refreshData } = await supabase.auth.refreshSession();
+  let accessToken = refreshData?.session?.access_token;
+
+  if (!accessToken) {
+    const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+    if (sessionErr || !sessionData?.session) {
+      throw new Error('Session expired. Please log out and log in again.');
+    }
+    accessToken = sessionData.session.access_token;
+  }
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    apikey: supabaseAnonKey,
+    'Content-Type': 'application/json',
+  };
+
+  const makeRequest = async (token) => fetch(url, {
+    method,
+    headers: {
+      ...headers,
+      Authorization: `Bearer ${token}`,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  let res = await makeRequest(accessToken);
+
+  if (res.status === 401) {
+    const { data: retryRefreshData } = await supabase.auth.refreshSession();
+    const retryToken = retryRefreshData?.session?.access_token;
+    if (!retryToken) {
+      throw new Error('Session expired. Please log out and log in again.');
+    }
+    res = await makeRequest(retryToken);
+  }
+
+  const payload = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const message = payload?.error || payload?.message || `${res.status} ${res.statusText}`;
+    throw new Error(`Edge Function '${name}' failed: ${message}`);
+  }
+
+  return payload;
+};

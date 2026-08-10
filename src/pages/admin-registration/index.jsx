@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { supabase } from '../../lib/supabase';
+import { supabase, invokeSupabaseFunction } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
@@ -111,6 +111,7 @@ const AdminRegistration = () => {
   const [mpesaPhone, setMpesaPhone] = useState('');
   const [paymentStatus, setPaymentStatus] = useState('idle');
   const [createdAdminId, setCreatedAdminId] = useState(null);
+  const [createdSubscriptionId, setCreatedSubscriptionId] = useState(null);
 
   const setAcc = (k, v) => setAccount(prev => ({ ...prev, [k]: v }));
   const setCo = (k, v) => setCompany(prev => ({ ...prev, [k]: v }));
@@ -272,16 +273,22 @@ const AdminRegistration = () => {
         .eq('name', activePlan.id)
         .single();
 
-      await supabase.from('company_subscriptions').insert({
-        admin_id: userId,
-        plan_id: planData?.id,
-        plan_name: activePlan.id,
-        status: 'pending',
-        price_paid: totalPrice,
-        max_users: userCount, // seats the admin paid for
-        start_date: new Date().toISOString(),
-        end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      });
+      const { data: subscriptionData, error: subscriptionError } = await supabase
+        .from('company_subscriptions')
+        .insert({
+          admin_id: userId,
+          plan_id: planData?.id,
+          plan_name: activePlan.id,
+          status: 'pending',
+          price_paid: totalPrice,
+          max_users: userCount, // seats the admin paid for
+          start_date: new Date().toISOString(),
+          end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        })
+        .select('id')
+        .maybeSingle();
+      if (subscriptionError) throw subscriptionError;
+      setCreatedSubscriptionId(subscriptionData?.id ?? null);
 
       // 5. Confirmation email to the admin — best-effort: registration must
       //    never fail because the mail didn't go out.
@@ -323,16 +330,18 @@ const AdminRegistration = () => {
         await supabase.from('saccos').update({ phone: mpesaPhone }).eq('admin_id', adminId);
       }
 
-      // Save payment record as pending
-      await supabase.from('mpesa_subscription_payments').insert({
-        admin_id: adminId,
-        phone_number: mpesaPhone,
-        amount: totalPrice,
-        status: 'pending',
-      });
+      const accountRef = `SUB${adminId.replace(/-/g, '').slice(0, 9)}`;
+      const payload = {
+        purpose: 'subscription',
+        phone: mpesaPhone,
+        amount: Math.round(totalPrice),
+        accountRef,
+      };
+      if (createdSubscriptionId) payload.subscriptionId = createdSubscriptionId;
 
-      // In production this calls your Mpesa Daraja API
-      // For now we simulate the STK push was sent
+      const data = await invokeSupabaseFunction('mpesa-stk-push', { body: payload });
+      if (data?.error) throw new Error(data.error);
+
       setPaymentStatus('stk_sent');
       setSuccess(`STK push sent to ${mpesaPhone}. Enter your Mpesa PIN to complete payment.`);
 
