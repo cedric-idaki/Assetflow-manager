@@ -75,6 +75,22 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/mpesa-callback/index.ts"
 
+# M-Pesa reconciler for pushes that never got a usable answer — a lost callback,
+# or one mpesa-callback declined to settle because Daraja could not confirm it
+# yet. Invoked by the scheduler with the service-role key (no user JWT), so
+# verify_jwt must be false — same shape as sacco-governance-tick, and it checks
+# the service-role key / CRON_SECRET itself.
+#
+# Run it every ~2 MINUTES. This is not a background nicety: since mpesa-callback
+# stopped trusting the request body, this is the only thing that settles a
+# payment whose confirmation was slow. The client gives up polling after 3
+# minutes, so a longer interval shows users spurious timeouts and invites them
+# to pay twice.
+[functions.mpesa-status-query]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/mpesa-status-query/index.ts"
+
 # STK push initiator. Called from the app by a signed-in user, so verify_jwt stays
 # true — the caller's JWT is what scopes the payment to their tenant.
 [functions.mpesa-stk-push]

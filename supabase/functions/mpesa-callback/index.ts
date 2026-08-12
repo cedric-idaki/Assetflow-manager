@@ -1,25 +1,53 @@
 // Daraja STK callback receiver.
 //
 // This endpoint is PUBLIC (verify_jwt = false) because Safaricom sends no auth
-// header of any kind. It is safe because it trusts nothing in the request body:
-// the only thing it accepts is a CheckoutRequestID that matches a pending row
-// in mpesa_transactions — a row that only mpesa-stk-push can create, under a
-// signed-in user's tenant. A forged callback for an unknown id is ignored, and
-// a forged callback for a known id can only deliver the outcome of a payment we
-// ourselves initiated.
+// header of any kind — and mpesa-stk-push hands the CheckoutRequestID straight
+// back to the payer's own browser. So anyone who has ever started a payment can
+// POST a convincing "success" here for their own pending push.
 //
-// Safaricom retries callbacks. Every side effect is therefore guarded by an
-// atomic claim on `settled_at`, so a replayed callback is a no-op rather than a
-// duplicate payment.
+// Therefore THE BODY DECIDES NOTHING. It is treated purely as a hint that a
+// particular transaction is worth asking about:
+//
+//   1. The CheckoutRequestID must match a pending row in mpesa_transactions —
+//      a row only mpesa-stk-push can create, under a signed-in user's tenant.
+//   2. The outcome is then confirmed with Safaricom directly (stkpushquery),
+//      using the same credentials the push went out on. Only Daraja's answer
+//      settles anything.
+//   3. The amount banked is always txn.amount, the figure we pushed. STK is
+//      fixed-amount, so this equals what a genuine callback reports.
+//
+// A forged callback is now worth nothing: Daraja will say the payment never
+// completed, and nothing is written.
+//
+// When Daraja cannot answer — "still processing", a transport failure, a rotated
+// paybill — the row is deliberately LEFT PENDING and mpesa-status-query resolves
+// it later. That makes the reconciler load-bearing: if it is not scheduled,
+// payments whose confirmation was slow will sit unsettled. Run it every ~2
+// minutes, inside the 3-minute window the client polls for.
+//
+// Safaricom retries callbacks, and the reconciler may run concurrently. Every
+// side effect is guarded by an atomic claim on `settled_at` in _shared/
+// mpesa-settle.ts, so whoever gets there first wins and the rest are no-ops.
 //
 // Always returns HTTP 200: a non-200 makes Safaricom retry indefinitely.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { credsForTransaction, stkQuery } from '../_shared/mpesa.ts';
+import { settleFailure, settleSuccess } from '../_shared/mpesa-settle.ts';
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
   env: { get: (key: string) => string | undefined };
 };
+
+/**
+ * Confirming with Daraja costs a request against your rate limit, and this
+ * endpoint is unauthenticated — so replaying one callback a thousand times must
+ * not turn into a thousand Daraja calls. A genuine callback arrives once
+ * (Safaricom's own retries are minutes apart), so a short window here is never
+ * hit by real traffic.
+ */
+const QUERY_THROTTLE_MS = 10_000;
 
 const ack = (desc = 'Accepted') =>
   new Response(JSON.stringify({ ResultCode: 0, ResultDesc: desc }), {
@@ -41,8 +69,6 @@ Deno.serve(async (req) => {
     if (!stk?.CheckoutRequestID) return ack('Ignored');
 
     const checkoutRequestId: string = stk.CheckoutRequestID;
-    const resultCode = Number(stk.ResultCode);
-    const resultDesc: string = stk.ResultDesc ?? '';
 
     const { data: txn } = await supabase
       .from('mpesa_transactions')
@@ -50,8 +76,7 @@ Deno.serve(async (req) => {
       .eq('checkout_request_id', checkoutRequestId)
       .maybeSingle();
 
-    // Not a payment we initiated — nothing to do. This is the check that makes
-    // a public endpoint acceptable.
+    // Not a payment we initiated — nothing to ask Safaricom about.
     if (!txn) {
       console.warn('Callback for unknown CheckoutRequestID:', checkoutRequestId);
       return ack('Ignored');
@@ -62,217 +87,72 @@ Deno.serve(async (req) => {
       return ack('Already processed');
     }
 
-    // ── Failure / cancellation ───────────────────────────────────────────────
-    if (resultCode !== 0) {
-      const status = resultCode === 1032 ? 'cancelled' : 'failed';
-      await supabase
-        .from('mpesa_transactions')
-        .update({
-          status,
-          result_code: String(resultCode),
-          result_desc: resultDesc,
-          settled_at: new Date().toISOString(),
-        })
-        .eq('checkout_request_id', checkoutRequestId)
-        .is('settled_at', null);
+    // The receipt is the one thing only the callback carries — Daraja's query
+    // response does not include it. It is used solely for labelling, and only
+    // once the query has independently confirmed the payment succeeded.
+    const items: Array<{ Name: string; Value?: string | number }> =
+      stk.CallbackMetadata?.Item ?? [];
+    const field = (name: string) => items.find((i) => i.Name === name)?.Value;
+    const receipt = String(field('MpesaReceiptNumber') ?? '');
+    const phone = String(field('PhoneNumber') ?? txn.phone_number ?? '');
 
-      if (txn.purpose === 'subscription') {
-        await supabase
-          .from('mpesa_subscription_payments')
-          .update({ status, result_code: String(resultCode), result_desc: resultDesc })
-          .eq('checkout_request_id', checkoutRequestId);
-      }
-
-      // A declined or cancelled contribution must not sit "pending" forever in
-      // the member's portal — close it out with the reason Safaricom gave.
-      if (txn.purpose === 'sacco_contribution' && txn.contribution_id) {
-        await supabase
-          .from('sacco_contributions')
-          .update({
-            status: 'failed',
-            failure_reason: resultDesc || (status === 'cancelled' ? 'Cancelled on the phone' : 'Payment failed'),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', txn.contribution_id)
-          .eq('status', 'pending');
-      }
-      return ack();
+    if (txn.last_query_at && Date.now() - new Date(txn.last_query_at).getTime() < QUERY_THROTTLE_MS) {
+      // Asked very recently. mpesa-status-query will carry it from here.
+      return ack('Accepted');
     }
 
-    // ── Success ──────────────────────────────────────────────────────────────
-    const items: Array<{ Name: string; Value?: string | number }> = stk.CallbackMetadata?.Item ?? [];
-    const field = (name: string) => items.find((i) => i.Name === name)?.Value;
+    const creds = await credsForTransaction(supabase, txn);
+    if (!creds) {
+      // Cannot verify, so cannot settle. Left pending on purpose — the
+      // reconciler retries once credentials resolve again.
+      console.error(
+        `No usable credentials to verify ${checkoutRequestId} (purpose ${txn.purpose}, admin ${txn.admin_id}). Left pending.`,
+      );
+      return ack('Accepted');
+    }
 
-    const receipt = String(field('MpesaReceiptNumber') ?? '');
-    const amount = Number(field('Amount') ?? txn.amount);
-    const phone = String(field('PhoneNumber') ?? txn.phone_number);
-
-    // Atomically claim this transaction. If another concurrent delivery of the
-    // same callback already claimed it, `claimed` comes back empty and we skip
-    // every side effect below.
-    const { data: claimed } = await supabase
+    await supabase
       .from('mpesa_transactions')
-      .update({
-        status: 'completed',
-        mpesa_receipt_number: receipt,
-        result_code: '0',
-        result_desc: resultDesc,
-        completed_at: new Date().toISOString(),
-        settled_at: new Date().toISOString(),
-      })
-      .eq('checkout_request_id', checkoutRequestId)
-      .is('settled_at', null)
-      .select('id')
-      .maybeSingle();
+      .update({ last_query_at: new Date().toISOString() })
+      .eq('checkout_request_id', checkoutRequestId);
 
-    if (!claimed) return ack('Already processed');
+    const outcome = await stkQuery(creds, checkoutRequestId);
 
-    // A 'test' push is proof the paybill works and nothing more — it must never
-    // create a payment record or activate anything. Claiming it above is the
-    // entire side effect.
-    if (txn.purpose === 'subscription') {
-      await settleSubscription(supabase, txn, { receipt, amount, resultDesc });
-    } else if (txn.purpose === 'collection') {
-      await settleCollection(supabase, txn, { receipt, amount, phone });
-    } else if (txn.purpose === 'sacco_contribution') {
-      await settleSaccoContribution(supabase, txn, { receipt, amount, phone });
+    if (outcome.state === 'unknown') {
+      // Commonly 500.001.1001 — the customer has not finished responding on the
+      // handset. Not evidence of anything; leave it for the reconciler.
+      console.info(`Daraja could not confirm ${checkoutRequestId} yet: ${outcome.reason}`);
+      return ack('Accepted');
+    }
+
+    // Worth knowing about: the caller claimed one thing and Safaricom says
+    // another. On a genuine callback these always agree.
+    const claimedSuccess = Number(stk.ResultCode) === 0;
+    if (claimedSuccess !== (outcome.state === 'success')) {
+      console.error('Callback outcome contradicts Daraja', {
+        checkoutRequestId,
+        callbackSaid: stk.ResultCode,
+        darajaSaid: outcome.resultCode,
+        purpose: txn.purpose,
+        adminId: txn.admin_id,
+      });
+    }
+
+    if (outcome.state === 'success') {
+      await settleSuccess(supabase, txn, { receipt, phone, resultDesc: outcome.resultDesc });
+    } else {
+      await settleFailure(supabase, txn, {
+        resultCode: outcome.resultCode,
+        resultDesc: outcome.resultDesc,
+      });
     }
 
     return ack();
   } catch (err) {
     // Swallow and acknowledge: an error here must not put Safaricom into an
-    // infinite retry loop. The transaction stays unsettled, and the
-    // status-query reconciler will pick it up.
+    // infinite retry loop. The transaction stays unsettled, and
+    // mpesa-status-query picks it up.
     console.error('Callback error:', err);
     return ack('Accepted');
   }
 });
-
-/** Platform subscription paid — grant the admin portal access. */
-async function settleSubscription(
-  supabase: any,
-  txn: Record<string, any>,
-  { receipt, amount, resultDesc }: { receipt: string; amount: number; resultDesc: string },
-) {
-  await supabase
-    .from('mpesa_subscription_payments')
-    .update({
-      status: 'completed',
-      mpesa_receipt_number: receipt,
-      result_code: '0',
-      result_desc: resultDesc,
-      transaction_date: new Date().toISOString(),
-    })
-    .eq('checkout_request_id', txn.checkout_request_id);
-
-  if (!txn.admin_id) return;
-
-  const now = new Date();
-  const end = new Date(now);
-  end.setMonth(end.getMonth() + 1);
-
-  // Activate the subscription the admin was paying for. Access gating reads
-  // company_subscriptions.status, so this is what actually opens the portal.
-  const { error } = await supabase
-    .from('company_subscriptions')
-    .update({
-      status: 'active',
-      price_paid: amount,
-      start_date: now.toISOString(),
-      end_date: end.toISOString(),
-    })
-    .eq('admin_id', txn.admin_id)
-    .in('status', ['pending', 'expired', 'suspended']);
-
-  if (error) console.error('Failed to activate subscription:', error.message);
-}
-
-/** Tenant collected from its own client — record the payment against them. */
-async function settleCollection(
-  supabase: any,
-  txn: Record<string, any>,
-  { receipt, amount, phone }: { receipt: string; amount: number; phone: string },
-) {
-  // payments.transaction_id is UNIQUE, so a duplicate here is rejected by the
-  // database rather than silently double-crediting the client. We surface the
-  // error instead of ignoring the insert result.
-  const { error } = await supabase.from('payments').insert({
-    client_id: txn.client_id,
-    admin_id: txn.admin_id,
-    amount,
-    payment_method: 'mpesa',
-    payment_status: 'completed',
-    transaction_id: receipt,
-    reference_number: receipt,
-    payment_date: new Date().toISOString(),
-    notes: `M-Pesa payment from ${phone}. Ref: ${receipt}`,
-  });
-
-  if (error && !/duplicate key/i.test(error.message)) {
-    console.error('Failed to record payment:', error.message);
-  }
-
-  if (txn.charge_id) {
-    await supabase
-      .from('installment_charges')
-      .update({ charge_status: 'paid', paid_date: new Date().toISOString() })
-      .eq('id', txn.charge_id);
-  }
-}
-
-/**
- * Sacco member paid their contribution from the member portal.
- *
- * The row already exists as 'pending' — mpesa-stk-push refuses to push without
- * one — so this only has to complete it. That is deliberate: it means the money
- * is matched to a member, an account and a contribution type that were decided
- * before the payment, rather than being guessed from the callback.
- *
- * Duplicate protection is layered:
- *   1. `settled_at` on the transaction, claimed atomically by the caller above,
- *      makes a replayed callback a no-op.
- *   2. `.eq('status', 'pending')` means only the first update can settle it.
- *   3. A partial unique index on (admin_id, upper(reference)) for M-Pesa rows
- *      makes the same receipt landing on a second contribution a hard error.
- */
-async function settleSaccoContribution(
-  supabase: any,
-  txn: Record<string, any>,
-  { receipt, amount, phone }: { receipt: string; amount: number; phone: string },
-) {
-  if (!txn.contribution_id) {
-    console.error('sacco_contribution callback with no contribution_id:', txn.checkout_request_id);
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const { data: settled, error } = await supabase
-    .from('sacco_contributions')
-    .update({
-      status: 'completed',
-      amount,
-      payment_method: 'mpesa',
-      channel: 'mpesa_auto',
-      reference: receipt,
-      paid_at: now,
-      paid_date: now.slice(0, 10),
-      mpesa_transaction_id: txn.id,
-      notes: `M-Pesa ${receipt} from ${phone}`,
-      updated_at: now,
-    })
-    .eq('id', txn.contribution_id)
-    .eq('status', 'pending')
-    .select('id')
-    .maybeSingle();
-
-  if (error) {
-    // The duplicate-receipt index firing here means Safaricom sent us a receipt
-    // we have already banked against another contribution. Leave the row
-    // pending for a human rather than crediting the member twice.
-    console.error('Failed to settle sacco contribution:', error.message);
-    return;
-  }
-  if (!settled) {
-    console.warn('Sacco contribution was no longer pending:', txn.contribution_id);
-  }
-}

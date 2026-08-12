@@ -230,3 +230,109 @@ export async function tenantCreds(
     source: 'tenant',
   };
 }
+
+/**
+ * The credentials a given mpesa_transactions row was pushed with, so its outcome
+ * can be queried against the same Daraja app that initiated it. Mirrors the
+ * routing in mpesa-stk-push — keep the two in step.
+ *
+ * Returns null when they cannot be resolved (platform secrets unset, or the
+ * tenant switched their integration off since the push). Callers must treat that
+ * as "cannot verify", never as "failed".
+ */
+export async function credsForTransaction(
+  supabase: { from: (t: string) => any },
+  txn: { purpose?: string; admin_id?: string | null; shortcode?: string | null },
+): Promise<DarajaCreds | null> {
+  let creds: DarajaCreds | null = null;
+
+  if (txn.purpose === 'collection') {
+    creds = txn.admin_id ? await tenantCreds(supabase, txn.admin_id) : null;
+  } else {
+    try {
+      creds = platformCreds();
+    } catch (_) {
+      creds = null;
+    }
+  }
+
+  // A paybill rotated since the push means Daraja will not recognise the id
+  // under these credentials. Worth saying out loud — the symptom otherwise is a
+  // transaction that never resolves and no explanation anywhere.
+  if (creds && txn.shortcode && creds.shortcode !== txn.shortcode) {
+    console.warn(
+      `Transaction was pushed on shortcode ${txn.shortcode} but current ${creds.source} credentials are for ${creds.shortcode}. Query will probably not match.`,
+    );
+  }
+
+  return creds;
+}
+
+// ── Transaction status query ─────────────────────────────────────────────────
+
+/**
+ * What Safaricom itself says happened to a push.
+ *
+ * `unknown` is a first-class answer, not an error: Daraja returns
+ * 500.001.1001 ("The transaction is being processed") for a push the customer
+ * has not finished responding to, and transport failures are indistinguishable
+ * from that here. Nothing may be settled on `unknown` — leave the row pending
+ * and ask again later.
+ */
+export type StkOutcome =
+  | { state: 'success'; resultCode: string; resultDesc: string }
+  | { state: 'failed'; resultCode: string; resultDesc: string }
+  | { state: 'unknown'; reason: string };
+
+/**
+ * Ask Daraja for the real outcome of a CheckoutRequestID.
+ *
+ * This is the authoritative answer. The STK callback is not: it arrives on a
+ * public endpoint with no signature, so anything it claims has to be confirmed
+ * here before money moves.
+ */
+export async function stkQuery(
+  creds: DarajaCreds,
+  checkoutRequestId: string,
+): Promise<StkOutcome> {
+  try {
+    const timestamp = darajaTimestamp();
+    // Must authenticate as the same shortcode the push did — for Buy Goods that
+    // is the head office, not the till. See stkRouting.
+    const shortcode = stkRouting(creds).businessShortCode;
+    const token = await getDarajaToken(creds);
+
+    const res = await fetch(`${baseUrl(creds.environment)}/mpesa/stkpushquery/v1/query`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        BusinessShortCode: shortcode,
+        Password: stkPassword(shortcode, creds.passkey, timestamp),
+        Timestamp: timestamp,
+        CheckoutRequestID: checkoutRequestId,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    // 500.001.1001 is "still processing". Every other errorCode is a query we
+    // could not complete — an invalid id, a rate limit, a rotated paybill. None
+    // of them are evidence the payment failed, so all of them are 'unknown'.
+    if (data?.errorCode) {
+      return { state: 'unknown', reason: `${data.errorCode}: ${data.errorMessage ?? ''}`.trim() };
+    }
+
+    if (data?.ResultCode === undefined || data?.ResultCode === null) {
+      return { state: 'unknown', reason: `Unrecognised query response (HTTP ${res.status})` };
+    }
+
+    const resultCode = String(data.ResultCode);
+    const resultDesc = String(data.ResultDesc ?? '');
+    return resultCode === '0'
+      ? { state: 'success', resultCode, resultDesc }
+      : { state: 'failed', resultCode, resultDesc };
+  } catch (err) {
+    // Network failure, bad credentials, Daraja down. Never a reason to settle.
+    return { state: 'unknown', reason: (err as Error).message };
+  }
+}

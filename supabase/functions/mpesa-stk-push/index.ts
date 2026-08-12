@@ -44,6 +44,7 @@ import {
   stkRouting,
   type DarajaCreds,
 } from '../_shared/mpesa.ts';
+import { expectedSubscriptionPrice } from '../_shared/plans.ts';
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
@@ -163,6 +164,17 @@ Deno.serve(async (req) => {
 
       adminId = contribution.admin_id;
       memberId = contribution.member_id;
+    }
+
+    // ── Subscription: is this the right price for the plan? ──────────────────
+    // LOG ONLY, DELIBERATELY. The expected figure is recomputed server-side
+    // from _shared/plans.ts, which is a third copy of pricing that already
+    // lives in two frontend files (see that file). Rejecting on a mismatch
+    // today would turn any drift between those copies into failed
+    // registrations. So: record every mismatch, let the payment through, and
+    // switch to enforcing once the logs have been clean for a while.
+    if (purpose === 'subscription') {
+      await auditSubscriptionPrice(admin, { subscriptionId, adminId, payable });
     }
 
     // ── Resolve credentials for this flow ────────────────────────────────────
@@ -289,3 +301,90 @@ Deno.serve(async (req) => {
     return json({ error: (err as Error).message || 'Internal server error' }, 500);
   }
 });
+
+/**
+ * Check what was posted against what the plan should cost, and record the
+ * answer. Does NOT block the payment — see the call site.
+ *
+ * The seat count comes from the subscription row, which the browser also wrote,
+ * and that is fine: this enforces "the price is right for what you claimed",
+ * while max_users bounds what the account actually gets. Buying a 1-seat plan
+ * is legitimate; buying 50 seats for the price of one is not.
+ *
+ * Every path here is best-effort. A failure to verify must never stop somebody
+ * paying — it just means this particular push goes unchecked, and says so.
+ */
+async function auditSubscriptionPrice(
+  admin: any,
+  { subscriptionId, adminId, payable }: {
+    subscriptionId: string | null;
+    adminId: string;
+    payable: number;
+  },
+): Promise<void> {
+  try {
+    if (!subscriptionId) {
+      console.warn(
+        `Subscription push with no subscriptionId (admin ${adminId}, KES ${payable}) — price not verifiable.`,
+      );
+      return;
+    }
+
+    const { data: sub } = await admin
+      .from('company_subscriptions')
+      .select('id, admin_id, max_users, plan_name')
+      .eq('id', subscriptionId)
+      .maybeSingle();
+
+    if (!sub) {
+      console.warn(`Subscription ${subscriptionId} not found — price not verifiable.`);
+      return;
+    }
+
+    // Paying against somebody else's subscription is never legitimate. It
+    // cannot currently activate their account — settleSubscription keys off the
+    // transaction's own admin_id — but it does write a bogus row into
+    // mpesa_subscription_payments, and it should be visible.
+    if (sub.admin_id !== adminId) {
+      console.error(
+        `Subscription ${subscriptionId} belongs to ${sub.admin_id}, not the caller ${adminId}.`,
+      );
+      return;
+    }
+
+    // Company and sacco catalogs share the ids 'bronze'/'silver'/'gold' with
+    // different prices, so plan_name alone cannot say which one applies. The
+    // presence of a saccos row for this admin is what distinguishes them.
+    const { data: sacco } = await admin
+      .from('saccos')
+      .select('id')
+      .eq('admin_id', adminId)
+      .maybeSingle();
+
+    const expected = expectedSubscriptionPrice({
+      isSacco: Boolean(sacco),
+      seats: Number(sub.max_users),
+    });
+
+    if (expected === null) {
+      console.warn(
+        `No tier covers max_users=${sub.max_users} on subscription ${subscriptionId} — price not verifiable.`,
+      );
+      return;
+    }
+
+    if (expected !== payable) {
+      console.error('SUBSCRIPTION PRICE MISMATCH (not enforced)', {
+        subscriptionId,
+        adminId,
+        isSacco: Boolean(sacco),
+        seats: sub.max_users,
+        planName: sub.plan_name,
+        posted: payable,
+        expected,
+      });
+    }
+  } catch (err) {
+    console.error('Subscription price audit failed:', (err as Error).message);
+  }
+}
