@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase, invokeSupabaseFunction } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import BrandPreviewPanel from '../../components/BrandPreviewPanel';
 import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
 import { COMPANY_PLANS as PLANS, planForUsers, INSTALLATION_FEE } from '../../config/companyPlans';
@@ -72,6 +73,17 @@ const AdminRegistration = () => {
   const [showOther, setShowOther] = useState(false);
   const [otherInput, setOtherInput] = useState('');
   const isSacco = company.organizationType === 'sacco';
+
+  // County → Location cascade, shared by the company and sacco forms: pick a
+  // county first, then a location within it. Free-typed addresses gave us
+  // unmatchable values (e.g. "westlands nrb"), so both are pickers.
+  const placeFields = [
+    { label: 'City / County *', key: 'city', type: 'select', options: KENYA_COUNTIES, placeholder: 'Select county' },
+    { label: 'Location / Address *', key: 'location', type: 'select',
+      options: LOCATIONS_BY_COUNTY[company.city] || [],
+      placeholder: company.city ? 'Select location' : 'Select county first',
+      disabled: !company.city },
+  ];
 
   const steps = ['Account', isSacco ? 'Sacco' : 'Company', 'Plan', 'Payment'];
 
@@ -177,8 +189,8 @@ const AdminRegistration = () => {
       // Both registration details are compulsory once the sacco says it is registered.
       if (isSacco && company.isRegistered === 'Yes' && !company.businessRegNumber) return setError('Registration / certificate number is required.') || false;
       if (isSacco && company.isRegistered === 'Yes' && !company.sasraLicence) return setError('SASRA licence number is required.') || false;
-      if (isSacco && !company.city) return setError('Please select your county.') || false;
-      if (!company.location) return setError('Location is required.') || false;
+      if (!company.city) return setError('Please select your county.') || false;
+      if (!company.location) return setError('Please select your location.') || false;
       if (!isSacco && company.assetTypes.length === 0) return setError('Select at least one asset type.') || false;
     }
     if (currentStep === 2) {
@@ -385,84 +397,13 @@ const AdminRegistration = () => {
 
   return (
     <div className="min-h-screen flex" style={{ background: C.card }}>
-      {/* Left branding panel */}
-      <div
-        className="hidden lg:flex lg:w-[52%] flex-col justify-between p-12 relative overflow-hidden"
-        style={{ background: `linear-gradient(160deg, ${C.navy} 0%, ${C.navyMid} 60%, ${C.navy} 100%)` }}
-      >
-        {/* Top accent line */}
-        <div className="absolute top-0 left-0 right-0 h-1"
-          style={{ background: `linear-gradient(90deg, ${C.primary}, #5dd3e8, ${C.primary})` }}
-        />
-
-        {/* Decorative circles */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-16 right-16 w-72 h-72 rounded-full"
-            style={{ border: '1.5px solid rgba(52,193,221,0.08)' }} />
-          <div className="absolute top-32 right-32 w-44 h-44 rounded-full"
-            style={{ border: '1px solid rgba(52,193,221,0.06)' }} />
-          <div className="absolute bottom-32 left-8 w-56 h-56 rounded-full"
-            style={{ border: '1px solid rgba(52,193,221,0.06)' }} />
-          <div className="absolute bottom-16 left-24 w-32 h-32 rounded-full"
-            style={{ border: '1px solid rgba(52,193,221,0.04)' }} />
-          {/* Glow blob */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full"
-            style={{ background: 'radial-gradient(circle, rgba(52,193,221,0.06) 0%, transparent 70%)' }} />
-        </div>
-
-        {/* Brand */}
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}>
-            <Icon name="Building2" size={24} color={C.navy} />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-white">Ararat</h1>
-            <p className="text-xs" style={{ color: C.primary }}>Business Management Platform</p>
-          </div>
-        </div>
-
-        {/* Headline */}
-        <div className="relative z-10 flex-1 flex flex-col justify-center">
-          <div className="w-12 h-0.5 mb-6" style={{ background: C.primary }} />
-          <h2 className="text-4xl font-bold text-white leading-tight mb-4">
-            Grow Your Business with Ararat
-          </h2>
-          <p className="text-base leading-relaxed mb-10" style={{ color: '#7a9cb8' }}>
-            Manage your assets, clients, and sales team all in one place.
-          </p>
-
-          {/* Steps indicator */}
-          <div className="space-y-3">
-            {steps.map((step, i) => (
-              <div key={step} className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
-                  i < currentStep ? 'text-white' : 'text-white'
-                }`}
-                  style={{
-                    background: i < currentStep 
-                      ? '#10b981'
-                      : i === currentStep
-                      ? C.primary
-                      : 'rgba(52,193,221,0.15)',
-                  }}>
-                  {i < currentStep ? <Icon name="Check" size={14} color="white" /> : i + 1}
-                </div>
-                <span className="text-sm font-medium" style={{ color: i <= currentStep ? 'white' : 'rgba(255,255,255,0.4)' }}>
-                  {step}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="relative z-10">
-          <p className="text-xs" style={{ color: '#3a5a7a' }}>
-            © {new Date().getFullYear()} Ararat. All rights reserved.
-          </p>
-        </div>
-      </div>
+      {/* Left branding panel — same product preview as the sign-in screen, but
+          its step list doubles as the live registration progress tracker. */}
+      <BrandPreviewPanel
+        className="lg:w-[52%]"
+        steps={steps}
+        currentStep={currentStep}
+      />
 
       {/* Right form panel */}
       <div className="flex-1 flex flex-col justify-center items-center p-8 overflow-y-auto" style={{ background: C.card }}>
@@ -669,18 +610,12 @@ const AdminRegistration = () => {
                   { label: 'Registration / Certificate Number *', key: 'businessRegNumber', placeholder: 'e.g. CS/12345' },
                   { label: 'SASRA Licence Number *', key: 'sasraLicence', placeholder: 'e.g. SASRA/DTS/001' },
                 ] : []),
-                { label: 'City / County *', key: 'city', type: 'select', options: KENYA_COUNTIES, placeholder: 'Select county' },
-                // Location options depend on the county picked above.
-                { label: 'Location / Address *', key: 'location', type: 'select',
-                  options: LOCATIONS_BY_COUNTY[company.city] || [],
-                  placeholder: company.city ? 'Select location' : 'Select county first',
-                  disabled: !company.city },
+                ...placeFields,
               ] : [
                 { label: 'Company Name *', key: 'companyName', placeholder: 'Acme Ltd' },
                 { label: 'Business Registration Number', key: 'businessRegNumber', placeholder: 'e.g. CPR/2024/001' },
                 { label: 'Business Type', key: 'businessType', placeholder: 'e.g. Limited Company, Sole Proprietor' },
-                { label: 'Location / Address *', key: 'location', placeholder: 'e.g. Westlands, Nairobi' },
-                { label: 'City / County', key: 'city', type: 'select', options: KENYA_COUNTIES, placeholder: 'Select county', optional: true },
+                ...placeFields,
               ]).map(field => (
                 <div key={field.key}>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: C.navy }}>{field.label}</label>
@@ -690,7 +625,7 @@ const AdminRegistration = () => {
                       onChange={e => {
                         const v = e.target.value;
                         // Changing county invalidates a location picked under the old one.
-                        if (isSacco && field.key === 'city') {
+                        if (field.key === 'city') {
                           setCompany(prev => ({ ...prev, city: v, location: '' }));
                         } else if (isSacco && field.key === 'isRegistered') {
                           // Switching to "No" hides the registration fields, so drop

@@ -11,6 +11,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { logger } from '../utils/logger';
+import { getDeviceId } from '../utils/deviceIdentity';
 
 // ── Environment validation ────────────────────────────────────────────────────
 const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL 
@@ -41,20 +42,102 @@ try {
   throw new Error(`Invalid VITE_SUPABASE_URL: ${e.message}`);
 }
 
+// ── Session persistence ───────────────────────────────────────────────────────
+/**
+ * Backs the "Remember this device" checkbox on the login screen.
+ *
+ * Remembered (the default): the session lives in localStorage and survives the
+ * browser being closed — the behaviour this app has always had.
+ * Not remembered: the session goes to sessionStorage instead, so closing the
+ * tab signs the user out. Useful on shared or public machines.
+ *
+ * Reads check both stores so a session written under either setting — including
+ * one written before this flag existed — is still found.
+ */
+export const REMEMBER_DEVICE_KEY = 'ararat_remember_device';
+
+const safeStorage = (kind) => {
+  try {
+    return typeof window !== 'undefined' ? window[kind] : null;
+  } catch {
+    // Storage can throw in private-mode / blocked-cookie contexts.
+    return null;
+  }
+};
+
+export const setRememberDevice = (remember) => {
+  const local = safeStorage('localStorage');
+  if (!local) return;
+  try {
+    if (remember) local.removeItem(REMEMBER_DEVICE_KEY);
+    else local.setItem(REMEMBER_DEVICE_KEY, 'session-only');
+  } catch {
+    /* non-fatal — falls back to the remembered default */
+  }
+};
+
+// Default is "remembered", so an unset flag keeps the previous behaviour.
+const isRemembered = () => {
+  const local = safeStorage('localStorage');
+  try {
+    return !local || local.getItem(REMEMBER_DEVICE_KEY) !== 'session-only';
+  } catch {
+    return true;
+  }
+};
+
+const authStorage = {
+  getItem: (key) => {
+    try {
+      return safeStorage('localStorage')?.getItem(key)
+        ?? safeStorage('sessionStorage')?.getItem(key)
+        ?? null;
+    } catch {
+      return null;
+    }
+  },
+  setItem: (key, value) => {
+    try {
+      // Write to one store and clear the other so the two never disagree.
+      const [write, clear] = isRemembered()
+        ? [safeStorage('localStorage'), safeStorage('sessionStorage')]
+        : [safeStorage('sessionStorage'), safeStorage('localStorage')];
+      write?.setItem(key, value);
+      clear?.removeItem(key);
+    } catch {
+      /* non-fatal — the session simply won't persist */
+    }
+  },
+  removeItem: (key) => {
+    try {
+      safeStorage('localStorage')?.removeItem(key);
+      safeStorage('sessionStorage')?.removeItem(key);
+    } catch {
+      /* non-fatal */
+    }
+  },
+};
+
 // ── Hardened client creation ──────────────────────────────────────────────────
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
-    // Store session in localStorage with a namespaced key to avoid collisions
+    // Store session under a namespaced key to avoid collisions
     storageKey: 'ararat_auth_token',
+    storage: authStorage,
   },
   global: {
     headers: {
       // Custom header helps identify legitimate app requests server-side
       'X-Client-Name': 'ararat-web',
       'X-Client-Version': import.meta.env.VITE_APP_VERSION || '1.0.0',
+      // Which of the account's two allowed devices is making the call. Read by
+      // public.is_device_authorized(), so a policy can be scoped to registered
+      // devices. Identity only — the device's *slot* is derived server-side
+      // from the User-Agent, never from anything the client sends.
+      'X-Device-Id': getDeviceId(),
     },
     fetch: (...args) =>
       fetch(...args)?.catch((err) => {

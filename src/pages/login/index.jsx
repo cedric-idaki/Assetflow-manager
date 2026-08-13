@@ -1,8 +1,57 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
+import { supabase, setRememberDevice as persistRememberChoice, REMEMBER_DEVICE_KEY } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import BrandPreviewPanel from '../../components/BrandPreviewPanel';
+import { isAndroidAppContext } from '../../utils/androidApp';
+
+const STEPS = [
+  'Sign in with the account your team set up for you.',
+  ['Land on ', 'your', ' portal — client, member, or admin.'],
+  'Apply, vote, sign, and track balances — same day.',
+];
+
+// System colors — unchanged from the previous login screen.
+const C = {
+  primary:     '#34c1dd',
+  primaryDark: '#1da8c5',
+  primarySoft: '#5dd3e8',
+  navy:        '#0c2037',
+  navyMid:     '#1a3a5c',
+  bg:          '#f5f8fa',
+  bg2:         '#eaf1f6',
+  card:        '#ffffff',
+  border:      '#d0dce6',
+  inputBg:     '#f5f8fa',
+  text:        '#0c2037',
+  textMuted:   '#5a7185',
+  onNavy:      '#ffffff',
+  onNavyMuted: '#7a9cb8',
+  onNavyFaint: '#3a5a7a',
+  lineOnNavy:  'rgba(52,193,221,0.16)',
+  error:       '#b91c1c',
+  errorBg:     '#fef2f2',
+  errorBorder: '#fecaca',
+};
+
+// The system's own type roles standing in for the mock-up's three families:
+// Georgia = display, Open Sans = body and labels, Courier = figures only.
+const SERIF = { fontFamily: "Georgia, 'Times New Roman', serif" };
+
+// Courier is this system's data face — reserve it for numbers, the way
+// `.data-text` does in tailwind.css. Using it for UI labels reads as typewriter.
+const MONO = { fontFamily: "'Courier New', Courier, monospace", fontVariantNumeric: 'tabular-nums' };
+
+// Small uppercase labels get their character from tracking, not from a mono face.
+const LABEL = {
+  fontSize: '11px',
+  fontWeight: 600,
+  letterSpacing: '0.09em',
+  textTransform: 'uppercase',
+};
+
+/* ── Page ─────────────────────────────────────────────────────────────────── */
 
 const LoginPage = () => {
   const navigate = useNavigate();
@@ -13,6 +62,14 @@ const LoginPage = () => {
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
+  // Remembered by default — matches how the app behaved before this option existed.
+  const [rememberDevice, setRememberDevice] = useState(function() {
+    try {
+      return window.localStorage.getItem(REMEMBER_DEVICE_KEY) !== 'session-only';
+    } catch {
+      return true;
+    }
+  });
 
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
@@ -46,6 +103,8 @@ const LoginPage = () => {
     }
     setLoading(true);
     try {
+      // Decide where the session gets written *before* it is issued.
+      persistRememberChoice(rememberDevice);
       var result = await signIn(email.trim(), password);
       var signInError = result.error;
       var redirectPath = result.redirectPath;
@@ -85,143 +144,112 @@ const LoginPage = () => {
     }
   };
 
-  // System colors
-  const C = {
-    primary:     '#34c1dd',
-    primaryDark: '#1da8c5',
-    navy:        '#0c2037',
-    navyMid:     '#1a3a5c',
-    bg:          '#f5f8fa',
-    card:        '#ffffff',
-    border:      '#d0dce6',
-    inputBg:     '#f5f8fa',
-    text:        '#0c2037',
-    textMuted:   '#5a7185',
-    error:       '#b91c1c',
-    errorBg:     '#fef2f2',
-    errorBorder: '#fecaca',
-  };
-
-  var inputStyle = function(hasError) {
+  var primaryButtonStyle = function(isBusy) {
     return {
-      border: hasError ? '1.5px solid ' + C.error : '1.5px solid ' + C.border,
-      color: C.text,
-      background: hasError ? C.errorBg : C.inputBg,
-      outline: 'none',
+      background: isBusy
+        ? 'linear-gradient(135deg, #1da8c5, #1596b0)'
+        : 'linear-gradient(135deg, #34c1dd, #1da8c5)',
+      color: C.navy,
+      opacity: isBusy ? 0.85 : 1,
+      cursor: isBusy ? 'not-allowed' : 'pointer',
+      boxShadow: '0 4px 14px rgba(52,193,221,0.35)',
+      letterSpacing: '0.03em',
     };
   };
 
-  return (
-    <div className="min-h-screen flex" style={{ background: C.bg }}>
-
-      {/* ── Left panel ─────────────────────────────────────────────────── */}
+  const brand = (
+    <div className="relative z-10 flex items-center gap-3">
       <div
-        className="hidden lg:flex lg:w-[52%] flex-col justify-between p-12 relative overflow-hidden"
-        style={{ background: 'linear-gradient(160deg, #0c2037 0%, #1a3a5c 60%, #0c2037 100%)' }}
+        className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+        style={{ background: 'linear-gradient(135deg, #34c1dd, #1da8c5)', boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
       >
-        {/* Top accent line — system primary color */}
-        <div className="absolute top-0 left-0 right-0 h-1"
-          style={{ background: 'linear-gradient(90deg, #34c1dd, #5dd3e8, #34c1dd)' }} />
-
-        {/* Decorative circles */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-16 right-16 w-72 h-72 rounded-full"
-            style={{ border: '1.5px solid rgba(52,193,221,0.08)' }} />
-          <div className="absolute top-32 right-32 w-44 h-44 rounded-full"
-            style={{ border: '1px solid rgba(52,193,221,0.06)' }} />
-          <div className="absolute bottom-32 left-8 w-56 h-56 rounded-full"
-            style={{ border: '1px solid rgba(52,193,221,0.06)' }} />
-          <div className="absolute bottom-16 left-24 w-32 h-32 rounded-full"
-            style={{ border: '1px solid rgba(52,193,221,0.04)' }} />
-          {/* Glow blob */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full"
-            style={{ background: 'radial-gradient(circle, rgba(52,193,221,0.06) 0%, transparent 70%)' }} />
-        </div>
-
-        {/* Brand */}
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #34c1dd, #1da8c5)', boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}>
-            <Icon name="Building2" size={24} color="#0c2037" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-white">Ararat</h1>
-            <p className="text-xs" style={{ color: '#34c1dd' }}>Financial Management Platform</p>
-          </div>
-        </div>
-
-        {/* Headline */}
-        <div className="relative z-10 flex-1 flex flex-col justify-center">
-          <div className="w-12 h-0.5 mb-6" style={{ background: '#34c1dd' }} />
-          <h2 className="text-4xl font-bold text-white leading-tight mb-4">
-            Manage Your Assets<br />and Collections
-          </h2>
-          <p className="text-base leading-relaxed mb-10" style={{ color: '#7a9cb8' }}>
-            A comprehensive financial management platform for tracking assets,
-            processing payments, and managing client relationships.
-          </p>
-
-          {/* Feature list */}
-          <div className="space-y-4">
-            {[
-              { icon: 'ShieldCheck', text: 'Role-based access with full audit trails'         },
-              { icon: 'TrendingUp',  text: 'Real-time performance analytics and reports'      },
-              { icon: 'CreditCard', text: 'Integrated payment processing and collections'     },
-            ].map(function(item, i) {
-              return (
-                <div key={i} className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: 'rgba(52,193,221,0.12)', border: '1px solid rgba(52,193,221,0.25)' }}>
-                    <Icon name={item.icon} size={15} color="#34c1dd" />
-                  </div>
-                  <span className="text-sm" style={{ color: '#7a9cb8' }}>{item.text}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Stats strip */}
-          <div className="mt-10 grid grid-cols-3 gap-4">
-            {[
-              { label: 'Modules',    value: '8+'  },
-              { label: 'Roles',      value: '12+' },
-              { label: 'Uptime',     value: '99%' },
-            ].map(function(s) {
-              return (
-                <div key={s.label} className="rounded-xl p-4 text-center"
-                  style={{ background: 'rgba(52,193,221,0.07)', border: '1px solid rgba(52,193,221,0.12)' }}>
-                  <p className="text-2xl font-black text-white">{s.value}</p>
-                  <p className="text-xs mt-0.5" style={{ color: '#7a9cb8' }}>{s.label}</p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="relative z-10">
-          <p className="text-xs" style={{ color: '#3a5a7a' }}>
-            &copy; {new Date().getFullYear()} Ararat. All rights reserved.
-          </p>
-        </div>
+        <Icon name="Building2" size={22} color={C.navy} />
       </div>
+      <div style={{ ...SERIF, fontSize: '20px', fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>Ararat</div>
+    </div>
+  );
 
-      {/* ── Right panel ────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col justify-center items-center p-8" style={{ background: C.card }}>
+  return (
+    <div
+      className="min-h-screen lg:grid"
+      style={{ background: C.bg, gridTemplateColumns: '1fr 1.12fr' }}
+    >
+      {/* Focus rings, the signature stroke and the stamp fade need real CSS. */}
+      <style>{`
+        .al-shell {
+          display: flex;
+          align-items: center;
+          background: ${C.inputBg};
+          border: 1.5px solid ${C.border};
+          border-radius: 8px;
+          transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        .al-shell:focus-within {
+          border-color: ${C.primary};
+          box-shadow: 0 0 0 3px rgba(52,193,221,0.15);
+        }
+        .al-shell.al-shell-error {
+          background: ${C.errorBg};
+          border-color: ${C.error};
+        }
+        .al-shell input {
+          flex: 1;
+          min-width: 0;
+          border: none;
+          background: transparent;
+          outline: none;
+          font-size: 14px;
+          padding: 11px 14px;
+          color: ${C.text};
+        }
+        .al-shell input::placeholder { color: #9aacba; }
+        .al-check {
+          appearance: none;
+          -webkit-appearance: none;
+          width: 16px;
+          height: 16px;
+          flex-shrink: 0;
+          margin: 0;
+          border: 1.5px solid ${C.border};
+          border-radius: 3px;
+          background: ${C.card};
+          cursor: pointer;
+          position: relative;
+          transition: background .15s ease, border-color .15s ease;
+        }
+        .al-check:checked {
+          background: ${C.primaryDark};
+          border-color: ${C.primaryDark};
+        }
+        .al-check:checked::after {
+          content: "";
+          position: absolute;
+          left: 4px;
+          top: 0.5px;
+          width: 4px;
+          height: 8px;
+          border: solid ${C.card};
+          border-width: 0 2px 2px 0;
+          transform: rotate(40deg);
+        }
+        .al-check:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 3px rgba(52,193,221,0.25);
+        }
+      `}</style>
 
-        {/* Mobile logo */}
-        <div className="lg:hidden mb-8 text-center">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl mb-3"
-            style={{ background: 'linear-gradient(135deg, #34c1dd, #1da8c5)', boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}>
-            <Icon name="Building2" size={26} color="#0c2037" />
-          </div>
-          <h1 className="text-2xl font-bold" style={{ color: C.navy }}>Ararat</h1>
-          <p className="text-xs mt-1" style={{ color: C.textMuted }}>Financial Management Platform</p>
-        </div>
+      {/* ── Left: sign-in ──────────────────────────────────────────────── */}
+      <div
+        className="relative flex flex-col min-h-screen px-6 py-8 sm:px-12 sm:py-9"
+        style={{
+          background: 'radial-gradient(700px 340px at 10% -10%, rgba(52,193,221,0.10), transparent 60%), ' + C.bg,
+        }}
+      >
+        {brand}
 
-        <div className="w-full max-w-md">
+        <div className="relative z-10 flex-1 flex flex-col justify-center w-full max-w-[400px] mx-auto py-8">
 
-          {/* ── Forgot Password ── */}
+          {/* ── Forgot password ── */}
           {showForgot ? (
             <div>
               <button
@@ -229,53 +257,67 @@ const LoginPage = () => {
                 className="flex items-center gap-1.5 text-sm mb-6 hover:underline transition-colors"
                 style={{ color: C.textMuted }}
               >
-                <Icon name="ArrowLeft" size={14} color="currentColor" /> Back to Login
+                <Icon name="ArrowLeft" size={14} color="currentColor" /> Back to sign in
               </button>
 
               {forgotSuccess ? (
                 <div className="text-center py-6">
-                  <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
-                    style={{ background: 'rgba(52,193,221,0.12)', border: '2px solid rgba(52,193,221,0.3)' }}>
+                  <div
+                    className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
+                    style={{ background: 'rgba(52,193,221,0.12)', border: '2px solid rgba(52,193,221,0.3)' }}
+                  >
                     <Icon name="MailCheck" size={28} color={C.primary} />
                   </div>
-                  <h2 className="text-xl font-bold mb-2" style={{ color: C.navy }}>Check Your Email</h2>
+                  <h2 style={{ ...SERIF, fontSize: '24px', fontWeight: 700, color: C.navy, marginBottom: '8px' }}>
+                    Check your email
+                  </h2>
                   <p className="text-sm mb-2" style={{ color: C.textMuted }}>We sent a password reset link to:</p>
-                  <p className="text-sm font-bold mb-4" style={{ color: C.primary }}>{forgotEmail}</p>
+                  <p className="text-sm font-bold mb-4" style={{ ...MONO, color: C.primaryDark }}>{forgotEmail}</p>
                   <p className="text-xs" style={{ color: C.textMuted }}>
                     Click the link in the email to set a new password. Check your spam folder if you do not see it.
                   </p>
                 </div>
               ) : (
                 <div>
-                  <div className="mb-6">
-                    <h2 className="text-2xl font-bold mb-1" style={{ color: C.navy }}>Forgot Password?</h2>
-                    <p className="text-sm" style={{ color: C.textMuted }}>Enter your email and we will send you a reset link</p>
-                    <div className="mt-3 w-10 h-0.5" style={{ background: C.primary }} />
+                  <div
+                    className="inline-flex items-center gap-2 rounded mb-5"
+                    style={{ ...LABEL, fontSize: '12px', color: C.primaryDark, background: C.bg2, border: '1px solid ' + C.border, padding: '6px 11px 6px 9px', width: 'fit-content' }}
+                  >
+                    <span className="rounded-full" style={{ width: '6px', height: '6px', background: C.primary }} />
+                    Password reset
                   </div>
+                  <h1 style={{ ...SERIF, fontSize: 'clamp(26px, 3.2vw, 34px)', lineHeight: 1.12, fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>
+                    Let&rsquo;s get you<br />back in<span style={{ color: C.primary }}>.</span>
+                  </h1>
+                  <p className="mt-2.5 text-sm" style={{ color: C.textMuted, maxWidth: '38ch' }}>
+                    Enter your email address and we&rsquo;ll send you a link to set a new password.
+                  </p>
 
                   {forgotError && (
-                    <div className="flex items-center gap-2 p-3 rounded-lg text-sm mb-4"
-                      style={{ background: C.errorBg, border: '1px solid ' + C.errorBorder, color: C.error }}>
+                    <div
+                      className="flex items-center gap-2 p-3 rounded-lg text-sm mt-5"
+                      style={{ background: C.errorBg, border: '1px solid ' + C.errorBorder, color: C.error }}
+                    >
                       <Icon name="AlertCircle" size={15} color="currentColor" />
                       {forgotError}
                     </div>
                   )}
 
-                  <div className="mb-5">
-                    <label className="block text-sm font-semibold mb-1.5" style={{ color: C.navy }}>Email Address</label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <div className="mt-6 mb-4">
+                    <label htmlFor="forgot-email" className="block mb-1.5" style={{ ...LABEL, color: C.textMuted }}>
+                      Email address
+                    </label>
+                    <div className="al-shell">
+                      <span className="pl-3.5 flex items-center">
                         <Icon name="Mail" size={15} color={C.textMuted} />
-                      </div>
+                      </span>
                       <input
+                        id="forgot-email"
                         type="email"
                         value={forgotEmail}
                         onChange={function(e) { setForgotEmail(e.target.value); }}
-                        placeholder="you@example.com"
-                        className="w-full pl-10 pr-4 py-2.5 text-sm rounded-lg transition-all"
-                        style={{ border: '1.5px solid ' + C.border, color: C.text, background: C.inputBg, outline: 'none' }}
-                        onFocus={function(e) { e.target.style.borderColor = C.primary; e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)'; }}
-                        onBlur={function(e) { e.target.style.borderColor = C.border; e.target.style.boxShadow = 'none'; }}
+                        placeholder="you@yourbusiness.co.ke"
+                        autoComplete="email"
                         onKeyDown={function(e) { if (e.key === 'Enter') handleForgotPassword(); }}
                       />
                     </div>
@@ -284,21 +326,21 @@ const LoginPage = () => {
                   <button
                     onClick={handleForgotPassword}
                     disabled={forgotLoading}
-                    className="w-full py-3 px-4 text-sm font-bold rounded-lg flex items-center justify-center gap-2 transition-all disabled:opacity-70"
-                    style={{ background: 'linear-gradient(135deg, #34c1dd, #1da8c5)', color: C.navy, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
+                    className="w-full py-3 px-4 text-sm font-bold rounded-lg flex items-center justify-center gap-2 transition-all"
+                    style={primaryButtonStyle(forgotLoading)}
                   >
                     {forgotLoading ? (
                       <span className="flex items-center gap-2">
                         <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                         </svg>
                         Sending...
                       </span>
                     ) : (
                       <span className="flex items-center gap-2">
                         <Icon name="Send" size={15} color={C.navy} />
-                        Send Reset Link
+                        Send reset link
                       </span>
                     )}
                   </button>
@@ -307,43 +349,51 @@ const LoginPage = () => {
             </div>
 
           ) : (
-            /* ── Sign In Form ── */
+            /* ── Sign in ── */
             <div>
-              <div className="mb-8">
-                <h2 className="text-2xl font-bold mb-1" style={{ color: C.navy }}>Welcome Back</h2>
-                <p className="text-sm" style={{ color: C.textMuted }}>Sign in to access your dashboard</p>
-                <div className="mt-3 w-10 h-0.5" style={{ background: C.primary }} />
+              <div
+                className="inline-flex items-center gap-2 rounded mb-5"
+                style={{ ...LABEL, fontSize: '12px', color: C.primaryDark, background: C.bg2, border: '1px solid ' + C.border, padding: '6px 11px 6px 9px', width: 'fit-content' }}
+              >
+                <span className="rounded-full" style={{ width: '6px', height: '6px', background: C.primary }} />
+                Member sign-in
               </div>
 
+              <h1 style={{ ...SERIF, fontSize: 'clamp(26px, 3.2vw, 34px)', lineHeight: 1.12, fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>
+                Good to see you<br />back<span style={{ color: C.primary }}>.</span>
+              </h1>
+              <p className="mt-2.5 text-sm" style={{ color: C.textMuted, maxWidth: '38ch' }}>
+                Sign in and pick up right where you left off — no re-learning, no lost work.
+              </p>
+
               {error && (
-                <div className="flex items-center gap-2 p-3 rounded-lg text-sm mb-5"
-                  style={{ background: C.errorBg, border: '1px solid ' + C.errorBorder, color: C.error }}>
+                <div
+                  className="flex items-center gap-2 p-3 rounded-lg text-sm mt-5"
+                  style={{ background: C.errorBg, border: '1px solid ' + C.errorBorder, color: C.error }}
+                >
                   <Icon name="AlertCircle" size={15} color="currentColor" />
                   <span>{error}</span>
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-5">
+              <form onSubmit={handleSubmit} className="mt-6">
 
                 {/* Email */}
-                <div>
-                  <label className="block text-sm font-semibold mb-1.5" style={{ color: C.navy }}>
-                    Email Address
+                <div className="mb-4">
+                  <label htmlFor="login-email" className="block mb-1.5" style={{ ...LABEL, color: C.textMuted }}>
+                    Email address
                   </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <div className={'al-shell' + (fieldErrors.email ? ' al-shell-error' : '')}>
+                    <span className="pl-3.5 flex items-center">
                       <Icon name="Mail" size={15} color={C.textMuted} />
-                    </div>
+                    </span>
                     <input
+                      id="login-email"
                       type="email"
                       value={email}
                       onChange={function(e) { setEmail(e.target.value); setFieldErrors(function(p) { return Object.assign({}, p, { email: '' }); }); }}
-                      placeholder="you@example.com"
+                      placeholder="you@yourbusiness.co.ke"
                       autoComplete="email"
-                      className="w-full pl-10 pr-4 py-2.5 text-sm rounded-lg transition-all"
-                      style={Object.assign({ width: '100%' }, inputStyle(fieldErrors.email))}
-                      onFocus={function(e) { if (!fieldErrors.email) { e.target.style.borderColor = C.primary; e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)'; }}}
-                      onBlur={function(e) { if (!fieldErrors.email) { e.target.style.borderColor = C.border; e.target.style.boxShadow = 'none'; }}}
                     />
                   </div>
                   {fieldErrors.email && (
@@ -352,41 +402,31 @@ const LoginPage = () => {
                 </div>
 
                 {/* Password */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-sm font-semibold" style={{ color: C.navy }}>Password</label>
-                    <button
-                      type="button"
-                      onClick={function() { setShowForgot(true); setForgotEmail(email); }}
-                      className="text-xs font-medium hover:underline transition-colors"
-                      style={{ color: C.primary }}
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <div className="mb-1">
+                  <label htmlFor="login-password" className="block mb-1.5" style={{ ...LABEL, color: C.textMuted }}>
+                    Password
+                  </label>
+                  <div className={'al-shell' + (fieldErrors.password ? ' al-shell-error' : '')}>
+                    <span className="pl-3.5 flex items-center">
                       <Icon name="Lock" size={15} color={C.textMuted} />
-                    </div>
+                    </span>
                     <input
+                      id="login-password"
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={function(e) { setPassword(e.target.value); setFieldErrors(function(p) { return Object.assign({}, p, { password: '' }); }); }}
-                      placeholder="••••••••"
+                      placeholder="Enter your password"
                       autoComplete="current-password"
-                      className="w-full pl-10 pr-10 py-2.5 text-sm rounded-lg transition-all"
-                      style={inputStyle(fieldErrors.password)}
-                      onFocus={function(e) { if (!fieldErrors.password) { e.target.style.borderColor = C.primary; e.target.style.boxShadow = '0 0 0 3px rgba(52,193,221,0.15)'; }}}
-                      onBlur={function(e) { if (!fieldErrors.password) { e.target.style.borderColor = C.border; e.target.style.boxShadow = 'none'; }}}
                     />
                     <button
                       type="button"
                       onClick={function() { setShowPassword(!showPassword); }}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center transition-colors"
-                      style={{ color: C.textMuted }}
+                      className="flex items-center px-3.5 self-stretch transition-colors"
+                      style={{ color: C.textMuted, background: 'none', border: 'none', cursor: 'pointer' }}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
                       tabIndex={-1}
                     >
-                      <Icon name={showPassword ? 'EyeOff' : 'Eye'} size={15} color="currentColor" />
+                      <Icon name={showPassword ? 'EyeOff' : 'Eye'} size={16} color="currentColor" />
                     </button>
                   </div>
                   {fieldErrors.password && (
@@ -394,27 +434,42 @@ const LoginPage = () => {
                   )}
                 </div>
 
+                {/* Remember this device / forgot password */}
+                <div className="flex items-center justify-between mt-2.5 mb-5">
+                  <label
+                    className="flex items-center gap-2.5 cursor-pointer text-[13.5px]"
+                    style={{ color: C.textMuted }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="al-check"
+                      checked={rememberDevice}
+                      onChange={function(e) { setRememberDevice(e.target.checked); }}
+                    />
+                    Remember this device
+                  </label>
+                  <button
+                    type="button"
+                    onClick={function() { setShowForgot(true); setForgotEmail(email); }}
+                    className="text-[13.5px] font-semibold hover:underline transition-colors"
+                    style={{ color: C.primaryDark, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+
                 {/* Submit */}
                 <button
                   type="submit"
                   disabled={loading}
                   className="w-full py-3 px-4 text-sm font-bold rounded-lg transition-all duration-200 flex items-center justify-center gap-2"
-                  style={{
-                    background: loading
-                      ? 'linear-gradient(135deg, #1da8c5, #1596b0)'
-                      : 'linear-gradient(135deg, #34c1dd, #1da8c5)',
-                    color: C.navy,
-                    opacity: loading ? 0.85 : 1,
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                    boxShadow: '0 4px 14px rgba(52,193,221,0.35)',
-                    letterSpacing: '0.03em',
-                  }}
+                  style={primaryButtonStyle(loading)}
                 >
                   {loading ? (
                     <span className="flex items-center gap-2">
                       <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                       </svg>
                       Signing in...
                     </span>
@@ -427,46 +482,60 @@ const LoginPage = () => {
                 </button>
               </form>
 
-              {/* Register CTA */}
-              <div className="mt-6 p-4 rounded-xl"
-                style={{ border: '1px solid ' + C.border, background: C.bg }}>
-                <p className="text-sm font-medium text-center mb-1" style={{ color: C.navy }}>
-                  Are you a new company, chama or sacco?
-                </p>
-                <p className="text-xs text-center mb-3" style={{ color: C.textMuted }}>
-                  Register your organization and choose a subscription plan
-                </p>
-                {/* Two entry points — `orgType` preselects the "I'm registering a"
-                    choice on the first step of the registration form. */}
-                <div className="space-y-2">
-                  <button
-                    onClick={function() { navigate('/admin-registration', { state: { orgType: 'company' } }); }}
-                    className="w-full py-2.5 rounded-lg text-sm font-bold transition-all"
-                    style={{
-                      background: 'linear-gradient(135deg, #0c2037, #1a3a5c)',
-                      color: '#34c1dd',
-                      boxShadow: '0 4px 14px rgba(12,32,55,0.25)',
-                    }}
+              {/* Register CTA — web only. In the Play Store app this whole block
+                  is gone: it advertises subscription plans and leads to the
+                  M-Pesa checkout, which is the flow Google Play Billing policy
+                  governs. Customers register on the web and sign in here. */}
+              {!isAndroidAppContext() && (
+                <div>
+                  <div
+                    className="flex items-center gap-3.5 my-5"
+                    style={{ ...LABEL, color: C.textMuted }}
                   >
-                    Register Your Company
-                  </button>
-                  <button
-                    onClick={function() { navigate('/admin-registration', { state: { orgType: 'sacco' } }); }}
-                    className="w-full py-2.5 rounded-lg text-sm font-bold transition-all"
-                    style={{
-                      background: C.card,
-                      color: C.navy,
-                      border: '1.5px solid ' + C.navy,
-                    }}
-                  >
-                    Register Your Chama / Sacco
-                  </button>
+                    <span className="flex-1" style={{ height: '1px', background: C.border }} />
+                    New to Ararat?
+                    <span className="flex-1" style={{ height: '1px', background: C.border }} />
+                  </div>
+
+                  <p className="text-sm text-center mb-3" style={{ color: C.textMuted }}>
+                    Register your organization and choose a subscription plan
+                  </p>
+
+                  {/* Two entry points — `orgType` preselects the "I'm registering a"
+                      choice on the first step of the registration form. */}
+                  <div className="space-y-2">
+                    <button
+                      onClick={function() { navigate('/admin-registration', { state: { orgType: 'company' } }); }}
+                      className="w-full py-2.5 rounded-lg text-sm font-bold transition-all"
+                      style={{
+                        background: 'linear-gradient(135deg, #0c2037, #1a3a5c)',
+                        color: C.primary,
+                        boxShadow: '0 4px 14px rgba(12,32,55,0.25)',
+                      }}
+                    >
+                      Register Your Company
+                    </button>
+                    <button
+                      onClick={function() { navigate('/admin-registration', { state: { orgType: 'sacco' } }); }}
+                      className="w-full py-2.5 rounded-lg text-sm font-bold transition-all"
+                      style={{ background: C.card, color: C.navy, border: '1.5px solid ' + C.navy }}
+                    >
+                      Register Your Chama / Sacco
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
+
+        <div className="relative z-10 pt-3 text-xs" style={{ color: C.textMuted }}>
+          Every shilling accounted for. Every payment tracked.
+        </div>
       </div>
+
+      {/* ── Right: product preview ─────────────────────────────────────── */}
+      <BrandPreviewPanel steps={STEPS} />
     </div>
   );
 };
