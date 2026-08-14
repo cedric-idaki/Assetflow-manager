@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 import { getPasswordError } from '../../../utils/validation';
+import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../../config/kenyaCounties';
 import { useAuth } from '../../../contexts/AuthContext';
 import Icon from '../../../components/AppIcon';
 
@@ -216,6 +217,13 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
     setError('');
   };
 
+  // Changing county invalidates a location picked under the old one.
+  const setCounty = (v) => {
+    setForm(p => ({ ...p, city: v, location: '' }));
+    setErrors(p => ({ ...p, city: '', location: '' }));
+    setError('');
+  };
+
   const toggleAssetType = (type) => {
     set('asset_types', form.asset_types.includes(type)
       ? form.asset_types.filter(t => t !== type)
@@ -264,7 +272,8 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
     if (!form.phone.trim())        e.phone        = 'Phone number is required';
     if (!form.gender)              e.gender       = 'Gender is required';
     if (!form.company_name.trim()) e.company_name = 'Company name is required';
-    if (!form.location.trim())     e.location     = 'Location is required';
+    if (!form.city)                e.city         = 'County is required';
+    if (!form.location)            e.location     = 'Location is required';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -483,19 +492,26 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
                     placeholder="e.g. Limited Company" className={ic(false)} />
                 </div>
               </div>
+              {/* County → Location cascade (same pickers as self-registration):
+                  pick the county first, then a location within it. */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">Location / Address *</label>
-                  <input type="text" value={form.location} onChange={e => set('location', e.target.value)}
-                    placeholder="e.g. Westlands, Nairobi" className={ic(errors.location)} />
-                  {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
+                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">City / County *</label>
+                  <select value={form.city} onChange={e => setCounty(e.target.value)} className={ic(errors.city)}>
+                    <option value="" disabled>Select county</option>
+                    {KENYA_COUNTIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  {errors.city && <p className="mt-1 text-xs text-red-500">{errors.city}</p>}
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                    City <span className="text-gray-400 font-normal">(optional)</span>
-                  </label>
-                  <input type="text" value={form.city} onChange={e => set('city', e.target.value)}
-                    placeholder="Nairobi" className={ic(false)} />
+                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">Location / Address *</label>
+                  <select value={form.location} onChange={e => set('location', e.target.value)}
+                    disabled={!form.city}
+                    className={`${ic(errors.location)} disabled:opacity-60 disabled:cursor-not-allowed`}>
+                    <option value="" disabled>{form.city ? 'Select location' : 'Select county first'}</option>
+                    {(LOCATIONS_BY_COUNTY[form.city] || []).map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                  {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
                 </div>
               </div>
 
@@ -695,8 +711,8 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
                   { label: 'Company Name',  value: form.company_name },
                   { label: 'Reg. Number',   value: form.business_reg_number || '—' },
                   { label: 'Business Type', value: form.business_type || '—' },
+                  { label: 'City / County', value: form.city || '—' },
                   { label: 'Location',      value: form.location || '—' },
-                  { label: 'City',          value: form.city || '—' },
                   { label: 'Asset Types',   value: form.asset_types.join(', ') || '—' },
                   { label: 'Plan',          value: form.plan ? `${PLANS.find(p => p.id === form.plan)?.name} (KES ${PLANS.find(p => p.id === form.plan)?.price.toLocaleString()}/mo)` : '—' },
                 ].map(r => (

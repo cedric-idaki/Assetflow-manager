@@ -12,6 +12,7 @@ import { useSaccoDashboardContext } from '../../contexts/SaccoDashboardContext';
 import SaccoBillingSection from '../sacco-dashboard/components/BillingTab';
 import { PASSWORD_POLICY } from '../../utils/validation';
 import { html } from '../../utils/htmlEscape';
+import DevicesCard from './components/DevicesCard';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 const fmtKES  = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -656,6 +657,8 @@ const ProfilePage = () => {
         )}
 
         <PasswordCard email={user?.email} />
+
+        <DevicesCard />
 
         {/* Sacco billing — moved here from the sacco dashboard's Billing tab */}
         {isSaccoAdmin && (

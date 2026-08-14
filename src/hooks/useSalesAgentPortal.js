@@ -159,12 +159,16 @@ export const useSalesAgentPortal = () => {
   }, []);
 
   // ── Fetch gold agents (assist targets for bronze agents) ──────────────────
-  const fetchGoldAgents = useCallback(async (selfAgentId) => {
+  // Only gold agents created by the same person: an agent belongs to whoever
+  // created them, so a company's bronze agent must not be able to hand their
+  // admin's work to a super-admin-side gold agent, or to another company's.
+  const fetchGoldAgents = useCallback(async (selfAgentId, creatorId) => {
     try {
       let q = supabase
         .from('agents')
         .select('id, full_name, agent_code, region, email')
         .eq('agent_plan', 'gold');
+      if (creatorId)   q = q.eq('admin_id', creatorId);
       if (selfAgentId) q = q.neq('id', selfAgentId);
       const { data, error: err } = await q.order('full_name', { ascending: true });
       if (err) throw err;
@@ -378,7 +382,9 @@ export const useSalesAgentPortal = () => {
         fetchCompletedFollowUps(agent?.id),
         fetchActivityFeed(),
         fetchCommissions(agent?.id),
-        fetchGoldAgents(agent?.id),
+        // Same creator link the agent mode is derived from above — it is what
+        // decides which side of the business this agent belongs to.
+        fetchGoldAgents(agent?.id, agent?.admin_id || userProfile?.admin_id || null),
         fetchAssists(agent?.id),
       ]);
     } catch (err) {

@@ -9,11 +9,14 @@
  * 5. updateProfile validates input before sending to Supabase
  * 6. Added signUp method with server-side duplicate prevention
  * 7. Exposes sessionExpiresAt so UI can warn users before forced logout
+ * 8. Device restriction: every session is checked against the account's two
+ *    allowed devices (one phone + one laptop/tablet) — see verifyDevice below
  */
 
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { logger } from '../utils/logger';
+import { registerCurrentDevice } from '../services/deviceService';
 
 const AuthContext = createContext({});
 
@@ -77,6 +80,14 @@ const resetRateLimit = () => {
 // ── Session inactivity timeout ────────────────────────────────────────────────
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
+// ── Device restriction ────────────────────────────────────────────────────────
+// How often an already-approved device re-announces itself. This refreshes
+// last_seen_at and, more to the point, is how a session on a device an admin
+// has just revoked finds out and gets kicked out.
+const DEVICE_RECHECK_MS = 5 * 60 * 1000; // 5 minutes
+
+const IDLE_DEVICE_CHECK = { status: 'idle' };
+
 // ── Provider ──────────────────────────────────────────────────────────────────
 export const AuthProvider = ({ children }) => {
   const [user,           setUser]           = useState(null);
@@ -84,9 +95,13 @@ export const AuthProvider = ({ children }) => {
   const [loading,        setLoading]        = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
   const [sessionExpiresAt, setSessionExpiresAt] = useState(null);
+  const [deviceCheck,    setDeviceCheck]    = useState(IDLE_DEVICE_CHECK);
 
    const inactivityTimer  = useRef(null);
   const currentUserIdRef = useRef(null);
+  const deviceCheckAtRef = useRef(0);
+  const deviceInFlightRef = useRef(null);
+  const lastVerdictRef   = useRef(null);
 
   // ── Inactivity timer ────────────────────────────────────────────────────────
   const resetInactivityTimer = useCallback(() => {
@@ -134,6 +149,101 @@ export const AuthProvider = ({ children }) => {
     setProfileLoading(false);
   };
 
+  // ── Device restriction ───────────────────────────────────────────────────────
+  // Announces this browser to the device registry and records the verdict. An
+  // account gets one phone plus one laptop/tablet; which slot a device belongs
+  // to is decided server-side from the User-Agent, so this call can only ask,
+  // never assert.
+  //
+  // Fails OPEN: a network blip or an RPC that is not deployed yet must not lock
+  // a legitimate user out of their workspace, so only an explicit "no" from the
+  // server blocks a session. This is a session-layer gate — see the migration
+  // header for what that does and does not buy.
+  const verifyDevice = useCallback(async ({ replace = false, force = false } = {}) => {
+    if (!currentUserIdRef.current) return null;
+
+    // Sign-in and the SIGNED_IN event both land here moments apart; one answer
+    // covers both.
+    if (!replace && !force && Date.now() - deviceCheckAtRef.current < 30_000) {
+      return lastVerdictRef.current;
+    }
+    if (deviceInFlightRef.current && !replace && !force) return deviceInFlightRef.current;
+
+    const run = (async () => {
+      // A background re-check must not flash the "checking" screen over a
+      // session that is already approved.
+      setDeviceCheck((prev) => (prev.status === 'allowed' ? prev : { status: 'checking' }));
+
+      const result = await registerCurrentDevice({ replace })
+        .catch((err) => ({ error: { message: err?.message || 'Device check failed' } }));
+      deviceCheckAtRef.current = Date.now();
+
+      if (result.error) {
+        logger.warn('Device check did not complete — session allowed through', {
+          error: result.error.message,
+        });
+        setDeviceCheck({ status: 'error', error: result.error.message });
+        lastVerdictRef.current = { allowed: true, degraded: true };
+        return lastVerdictRef.current;
+      }
+
+      if (result.allowed) {
+        setDeviceCheck({
+          status:           'allowed',
+          device:           result.device,
+          changesRemaining: result.changesRemaining,
+        });
+        lastVerdictRef.current = { allowed: true };
+        return lastVerdictRef.current;
+      }
+
+      logger.warn('Device is not authorised for this account', {
+        reason: result.reason, slot: result.slot,
+      });
+      setDeviceCheck({
+        status:           'blocked',
+        reason:           result.reason,
+        slot:             result.slot,
+        deviceType:       result.deviceType,
+        occupiedBy:       result.occupiedBy,
+        changesRemaining: result.changesRemaining,
+      });
+      lastVerdictRef.current = { allowed: false, reason: result.reason };
+      return lastVerdictRef.current;
+    })();
+
+    deviceInFlightRef.current = run;
+    try {
+      return await run;
+    } finally {
+      deviceInFlightRef.current = null;
+    }
+  }, []);
+
+  const resetDeviceCheck = () => {
+    setDeviceCheck(IDLE_DEVICE_CHECK);
+    deviceCheckAtRef.current = 0;
+    lastVerdictRef.current = null;
+  };
+
+  // Re-announce an approved device periodically and whenever the tab regains
+  // focus, so a device revoked from elsewhere stops working here too.
+  useEffect(() => {
+    if (deviceCheck.status !== 'allowed') return undefined;
+
+    const maybeRecheck = () => {
+      if (Date.now() - deviceCheckAtRef.current < DEVICE_RECHECK_MS) return;
+      verifyDevice();
+    };
+
+    const timer = setInterval(maybeRecheck, DEVICE_RECHECK_MS);
+    window.addEventListener('focus', maybeRecheck);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', maybeRecheck);
+    };
+  }, [deviceCheck.status, verifyDevice]);
+
   // ── Auth state listener ──────────────────────────────────────────────────────
   useEffect(() => {
     supabase.auth.getSession()
@@ -143,6 +253,7 @@ export const AuthProvider = ({ children }) => {
         setLoading(false);
         if (session?.user) {
           loadProfile(session.user.id);
+          verifyDevice();
           setSessionExpiresAt(session.expires_at ? new Date(session.expires_at * 1000) : null);
           resetInactivityTimer();
         }
@@ -151,6 +262,7 @@ export const AuthProvider = ({ children }) => {
         setUser(null);
         setLoading(false);
         clearProfile();
+        resetDeviceCheck();
       });
 
    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -181,9 +293,11 @@ export const AuthProvider = ({ children }) => {
 
       if (session?.user) {
         loadProfile(session.user.id); // fire-and-forget (intentional)
+        verifyDevice();               // ditto — the gate lives in ProtectedRoute
         resetInactivityTimer();
       } else {
         clearProfile();
+        resetDeviceCheck();
         if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
       }
     });
@@ -244,6 +358,12 @@ export const AuthProvider = ({ children }) => {
 
       resetInactivityTimer();
       currentUserIdRef.current = data?.user?.id ?? null;
+
+      // Settle the device question while the sign-in button is still spinning.
+      // ProtectedRoute renders the block screen either way — awaiting here is
+      // what stops a rejected device from flashing a dashboard on the way to it.
+      await verifyDevice({ force: true });
+
       return { data, error: null, redirectPath };
     } catch (err) {
       logger.error('signIn threw unexpectedly', { error: err?.message });
@@ -260,6 +380,7 @@ export const AuthProvider = ({ children }) => {
         currentUserIdRef.current = null;
         setSessionExpiresAt(null);
         clearProfile();
+        resetDeviceCheck();
         if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
       }
       return { error };
@@ -335,6 +456,12 @@ export const AuthProvider = ({ children }) => {
     // Lets a guard retry a profile fetch that failed transiently, instead of
     // stranding the user on the "profile unavailable" screen. See RoleGuard.
     reloadProfile: () => loadProfile(currentUserIdRef.current),
+    // Device restriction — consumed by ProtectedRoute / DeviceBlockedScreen.
+    deviceCheck,
+    recheckDevice: () => verifyDevice({ force: true }),
+    // "This is my device now": drops whichever device holds the slot and takes
+    // it over. Spends one of the user's self-service device changes.
+    claimDeviceSlot: () => verifyDevice({ replace: true }),
     isAuthenticated: !!user,
     getRoleRedirectPath,
   };

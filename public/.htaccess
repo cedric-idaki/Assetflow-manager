@@ -1,0 +1,69 @@
+# Apache config for the live site at assetflow.smebusinessclinic.com.
+#
+# This file lives in public/ so `vite build` copies it into dist/ — upload it to
+# the web root along with everything else. It is what makes the Play Store build
+# work: without the .well-known rule below, Chrome asks the server to prove this
+# domain authorises the Android app and gets an HTML page back instead of JSON,
+# the app fails verification, and it opens showing a browser URL bar.
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # ── HTTPS only ────────────────────────────────────────────────────────────
+  # Digital Asset Links verification is HTTPS-only and the app opens the https://
+  # origin, so plain HTTP must not keep serving a parallel copy of the site.
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !=https
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+  # ── Digital Asset Links ───────────────────────────────────────────────────
+  # Must be matched before the SPA fallback. Stated explicitly rather than
+  # relying on the !-f check below, so that a missing assetlinks.json returns an
+  # honest 404 instead of a 200 full of HTML that looks like it worked.
+  RewriteRule ^\.well-known/ - [L]
+
+  # ── SPA fallback ──────────────────────────────────────────────────────────
+  # React Router owns the URL space; anything that is not a real file on disk
+  # gets index.html and is resolved client-side.
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ /index.html [L]
+</IfModule>
+
+<IfModule mod_mime.c>
+  # assetlinks.json is rejected by Chrome unless it arrives as application/json.
+  AddType application/json .json
+  AddType application/manifest+json .webmanifest
+  AddType image/svg+xml .svg
+  AddType text/javascript .js
+</IfModule>
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/javascript application/javascript application/json image/svg+xml
+</IfModule>
+
+<IfModule mod_headers.c>
+  # Vite content-hashes everything in /assets, so a changed file is a different
+  # URL and these can be cached indefinitely.
+  <FilesMatch "\.(js|css|woff2?)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+
+  # Icons keep stable filenames across deploys, so they get a bounded lifetime
+  # instead — long enough to be free, short enough that a rebrand lands.
+  <FilesMatch "\.(png|jpe?g|gif|svg|ico)$">
+    Header set Cache-Control "public, max-age=604800"
+  </FilesMatch>
+
+  # These four decide when a client notices a deploy, so they must always be
+  # revalidated. Listed after the rules above so they win the override.
+  <FilesMatch "^(index\.html|sw\.js|manifest\.json|offline\.html)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+ErrorDocument 404 /index.html

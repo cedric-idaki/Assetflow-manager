@@ -401,21 +401,38 @@ const AdminRegistration = () => {
           its step list doubles as the live registration progress tracker. */}
       <BrandPreviewPanel
         className="lg:w-[52%]"
+        showBrand
         steps={steps}
         currentStep={currentStep}
       />
 
-      {/* Right form panel */}
-      <div className="flex-1 flex flex-col justify-center items-center p-8 overflow-y-auto" style={{ background: C.card }}>
+      {/* Right form panel. Top-aligned rather than centred: the steps differ a
+          lot in height, and centring left a large empty band above the short
+          ones (Plan) while making the heading jump between steps. */}
+      <div className="flex-1 flex flex-col items-center px-8 py-12 overflow-y-auto" style={{ background: C.card }}>
         <div className="w-full max-w-lg">
 
-          {/* Mobile logo */}
-          <div className="lg:hidden mb-8 text-center">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-lg mb-2"
-              style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})` }}>
-              <Icon name="Building2" size={22} color="white" />
+          {/* Brand, mobile only — on lg+ the dark panel carries the lockup.
+              Sits above the step header, so it shows on all four steps. */}
+          <div className="lg:hidden flex items-center gap-3 mb-8">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{
+                background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`,
+                boxShadow: '0 4px 14px rgba(52,193,221,0.35)',
+              }}>
+              <Icon name="Building2" size={22} color={C.navy} />
             </div>
-            <h1 className="text-xl font-bold" style={{ color: C.navy }}>Ararat</h1>
+            <h1
+              style={{
+                fontFamily: "Georgia, 'Times New Roman', serif",
+                fontSize: '20px',
+                fontWeight: 700,
+                letterSpacing: '-0.01em',
+                color: C.navy,
+              }}
+            >
+              Ararat
+            </h1>
           </div>
 
           {/* Step header */}

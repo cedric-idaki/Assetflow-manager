@@ -16,6 +16,7 @@ export const useSuperAdminDashboard = () => {
   const [staffUsers, setStaffUsers]             = useState([]);
   const [contracts, setContracts]               = useState([]);
   const [clients, setClients]                   = useState([]);
+  const [withdrawalRequests, setWithdrawalRequests] = useState([]);
   // Every assist a gold agent turned down. Refusals used to be visible only to
   // the two agents involved, so a gold agent who declined everything looked the
   // same from up here as one nobody had asked.
@@ -116,9 +117,18 @@ export const useSuperAdminDashboard = () => {
 
   const fetchSalesAgents = useCallback(async () => {
     try {
+      const adminId = await getAdminId();
+      if (!adminId) return;
+
       const { data, error } = await supabase
         .from('agents')
         .select('*, user:user_id(id, full_name, email, is_active), admin:admin_id(id, full_name, email)')
+        // An agent belongs to whoever created them: an admin-created agent works
+        // that company's clients, a super-admin-created one sells the platform.
+        // Without this filter the super admin's dashboard listed every admin's
+        // agents alongside their own, and RLS does not catch it — the agents
+        // policy hands global viewers a blanket read.
+        .eq('admin_id', adminId)
         // Sacco-side agents belong to /sacco-oversight, not the company dashboard.
         .or('agent_type.is.null,agent_type.neq.sacco')
         .order('created_at', { ascending: false });
@@ -179,9 +189,15 @@ export const useSuperAdminDashboard = () => {
 
   const fetchSalesTarget = useCallback(async () => {
     try {
+      const adminId = await getAdminId();
+      if (!adminId) return;
+
+      // Scoped to this super admin's own agents for the same reason the list
+      // above is — otherwise the target bar mixed in other admins' teams.
       const { data: agents } = await supabase
         .from('agents')
         .select('target_amount, total_sales')
+        .eq('admin_id', adminId)
         .or('agent_type.is.null,agent_type.neq.sacco');
       const target = (agents || []).reduce((s, a) => s + parseFloat(a.target_amount || 0), 0);
       const achieved = (agents || []).reduce((s, a) => s + parseFloat(a.total_sales || 0), 0);
@@ -216,6 +232,95 @@ export const useSuperAdminDashboard = () => {
       .order('created_at', { ascending: false });
     setClients(data || []);
   }, []);
+
+  const fetchWithdrawalRequests = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('agent_wallets')
+        .select('*')
+        .eq('tx_type', 'withdrawal')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const rows = data || [];
+      const agentIds = [...new Set(rows.map(r => r.agent_id).filter(Boolean))];
+      let agentMap = {};
+
+      if (agentIds.length > 0) {
+        const { data: agents, error: agentError } = await supabase
+          .from('agents')
+          .select('id, full_name, agent_code, email')
+          .in('id', agentIds);
+
+        if (agentError) throw agentError;
+        agentMap = Object.fromEntries((agents || []).map(agent => [agent.id, agent]));
+      }
+
+      setWithdrawalRequests(rows.map(row => ({
+        ...row,
+        status: row.status || 'pending',
+        agent: agentMap[row.agent_id] || null,
+      })));
+    } catch (err) {
+      console.error('fetchWithdrawalRequests error:', err?.message);
+      setWithdrawalRequests([]);
+    }
+  }, []);
+
+  const approveWithdrawalRequest = useCallback(async (requestId) => {
+    const request = withdrawalRequests.find(r => r.id === requestId);
+    if (!request) return;
+
+    const { error } = await supabase
+      .from('agent_wallets')
+      .update({
+        status: 'approved',
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: 'super_admin',
+      })
+      .eq('id', requestId);
+
+    if (error) throw error;
+
+    await auditLogsService.log(
+      'approve',
+      'agent_wallets',
+      `Super admin approved withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
+      requestId,
+      null,
+      { amount: request.total_withdrawn, agent_id: request.agent_id, status: 'approved' }
+    );
+
+    await fetchWithdrawalRequests();
+  }, [withdrawalRequests, fetchWithdrawalRequests]);
+
+  const rejectWithdrawalRequest = useCallback(async (requestId) => {
+    const request = withdrawalRequests.find(r => r.id === requestId);
+    if (!request) return;
+
+    const { error } = await supabase
+      .from('agent_wallets')
+      .update({
+        status: 'rejected',
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: 'super_admin',
+      })
+      .eq('id', requestId);
+
+    if (error) throw error;
+
+    await auditLogsService.log(
+      'reject',
+      'agent_wallets',
+      `Super admin rejected withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
+      requestId,
+      null,
+      { amount: request.total_withdrawn, agent_id: request.agent_id, status: 'rejected' }
+    );
+
+    await fetchWithdrawalRequests();
+  }, [withdrawalRequests, fetchWithdrawalRequests]);
 
   const fetchContracts = useCallback(async () => {
     const adminId = await getAdminId();
@@ -394,9 +499,10 @@ export const useSuperAdminDashboard = () => {
       fetchContracts(),
       fetchClients(),
       fetchAssistRejections(),
+      fetchWithdrawalRequests(),
     ]);
     setLoading(false);
-  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchContracts, fetchClients, fetchAssistRejections]);
+  }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchContracts, fetchClients, fetchAssistRejections, fetchWithdrawalRequests]);
 
   useEffect(() => {
     fetchAll();
@@ -435,7 +541,11 @@ export const useSuperAdminDashboard = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists' }, fetchAssistRejections)
       .subscribe();
 
-    channelsRef.current = [auditCh, clientsCh, paymentsCh, agentsCh, staffCh, assistsCh];
+    const withdrawalsCh = supabase.channel(`sa_withdrawals_${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_wallets' }, fetchWithdrawalRequests)
+      .subscribe();
+
+    channelsRef.current = [auditCh, clientsCh, paymentsCh, agentsCh, staffCh, assistsCh, withdrawalsCh];
     return () => {
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
@@ -444,9 +554,10 @@ export const useSuperAdminDashboard = () => {
 
   return {
     stats, assetBreakdown, companyAnalytics, auditTrail,
-    salesAgents, salesTarget, staffUsers, contracts, clients, assistRejections,
+    salesAgents, salesTarget, staffUsers, contracts, clients, assistRejections, withdrawalRequests,
     loading, connectionStatus,
     refetch: fetchAll, createSalesAgent, upgradeSalesAgentToGold, downgradeSalesAgentToBronze, uploadContract, exportCSV,
+    approveWithdrawalRequest, rejectWithdrawalRequest,
   };
 };
 

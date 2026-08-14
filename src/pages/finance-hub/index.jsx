@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,6 +8,7 @@ import { sendInvoiceEmail } from '../../services/emailService';
 import Icon from '../../components/AppIcon';
 import SaccoFinanceHub from './sacco';
 import { html, rawHtml } from '../../utils/htmlEscape';
+import { fetchEmployeePii } from '../../services/employeePiiService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -1442,6 +1443,24 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
 
   const selectedEmp = employees.find(e => e.id === empId);
 
+  // The salary destination account is encrypted and is not on the employee row.
+  // Fetched for the one employee being paid, not the whole roster. '' covers
+  // both "not on file" and "could not be read" — the payslip line is hidden
+  // either way rather than printing a half-truth about where money is going.
+  const [bankAccount, setBankAccount] = useState('');
+
+  useEffect(() => {
+    if (!empId) { setBankAccount(''); return; }
+    let cancelled = false;
+
+    (async () => {
+      const pii = await fetchEmployeePii(empId);
+      if (!cancelled) setBankAccount(pii.ok ? pii.bank_account : '');
+    })();
+
+    return () => { cancelled = true; };
+  }, [empId]);
+
   const handlePreview = () => {
     const g = parseFloat(gross || selectedEmp?.basic_salary || 0);
     const h = parseFloat(housing || selectedEmp?.housing_allowance || 0);
@@ -1632,7 +1651,7 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
                   </div>
                   {selectedEmp?.bank_name && (
                     <p className="text-xs text-muted-foreground mt-3">
-                      Bank: {selectedEmp.bank_name} · A/C: {selectedEmp.bank_account}
+                      Bank: {selectedEmp.bank_name}{bankAccount ? ` · A/C: ${bankAccount}` : ''}
                     </p>
                   )}
                   <button

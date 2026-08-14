@@ -50,6 +50,11 @@ const useSaccoOversight = () => {
   const fetchAll = async () => {
     setLoading(true); setError(null);
     try {
+      // Agents belong to whoever created them, so this console shows only the
+      // sacco agents this super admin registered — same rule as the company
+      // agents on /super-admin-dashboard.
+      const { data: { user: me } } = await supabase.auth.getUser();
+      const myId = me?.id || null;
       const [saccosR, membersR, contribR, loansR, motionsR, invoicesR, agentsR] = await Promise.all([
         supabase.from('saccos').select('*').order('created_at', { ascending: false }),
         supabase.from('sacco_members').select('id, sacco_id, full_name, status, kyc_status, created_at').order('created_at', { ascending: false }),
@@ -58,7 +63,10 @@ const useSaccoOversight = () => {
         supabase.from('sacco_motions').select('id, sacco_id, title, status, created_at').order('created_at', { ascending: false }).limit(100),
         supabase.from('sacco_invoices').select('id, sacco_id, period, total, status, created_at').order('created_at', { ascending: false }).limit(100),
         // Sacco-side sales agents only — company agents stay on /super-admin-dashboard.
-        supabase.from('agents').select('*').eq('agent_type', 'sacco').order('created_at', { ascending: false }),
+        (myId
+          ? supabase.from('agents').select('*').eq('agent_type', 'sacco').eq('admin_id', myId)
+          : supabase.from('agents').select('*').eq('agent_type', 'sacco')
+        ).order('created_at', { ascending: false }),
       ]);
 
       const firstError = [saccosR, membersR, contribR, loansR, motionsR, invoicesR, agentsR].find((r) => r.error)?.error;

@@ -15,6 +15,11 @@
 // DarajaCreds and pass it in, so no code path can accidentally bill the wrong
 // shortcode.
 
+import {
+  decryptSecret as decryptWithKey,
+  encryptSecret as encryptWithKey,
+} from './crypto.ts';
+
 declare const Deno: { env: { get: (key: string) => string | undefined } };
 
 export interface DarajaCreds {
@@ -83,45 +88,20 @@ export function baseUrl(environment: string): string {
 // so hashing is not an option — they are encrypted with AES-256-GCM under
 // MPESA_CRED_ENC_KEY, which lives only in Supabase function secrets. The
 // database stores ciphertext and never sees the key.
+//
+// The implementation now lives in _shared/crypto.ts, shared with employee PII so
+// there is one audited copy rather than two that can drift. These re-exports
+// keep the existing call sites (mpesa-credentials, resolveTenantCreds below)
+// unchanged, and the 'mpesa' purpose keeps them on MPESA_CRED_ENC_KEY.
+//
+// Credentials sealed before versioning have no "v1:" prefix; decryptSecret
+// still accepts that form, so no re-encryption is needed.
 
-async function encryptionKey(): Promise<CryptoKey> {
-  const secret = Deno.env.get('MPESA_CRED_ENC_KEY');
-  if (!secret) {
-    throw new Error(
-      'MPESA_CRED_ENC_KEY is not set. Tenant M-Pesa credentials cannot be read or written without it.',
-    );
-  }
-  // Hash to exactly 32 bytes so any passphrase length works.
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
-  return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-}
+export const encryptSecret = (plaintext: string): Promise<string> =>
+  encryptWithKey(plaintext, 'mpesa');
 
-const b64encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
-const b64decode = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-
-/** Returns "base64(iv):base64(ciphertext)". */
-export async function encryptSecret(plaintext: string): Promise<string> {
-  const key = await encryptionKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    new TextEncoder().encode(plaintext),
-  );
-  return `${b64encode(iv)}:${b64encode(new Uint8Array(ct))}`;
-}
-
-export async function decryptSecret(stored: string): Promise<string> {
-  const [ivPart, ctPart] = stored.split(':');
-  if (!ivPart || !ctPart) throw new Error('Malformed encrypted credential');
-  const key = await encryptionKey();
-  const pt = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: b64decode(ivPart) },
-    key,
-    b64decode(ctPart),
-  );
-  return new TextDecoder().decode(pt);
-}
+export const decryptSecret = (stored: string): Promise<string> =>
+  decryptWithKey(stored, 'mpesa');
 
 // ── Daraja primitives ────────────────────────────────────────────────────────
 

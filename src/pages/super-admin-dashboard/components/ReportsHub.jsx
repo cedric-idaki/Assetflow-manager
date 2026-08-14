@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { fetchEmployeePiiBatch } from '../../../services/employeePiiService';
 import Icon from '../../../components/AppIcon';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -892,7 +893,7 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
   ];
 
   // Export current report data as CSV
-  const handleExport = () => {
+  const handleExport = async () => {
     if (activeReport === 'vat' || activeReport === 'cashflow' || activeReport === 'collections') {
       exportCSV(filteredPayments.map(p => ({
         date:      p.payment_date || p.created_at,
@@ -948,6 +949,19 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
         };
       }), 'payroll_summary');
     } else if (activeReport === 'hr') {
+      // nssf_number is encrypted and is not on the employee row, so it has to be
+      // decrypted for this export. One batched call rather than one per row.
+      // A failure here must not silently ship a CSV with a blank NSSF column
+      // that looks like the numbers were never recorded.
+      const pii = await fetchEmployeePiiBatch(employees.map(e => e.id));
+      if (!pii.ok) {
+        window.alert(
+          `Could not decrypt NSSF numbers for this export: ${pii.error}
+
+Nothing has been exported.`,
+        );
+        return;
+      }
       exportCSV(employees.map(e => ({
         name:        e.full_name,
         email:       e.email,
@@ -958,7 +972,7 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
         housing:     e.housing_allowance,
         transport:   e.transport_allowance,
         kra_pin:     e.kra_pin,
-        nssf:        e.nssf_number,
+        nssf:        pii.values[e.id]?.nssf_number || '',
         status:      e.is_active ? 'active' : 'inactive',
         date_joined: e.date_joined,
       })), 'hr_employees');

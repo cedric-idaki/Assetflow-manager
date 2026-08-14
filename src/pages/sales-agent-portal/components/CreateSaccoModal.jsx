@@ -453,21 +453,16 @@ const CreateSaccoModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucces
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1.5">Location *</label>
-                  {locationOptions.length > 0 ? (
-                    <select
-                      value={form.location}
-                      onChange={e => set('location', e.target.value)}
-                      className={ic(errors.location)}
-                      style={{ color: form.location ? undefined : '#9ca3af' }}
-                    >
-                      <option value="" disabled>Select location</option>
-                      {locationOptions.map(l => <option key={l} value={l}>{l}</option>)}
-                    </select>
-                  ) : (
-                    <input type="text" value={form.location} onChange={e => set('location', e.target.value)}
-                      placeholder={form.city ? 'e.g. Westlands' : 'Select county first'}
-                      disabled={!form.city} className={ic(errors.location)} />
-                  )}
+                  <select
+                    value={form.location}
+                    onChange={e => set('location', e.target.value)}
+                    disabled={!form.city}
+                    className={`${ic(errors.location)} disabled:opacity-60 disabled:cursor-not-allowed`}
+                    style={{ color: form.location ? undefined : '#9ca3af' }}
+                  >
+                    <option value="" disabled>{form.city ? 'Select location' : 'Select county first'}</option>
+                    {locationOptions.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
                   {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
                 </div>
               </div>

@@ -37,7 +37,9 @@ const ReportsAnalyticsCenter = () => {
           supabase.from('clients').select('*').eq('admin_id', aId).order('created_at', { ascending: false }),
           // HR employees — all staff under this admin excluding clients and super_admin
           supabase.from('user_profiles')
-            .select('id, full_name, email, role, department, employment_type, is_active, basic_salary, housing_allowance, transport_allowance, date_joined, kra_pin, nssf_number, national_id')
+            // nssf_number is encrypted in employee_private_data and is not a
+            // column here any more. Nothing on this page rendered it.
+            .select('id, full_name, email, role, department, employment_type, is_active, basic_salary, housing_allowance, transport_allowance, date_joined, kra_pin, national_id')
             .eq('admin_id', aId)
             .not('role', 'in', '("client","super_admin","sales_agent")'),
           // Payroll records for this admin

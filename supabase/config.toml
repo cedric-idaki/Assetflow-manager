@@ -116,6 +116,17 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/mpesa-credentials/index.ts"
 
+# Encrypted employee payroll/identity data (bank account, NSSF, next-of-kin ID).
+# The caller's JWT decides which tenant's employees are reachable, so verify_jwt
+# MUST stay true; the employee's tenant is resolved from user_profiles and never
+# read from the request body. This is the only access path to
+# employee_private_data, which has RLS on with zero policies and no grants.
+# Requires the PII_ENC_KEY function secret.
+[functions.employee-pii]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/employee-pii/index.ts"
+
 # E-signature API & embedded signing. Authenticated by a per-tenant API key in
 # the x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the
 # caller is the client team's own server/app. The function resolves the tenant
@@ -124,3 +135,14 @@ entrypoint = "./functions/mpesa-credentials/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/esign-api/index.ts"
+
+# Public listing page (/listing/:token) — the link a sales agent sends a
+# potential buyer. The buyer has no account, so verify_jwt MUST be false; the
+# share token IS the credential. The function is the whole boundary: it resolves
+# the link with the service-role key, returns an allowlisted public payload
+# (never the asset row — purchase_price is the dealer's cost), and writes only
+# through RPCs granted to service_role.
+[functions.listing-public]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/listing-public/index.ts"

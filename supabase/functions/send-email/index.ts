@@ -1150,6 +1150,106 @@ const buildTicketStatusEmail = (data: any) => {
 </body></html>`;
 };
 
+// ─── Shareable listing links (sales agent → potential buyer) ──────────────────
+
+/** HTML-escape untrusted text before it goes into an email body.
+ *
+ *  The templates above interpolate data that originated from staff. These two
+ *  do not: `listing_share` carries a note the agent typed, and `listing_enquiry`
+ *  carries a name and message typed by a member of the public on the /listing
+ *  page. Unescaped, that is markup injection straight into the agent's inbox. */
+const esc = (v: unknown): string =>
+  String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+/** Only ever emit http(s) links. Stops a javascript:/data: URI reaching an
+ *  href, and keeps a malformed value from breaking out of the attribute. */
+const safeUrl = (v: unknown): string => {
+  const s = String(v ?? "").trim();
+  return /^https?:\/\/[^\s"'<>]+$/i.test(s) ? s : "";
+};
+
+// The agent's own send: the buyer opens this and sees the listing with the
+// agent's contact card on it.
+const buildListingShareEmail = (data: any) => {
+  const { recipientName, agentName, agentPhone, assetName, price, location, note, listingUrl } = data;
+  const url = safeUrl(listingUrl);
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,#1a56db 0%,#0e9f6e 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">🏡</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${esc(assetName) || "A listing for you"}</h1>
+    ${price ? `<p style="margin:6px 0 0;opacity:0.9;font-size:16px;font-weight:600">${formatCurrency(price)}</p>` : ""}
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${esc(recipientName) || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    <strong>${esc(agentName) || "Your agent"}</strong> has shared this with you. Everything is on the page —
+    photos, the details, and a way to reach them directly.
+  </p>
+
+  ${note ? quoteBlock("A note from your agent", esc(note), "#1a56db") : ""}
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Listing</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(assetName) || "—"}</td></tr>
+    ${price ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Price</td><td style="padding:8px 0;color:#047857;font-size:13px;font-weight:600;text-align:right">${formatCurrency(price)}</td></tr>` : ""}
+    ${location ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Location</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(location)}</td></tr>` : ""}
+    ${agentPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Your agent</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(agentPhone)}</td></tr>` : ""}
+  </table>
+
+  ${url ? `<div style="text-align:center;margin-bottom:8px"><a href="${url}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">View the listing</a></div>` : ""}
+  <p style="margin:16px 0 0;font-size:12px;color:#9ca3af;text-align:center">
+    You are receiving this because ${esc(agentName) || "an agent"} sent it to you. No account is needed to view it.
+  </p>
+</div>
+</body></html>`;
+};
+
+// The return leg: someone opened the link and asked about it. This is the
+// moment the agent's commission attribution starts, so it says so plainly.
+const buildListingEnquiryEmail = (data: any) => {
+  const { agentName, assetName, buyerName, buyerPhone, buyerEmail, message, portalUrl } = data;
+  const url = safeUrl(portalUrl);
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,#047857 0%,#059669 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">🔔</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">Someone enquired about your listing</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${esc(assetName) || "Shared listing"}</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${esc(agentName) || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    <strong>${esc(buyerName)}</strong> opened the link you sent and asked about it.
+    They are already in your pipeline as a new lead, attributed to you — call them while it is warm.
+  </p>
+
+  ${message ? quoteBlock("What they said", esc(message), "#047857") : ""}
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Name</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(buyerName)}</td></tr>
+    ${buyerPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(buyerPhone)}</td></tr>` : ""}
+    ${buyerEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(buyerEmail)}</td></tr>` : ""}
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Listing</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(assetName) || "—"}</td></tr>
+  </table>
+
+  ${url ? `<div style="text-align:center;margin-bottom:8px"><a href="${url}" style="display:inline-block;background:#047857;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open my portal</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -1305,6 +1405,14 @@ serve(async (req) => {
         html = buildTicketStatusEmail(data);
         break;
       }
+      case "listing_share":
+        subject = `${data?.assetName || "A listing"} – shared by ${data?.agentName || "your agent"}`;
+        html = buildListingShareEmail(data);
+        break;
+      case "listing_enquiry":
+        subject = `🔔 New enquiry: ${data?.buyerName || "a buyer"} on ${data?.assetName || "your listing"}`;
+        html = buildListingEnquiryEmail(data);
+        break;
       default:
         throw new Error(`Unknown email type: ${type}`);
     }

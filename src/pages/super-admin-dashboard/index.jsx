@@ -11,6 +11,7 @@ import AssetBreakdown from './components/AssetBreakdown';
 import CompanyAnalytics from './components/CompanyAnalytics';
 import AuditTrail from './components/AuditTrail';
 import SalesAgentsList from './components/SalesAgentsList';
+import WithdrawalRequestsTab from './components/WithdrawalRequestsTab';
 import CreateAgentModal from './components/CreateAgentModal';
 
 // Admin portal tabs for super admin
@@ -72,8 +73,9 @@ const SuperAdminDashboard = () => {
   const navigate = useNavigate();
   const {
     stats, assetBreakdown, companyAnalytics,
-    auditTrail, salesAgents, salesTarget, contracts, clients, assistRejections,
+    auditTrail, salesAgents, salesTarget, contracts, clients, assistRejections, withdrawalRequests,
     loading, connectionStatus, refetch, createSalesAgent, upgradeSalesAgentToGold, downgradeSalesAgentToBronze, uploadContract, exportCSV,
+    approveWithdrawalRequest, rejectWithdrawalRequest,
   } = useSuperAdminDashboard();
 
   const [activeTab, setActiveTab] = useState('overview');
@@ -160,6 +162,7 @@ const SuperAdminDashboard = () => {
   const tabs = [
     { id: 'overview',     label: 'Overview',                icon: 'LayoutDashboard' },
     { id: 'agents',       label: 'Sales Agents',            icon: 'UserCheck' },
+    { id: 'withdrawals',  label: 'Withdrawals',             icon: 'Wallet', badge: withdrawalRequests.length || 0 },
     { id: 'contracts',    label: 'Contracts',               icon: 'FileText' },
     { id: 'kyc',          label: 'KYC Review',              icon: 'Shield', badge: stats?.pendingKYC || 0 },
     { id: 'reports',      label: 'Sales Reports',           icon: 'BarChart3' },
@@ -312,6 +315,20 @@ const SuperAdminDashboard = () => {
                 onExport={exportCSV}
                 onUpgradeAgent={upgradeSalesAgentToGold}
                 onDowngradeAgent={downgradeSalesAgentToBronze}
+              />
+            )}
+          </div>
+        )}
+
+        {/* WITHDRAWAL REQUESTS TAB */}
+        {activeTab === 'withdrawals' && (
+          <div className="space-y-4">
+            {loading ? <Sk className="h-64" /> : (
+              <WithdrawalRequestsTab
+                requests={withdrawalRequests}
+                onExport={exportCSV}
+                onApprove={approveWithdrawalRequest}
+                onReject={rejectWithdrawalRequest}
               />
             )}
           </div>

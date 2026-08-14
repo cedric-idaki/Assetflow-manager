@@ -7,6 +7,7 @@ import { useSignedUrl } from '../../hooks/useSignedUrl';
 import Icon from '../../components/AppIcon';
 import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
 import { generateTempPassword } from '../../services/credentialsEmailService';
+import { PII_FIELDS, emptyPii, fetchEmployeePii, saveEmployeePii } from '../../services/employeePiiService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -190,7 +191,8 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     next_of_kin_name:               employee?.next_of_kin_name               || '',
     next_of_kin_relationship:       employee?.next_of_kin_relationship       || '',
     next_of_kin_phone:              employee?.next_of_kin_phone              || '',
-    next_of_kin_id:                 employee?.next_of_kin_id                 || '',
+    // Encrypted — not on the employee row. Filled in by the fetch below.
+    next_of_kin_id:                 '',
     secondary_contact_name:         employee?.secondary_contact_name         || '',
     secondary_contact_relationship: employee?.secondary_contact_relationship || '',
     secondary_contact_phone:        employee?.secondary_contact_phone        || '',
@@ -203,10 +205,10 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     transport_allowance: employee?.transport_allowance || '',
     national_id:         employee?.national_id         || '',
     kra_pin:             employee?.kra_pin             || '',
-    nssf_number:         employee?.nssf_number         || '',
+    nssf_number:         '',   // encrypted — see the fetch below
     sha_number:          employee?.sha_number          || '',
     bank_name:           employee?.bank_name           || '',
-    bank_account:        employee?.bank_account        || '',
+    bank_account:        '',   // encrypted — see the fetch below
     bank_branch:         employee?.bank_branch         || '',
     leave_balance:       employee?.leave_balance       ?? 21,
     is_active:           employee?.is_active           ?? true,
@@ -214,6 +216,41 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     cv_url:              employee?.cv_url              || '',
     photo_url:           employee?.photo_url           || '',
   });
+
+  // Bank account, NSSF and next-of-kin ID are encrypted at rest and are NOT on
+  // the employee row — they come from the employee-pii function on open. See
+  // src/services/employeePiiService.js.
+  //
+  // piiOk === false means the fetch failed, NOT that the fields are empty. The
+  // inputs are locked in that state: the form would otherwise show blanks that
+  // a save would write over the real values.
+  const [piiLoading, setPiiLoading] = useState(isEdit);
+  const [piiOk,      setPiiOk]      = useState(true);
+
+  useEffect(() => {
+    if (!isEdit || !employee?.id) return;
+    let cancelled = false;
+
+    (async () => {
+      const pii = await fetchEmployeePii(employee.id);
+      if (cancelled) return;
+      if (pii.ok) {
+        setForm(p => ({
+          ...p,
+          ...PII_FIELDS.reduce((acc, f) => ({ ...acc, [f]: pii[f] ?? '' }), {}),
+        }));
+      } else {
+        setPiiOk(false);
+        setError(
+          `Encrypted fields (bank account, NSSF, next-of-kin ID) could not be read: ${pii.error} ` +
+          'They are shown blank and locked so saving cannot overwrite them.',
+        );
+      }
+      setPiiLoading(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [isEdit, employee?.id]);
 
   const set = (k, v) => {
     setForm(p => ({ ...p, [k]: v }));
@@ -228,6 +265,19 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
 
   // Appended to a field's className when it failed required-field validation.
   const inv = (k) => invalid.has(k) ? ' !border-red-400 focus:!ring-red-300' : '';
+
+  // Shared props for the three encrypted fields. They are unusable until the
+  // decrypted values arrive, and stay locked if they never do — typing into a
+  // blank that only looks empty would overwrite a stored value on save.
+  const encrypted = (k) => ({
+    className: S.input + inv(k) + (piiLoading || !piiOk ? ' opacity-60' : ''),
+    value: form[k],
+    onChange: (e) => set(k, e.target.value),
+    disabled: piiLoading || !piiOk,
+    title: piiOk
+      ? 'Encrypted at rest — stored separately from the employee record.'
+      : 'Unavailable: this value could not be decrypted. It will be left unchanged when you save.',
+  });
 
   // Upload a picked document to the employee-documents bucket and return its
   // public URL. Files are namespaced under the employee id so each person's
@@ -253,7 +303,13 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
   };
 
   const handleSave = async () => {
-    const missing = REQUIRED_FIELDS.filter(([k]) => isEmpty(form[k]));
+    // When the encrypted fields could not be read they are blank and locked, so
+    // requiring them would make the record unsaveable for reasons the operator
+    // cannot fix from this form. They are left untouched on save instead.
+    const required = piiOk
+      ? REQUIRED_FIELDS
+      : REQUIRED_FIELDS.filter(([k]) => !PII_FIELDS.includes(k));
+    const missing = required.filter(([k]) => isEmpty(form[k]));
     if (missing.length) {
       setInvalid(new Set(missing.map(([k]) => k)));
       setError(`Please fill in all required fields: ${missing.map(([, label]) => label).join(', ')}.`);
@@ -270,7 +326,6 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         next_of_kin_name:               form.next_of_kin_name               || null,
         next_of_kin_relationship:       form.next_of_kin_relationship       || null,
         next_of_kin_phone:              form.next_of_kin_phone              || null,
-        next_of_kin_id:                 form.next_of_kin_id                 || null,
         secondary_contact_name:         form.secondary_contact_name         || null,
         secondary_contact_relationship: form.secondary_contact_relationship || null,
         secondary_contact_phone:        form.secondary_contact_phone        || null,
@@ -283,10 +338,8 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         transport_allowance: parseFloat(form.transport_allowance) || 0,
         national_id:         form.national_id         || null,
         kra_pin:             form.kra_pin             || null,
-        nssf_number:         form.nssf_number         || null,
         sha_number:          form.sha_number          || null,
         bank_name:           form.bank_name           || null,
-        bank_account:        form.bank_account        || null,
         bank_branch:         form.bank_branch         || null,
         leave_balance:       parseInt(form.leave_balance) || 21,
         is_active:           form.is_active,
@@ -295,6 +348,10 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         admin_id:            isEdit ? (employee.admin_id || adminId) : adminId,
         updated_at:          new Date().toISOString(),
       };
+
+      // The profile id the encrypted fields are attached to, known only after
+      // creation on the new-employee path.
+      let savedId = isEdit ? employee.id : null;
 
       if (isEdit) {
         // Edit: safe to update user_profiles directly — auth user already exists.
@@ -361,7 +418,6 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             next_of_kin_name:               payload.next_of_kin_name,
             next_of_kin_relationship:       payload.next_of_kin_relationship,
             next_of_kin_phone:              payload.next_of_kin_phone,
-            next_of_kin_id:                 payload.next_of_kin_id,
             secondary_contact_name:         payload.secondary_contact_name,
             secondary_contact_relationship: payload.secondary_contact_relationship,
             secondary_contact_phone:        payload.secondary_contact_phone,
@@ -374,17 +430,29 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             transport_allowance: payload.transport_allowance,
             national_id:         payload.national_id,
             kra_pin:             payload.kra_pin,
-            nssf_number:         payload.nssf_number,
             sha_number:          payload.sha_number,
             bank_name:           payload.bank_name,
-            bank_account:        payload.bank_account,
             bank_branch:         payload.bank_branch,
             leave_balance:       payload.leave_balance,
             updated_at:          payload.updated_at,
           }).eq('id', result.id);
           if (patchErr) throw patchErr;
+
+          savedId = result.id;
         }
       }
+
+      // Encrypted fields last, and only once the profile row exists — the vault
+      // table has a foreign key onto it. Skipped entirely when the fetch failed,
+      // because the inputs are blank-and-locked in that state and writing them
+      // would destroy the stored values.
+      if (savedId && piiOk) {
+        await saveEmployeePii(
+          savedId,
+          PII_FIELDS.reduce((acc, f) => ({ ...acc, [f]: form[f] || '' }), {}),
+        );
+      }
+
       onSaved();
       onClose();
     } catch (err) {
@@ -498,7 +566,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             </div>
             <div>
               <label className={S.label}>ID Number *</label>
-              <input className={S.input + inv('next_of_kin_id')} placeholder="National ID / Passport No." value={form.next_of_kin_id} onChange={e => set('next_of_kin_id', e.target.value)} />
+              <input {...encrypted('next_of_kin_id')} placeholder={piiLoading ? 'Decrypting…' : 'National ID / Passport No.'} />
             </div>
 
             <Section title="Secondary Contact" />
@@ -570,7 +638,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             </div>
             <div>
               <label className={S.label}>NSSF Number *</label>
-              <input className={S.input + inv('nssf_number')} value={form.nssf_number} onChange={e => set('nssf_number', e.target.value)} />
+              <input {...encrypted('nssf_number')} placeholder={piiLoading ? 'Decrypting…' : ''} />
             </div>
             <div>
               <label className={S.label}>SHA Number *</label>
@@ -600,7 +668,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             </div>
             <div>
               <label className={S.label}>Account Number *</label>
-              <input className={S.input + inv('bank_account')} value={form.bank_account} onChange={e => set('bank_account', e.target.value)} />
+              <input {...encrypted('bank_account')} placeholder={piiLoading ? 'Decrypting…' : ''} />
             </div>
             <div>
               <label className={S.label}>Branch *</label>
@@ -650,11 +718,45 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
 const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose }) => {
   const gross = parseFloat(employee.basic_salary || 0) + parseFloat(employee.housing_allowance || 0) + parseFloat(employee.transport_allowance || 0);
 
+  // Bank account, NSSF and next-of-kin ID are encrypted and are not part of the
+  // employee row — fetched here for the one record being viewed, rather than
+  // decrypting the whole list on every render of the table behind this drawer.
+  const [pii, setPii] = useState(emptyPii());
+  const [piiState, setPiiState] = useState('loading'); // loading | ready | failed
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+
+    (async () => {
+      const result = await fetchEmployeePii(employee.id);
+      if (cancelled) return;
+      setPii(result);
+      setPiiState(result.ok ? 'ready' : 'failed');
+    })();
+
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
   const Row = ({ label, value }) => (
     <div className="flex justify-between items-center py-2.5 border-b border-border">
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="text-sm font-medium text-foreground text-right max-w-48 truncate">{value || '—'}</span>
     </div>
+  );
+
+  // An encrypted row must never fall through to the plain '—' that Row shows for
+  // an empty value: "not set" and "could not be decrypted" are different facts,
+  // and confusing them is how someone concludes a bank account is missing.
+  const SecureRow = ({ label, field }) => (
+    <Row
+      label={label}
+      value={
+        piiState === 'loading' ? 'Decrypting…'
+          : piiState === 'failed' ? 'Unavailable'
+          : pii[field]
+      }
+    />
   );
 
   return (
@@ -727,7 +829,7 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
             <Row label="Name"         value={employee.next_of_kin_name} />
             <Row label="Relationship" value={employee.next_of_kin_relationship} />
             <Row label="Phone"        value={employee.next_of_kin_phone} />
-            <Row label="ID Number"    value={employee.next_of_kin_id} />
+            <SecureRow label="ID Number" field="next_of_kin_id" />
           </div>
 
           <div>
@@ -740,14 +842,14 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
           <div>
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Statutory</p>
             <Row label="KRA PIN"  value={employee.kra_pin} />
-            <Row label="NSSF No." value={employee.nssf_number} />
+            <SecureRow label="NSSF No." field="nssf_number" />
             <Row label="SHA No."  value={employee.sha_number} />
           </div>
 
           <div>
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Bank Details</p>
             <Row label="Bank"    value={employee.bank_name} />
-            <Row label="Account" value={employee.bank_account} />
+            <SecureRow label="Account" field="bank_account" />
             <Row label="Branch"  value={employee.bank_branch} />
           </div>
 
@@ -1245,8 +1347,12 @@ const HRPage = () => {
     // ENTIRE query fail, which silently wiped the whole employee list. We try the
     // full set first and transparently fall back to the base columns so staff still
     // load even when a migration is still pending.
-    const BASE_EMP_COLS = 'id, admin_id, full_name, email, role, department, phone, gender, date_of_birth, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, nssf_number, sha_number, national_id, bank_name, bank_account, bank_branch';
-    const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, next_of_kin_id, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url`;
+    // bank_account, nssf_number and next_of_kin_id are deliberately absent: they
+    // are encrypted in employee_private_data and fetched per-record through the
+    // employee-pii function. Naming them here would fail the query outright once
+    // the plaintext columns are dropped.
+    const BASE_EMP_COLS = 'id, admin_id, full_name, email, role, department, phone, gender, date_of_birth, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, sha_number, national_id, bank_name, bank_branch';
+    const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url`;
 
     const runEmpQuery = (cols) => {
       let q = supabase.from('user_profiles')

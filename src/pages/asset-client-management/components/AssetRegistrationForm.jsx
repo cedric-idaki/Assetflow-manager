@@ -68,6 +68,55 @@ const VEHICLE_COLORS = ['White', 'Pearl White', 'Silver', 'Grey', 'Black', 'Blue
 const FUEL_TYPES     = ['Petrol', 'Diesel', 'Hybrid', 'Plug-in Hybrid', 'Electric', 'LPG'];
 const GEARBOX_TYPES  = ['Automatic', 'Manual', 'CVT', 'Semi-Automatic'];
 
+// ── Non-vehicle dropdown option lists ────────────────────────────────────────
+// Same treatment as the vehicle lists above: curated Kenyan-market options fed
+// to SelectWithOther, so anything unlisted is still enterable via "Other…".
+
+// Property / Land
+const PROPERTY_TYPES = ['Land - Freehold', 'Land - Leasehold', 'Agricultural Land', 'Residential Plot', 'Commercial Plot', 'Serviced Plot', 'Bungalow', 'Maisonette', 'Townhouse', 'Villa', 'Gated Community House', 'Apartment / Flat', 'Studio Apartment', 'Office Space', 'Shop / Retail Space', 'Godown / Warehouse', 'Mixed-Use Building', 'Farm / Ranch'];
+const PROPERTY_BEDS_BATHS = ['Not Applicable - Land', 'Studio', '1 Bed / 1 Bath', '2 Bed / 1 Bath', '2 Bed / 2 Bath', '3 Bed / 2 Bath', '3 Bed / 3 Bath', '4 Bed / 3 Bath', '4 Bed / 4 Bath', '5 Bed / 4 Bath', '5 Bed / 5 Bath', '6+ Bed'];
+
+// Shared across electronics / furniture / heavy equipment
+const CONDITIONS  = ['Brand New', 'New - Open Box', 'Ex-Display', 'Refurbished', 'Ex-UK / Imported Used', 'Used - Excellent', 'Used - Good', 'Used - Fair', 'For Spares / Repair'];
+const WARRANTIES  = ['No Warranty', '3 Months', '6 Months', '1 Year', '2 Years', '3 Years', '5 Years', 'Manufacturer Warranty', 'Seller Warranty'];
+const GEN_COLORS  = ['Black', 'White', 'Silver', 'Space Grey', 'Grey', 'Graphite', 'Gold', 'Rose Gold', 'Titanium', 'Stainless Steel', 'Blue', 'Navy Blue', 'Red', 'Green', 'Beige', 'Cream', 'Brown', 'Multicolour'];
+
+// Electronics
+const ELECTRONICS_BRANDS = ['Samsung', 'LG', 'Sony', 'Hisense', 'TCL', 'Skyworth', 'Vitron', 'Von', 'Ramtons', 'Mika', 'Bruhm', 'Armco', 'Roch', 'Syinix', 'Nunix', 'Philips', 'Panasonic', 'Toshiba', 'Sharp', 'Binatone', 'Apple', 'Dell', 'HP', 'Lenovo', 'Asus', 'Acer', 'MSI', 'Microsoft', 'Huawei', 'Xiaomi', 'Tecno', 'Infinix', 'itel', 'Oppo', 'Vivo', 'Realme', 'OnePlus', 'Nokia', 'Google', 'Canon', 'Nikon', 'JBL', 'Bose', 'Anker', 'Bosch', 'Whirlpool', 'Electrolux', 'Haier', 'Midea', 'Solarmax'];
+
+// Furniture
+const FURNITURE_CATEGORIES = ['Sofa / Couch', 'Sofa Bed', 'Sectional Sofa', 'Armchair', 'Recliner', 'Coffee Table', 'Side Table', 'Dining Table', 'Dining Set', 'Dining Chair', 'Bar Stool', 'Bed Frame', 'Mattress', 'Bedside Table', 'Wardrobe', 'Chest of Drawers', 'Dressing Table', 'Bookshelf', 'TV Stand', 'Display Cabinet', 'Office Desk', 'Executive Desk', 'Office Chair', 'Workstation', 'Filing Cabinet', 'Conference Table', 'Reception Desk', 'Kitchen Cabinet', 'Shoe Rack', 'Outdoor / Garden Set'];
+const FURNITURE_MATERIALS  = ['Mahogany', 'Mvule', 'Cypress', 'Cedar', 'Oak', 'Teak', 'Pine', 'Bamboo', 'Solid Wood', 'Plywood', 'MDF / Chipboard', 'Genuine Leather', 'PU Leather', 'Fabric', 'Velvet', 'Linen', 'Metal / Steel', 'Aluminium', 'Wrought Iron', 'Glass', 'Marble', 'Rattan / Wicker', 'Plastic'];
+const FURNITURE_FINISHES   = ['Natural Wood', 'Walnut Brown', 'Mahogany Red', 'Oak', 'Teak', 'Espresso', 'Black', 'White', 'Cream / Ivory', 'Beige', 'Grey', 'Charcoal Grey', 'Navy Blue', 'Blue', 'Green', 'Maroon', 'Gold', 'Silver', 'Two-Tone'];
+
+// Construction materials
+const CONSTRUCTION_CATEGORIES = ['Cement', 'Reinforcement Bars (Rebar)', 'Structural Steel', 'Wire Mesh / BRC', 'Nails & Fasteners', 'Mabati / Roofing Sheets', 'Roofing Tiles', 'Timber', 'Plywood / Boards', 'Bricks & Blocks', 'Ballast', 'Sand', 'Hardcore', 'Murram', 'Quarry Stones', 'Floor & Wall Tiles', 'Paint & Finishes', 'Plumbing & PVC Pipes', 'Sanitary Ware', 'Water Tanks', 'Electrical Cables & Conduits', 'Doors & Frames', 'Windows & Glass', 'Gypsum & Ceiling Boards', 'Waterproofing', 'Adhesives & Sealants', 'Scaffolding', 'Hardware & Tools'];
+const CONSTRUCTION_BRANDS     = ['Bamburi Cement', 'Savannah Cement', 'Mombasa Cement', 'Simba Cement', 'Rai Cement', 'Ndovu Cement', 'Devki Steel Mills', 'Apex Steel', 'Mabati Rolling Mills', 'Tarmal Steel', 'Doshi Group', 'Kens Metal Industries', 'Crown Paints', 'Duracoat', 'Basco Paints', 'Sadolin', 'Galaxy Paints', 'Tile & Carpet Centre', 'Saj Ceramics', 'Kentainers', 'Roto Tanks', 'Davis & Shirtliff'];
+const CONSTRUCTION_UNITS      = ['Bags', 'Tonnes', 'Kilograms', 'Pieces', 'Metres', 'Linear Metres', 'Square Metres', 'Cubic Metres', 'Litres', 'Rolls', 'Bundles', 'Cartons', 'Packets', 'Sheets', 'Lengths', 'Sets', 'Pallets', 'Trips / Loads'];
+const CONSTRUCTION_GRADES     = ['Grade 32.5N', 'Grade 42.5N', 'Grade 52.5N', 'Class 25', 'Class 35', 'D8', 'D10', 'D12', 'D16', 'D20', 'D25', 'Gauge 26', 'Gauge 28', 'Gauge 30', 'Gauge 32', 'Class B', 'Class C', 'BS 8500', 'KS EAS 18-1', 'Standard', 'Premium'];
+
+// Heavy equipment — Brand → common models (partial: brands without a list fall
+// back to a free-text Model input, same as an "Other…" vehicle make).
+const HEAVY_MODELS = {
+  'Caterpillar':    ['320D', '320GC', '330D', '336D', 'D6', 'D8R', '140K', '950H', '966H', '428F', 'CS533E'],
+  'Komatsu':        ['PC130', 'PC200-8', 'PC220', 'PC300', 'D65', 'WA320', 'WA380', 'GD511', 'HM300'],
+  'JCB':            ['3CX', '4CX', 'JS130', 'JS205', '540-170', 'VM115', '456 ZX'],
+  'Volvo CE':       ['EC210', 'EC220D', 'EC300D', 'L90', 'L120', 'A30G', 'G930', 'SD110'],
+  'Hitachi':        ['ZX130', 'ZX200', 'ZX210', 'ZX350', 'EX200'],
+  'Hyundai':        ['R140LC', 'R220LC', 'R330LC', 'HL757'],
+  'Doosan':         ['DX140', 'DX225', 'DX300', 'DL250'],
+  'Case':           ['580N', 'CX210', '721G', '770', 'JX75'],
+  'New Holland':    ['B90B', 'B110B', 'E215C', 'TT75', 'TD90'],
+  'Kubota':         ['KX030', 'KX057', 'U17', 'U35', 'M7060', 'L4508'],
+  'Bobcat':         ['S570', 'S650', 'T590', 'E35', 'E50'],
+  'Sany':           ['SY75C', 'SY215C', 'SY365H', 'STC250'],
+  'XCMG':           ['XE215C', 'ZL50GN', 'GR165', 'XS163J'],
+  'Massey Ferguson':['MF 240', 'MF 275', 'MF 290', 'MF 375', 'MF 385', 'MF 4707', 'MF 6713'],
+  'John Deere':     ['5045D', '5075E', '6110B', '310L', '850K'],
+  'Bomag':          ['BW120', 'BW177', 'BW211', 'BW212'],
+};
+const HEAVY_BRANDS = [...Object.keys(HEAVY_MODELS), 'Liebherr', 'Terex', 'SDLG', 'LiuGong', 'Shantui', 'Lonking', 'Zoomlion', 'Tadano', 'Manitou', 'Dynapac', 'Wirtgen', 'Atlas Copco', 'Ingersoll Rand'];
+
 // ── Asset-type smart field configs ────────────────────────────────────────────
 const ASSET_CONFIGS = {
   vehicle: {
@@ -77,7 +126,7 @@ const ASSET_CONFIGS = {
     iconColor: '#1d4ed8',
     fields: [
       { key: 'vehicleMake',    label: 'Make',           placeholder: 'e.g. Toyota',          required: true,  col: 1, selectOther: VEHICLE_MAKES },
-      { key: 'vehicleModel',   label: 'Model',          placeholder: 'e.g. Land Cruiser',    required: true,  col: 1, modelsOf: 'vehicleMake' },
+      { key: 'vehicleModel',   label: 'Model',          placeholder: 'e.g. Land Cruiser',    required: true,  col: 1, modelsOf: 'vehicleMake', optionsMap: VEHICLE_MODELS },
       { key: 'vehicleYear',    label: 'Year',           placeholder: '2023',                 required: true,  col: 1, type: 'number' },
       { key: 'vehicleColor',   label: 'Color',          placeholder: 'e.g. Pearl White',     required: false, col: 1, selectOther: VEHICLE_COLORS },
       { key: 'vehiclePlate',   label: 'Plate Number',   placeholder: 'e.g. KAA 123B',        required: true,  col: 1, upper: true },
@@ -94,11 +143,11 @@ const ASSET_CONFIGS = {
     color: 'bg-emerald-50 border-emerald-200',
     iconColor: '#059669',
     fields: [
-      { key: 'propertyType',     label: 'Property Type',  placeholder: '',                              required: true,  col: 1, select: ['land','house','apartment','commercial','plot','bungalow','maisonette'] },
+      { key: 'propertyType',     label: 'Property Type',  placeholder: 'e.g. Residential Plot',        required: true,  col: 1, selectOther: PROPERTY_TYPES },
       { key: 'propertySize',     label: 'Size',           placeholder: 'e.g. 0.5 acres or 2500 sq ft', required: true,  col: 1 },
       { key: 'propertyLocation', label: 'Location',       placeholder: 'e.g. Westlands, Nairobi',       required: true,  col: 2 },
       { key: 'propertyTitle',    label: 'Title Deed No.', placeholder: 'e.g. IR 12345',                 required: false, col: 1 },
-      { key: 'propertyBedsath',  label: 'Beds / Baths',   placeholder: 'e.g. 3 bed / 2 bath',           required: false, col: 1 },
+      { key: 'propertyBedsath',  label: 'Beds / Baths',   placeholder: 'e.g. 3 bed / 2 bath',           required: false, col: 1, selectOther: PROPERTY_BEDS_BATHS },
       { key: 'propertyLandRef',  label: 'Land Reference', placeholder: 'e.g. LR No. 209/123',           required: false, col: 1 },
     ],
   },
@@ -108,11 +157,11 @@ const ASSET_CONFIGS = {
     color: 'bg-orange-50 border-orange-200',
     iconColor: '#c2410c',
     fields: [
-      { key: 'constCategory',  label: 'Category',         placeholder: 'e.g. Steel, Cement, Timber',   required: true,  col: 1 },
-      { key: 'constBrand',     label: 'Brand / Supplier', placeholder: 'e.g. Bamburi, Mabati Rolling', required: false, col: 1 },
-      { key: 'constUnit',      label: 'Unit of Measure',  placeholder: 'e.g. bags, tons, metres',       required: true,  col: 1 },
+      { key: 'constCategory',  label: 'Category',         placeholder: 'e.g. Steel, Cement, Timber',   required: true,  col: 1, selectOther: CONSTRUCTION_CATEGORIES },
+      { key: 'constBrand',     label: 'Brand / Supplier', placeholder: 'e.g. Bamburi, Mabati Rolling', required: false, col: 1, selectOther: CONSTRUCTION_BRANDS },
+      { key: 'constUnit',      label: 'Unit of Measure',  placeholder: 'e.g. bags, tons, metres',       required: true,  col: 1, selectOther: CONSTRUCTION_UNITS },
       { key: 'constQty',       label: 'Quantity',         placeholder: '100',                           required: true,  col: 1, type: 'number' },
-      { key: 'constGrade',     label: 'Grade / Standard', placeholder: 'e.g. Grade 43, BS 8500',        required: false, col: 1 },
+      { key: 'constGrade',     label: 'Grade / Standard', placeholder: 'e.g. Grade 43, BS 8500',        required: false, col: 1, selectOther: CONSTRUCTION_GRADES },
       { key: 'constWarehouse', label: 'Warehouse / Location', placeholder: 'e.g. Embakasi Warehouse',  required: false, col: 2 },
       { key: 'specifications', label: 'Specifications',   placeholder: 'Additional technical details',  required: false, col: 2 },
     ],
@@ -123,12 +172,12 @@ const ASSET_CONFIGS = {
     color: 'bg-purple-50 border-purple-200',
     iconColor: '#7c3aed',
     fields: [
-      { key: 'elecBrand',      label: 'Brand',          placeholder: 'e.g. Samsung, LG, Apple',  required: true,  col: 1 },
+      { key: 'elecBrand',      label: 'Brand',          placeholder: 'e.g. Samsung, LG, Apple',  required: true,  col: 1, selectOther: ELECTRONICS_BRANDS },
       { key: 'elecModel',      label: 'Model / SKU',    placeholder: 'e.g. UA55AU8000',           required: true,  col: 1 },
       { key: 'elecSerial',     label: 'Serial Number',  placeholder: 'Enter serial number',        required: false, col: 1, upper: true },
-      { key: 'elecCondition',  label: 'Condition',      placeholder: 'New / Refurbished / Used',   required: true,  col: 1 },
-      { key: 'elecWarranty',   label: 'Warranty',       placeholder: 'e.g. 1 Year Samsung',        required: false, col: 1 },
-      { key: 'elecColor',      label: 'Color / Finish', placeholder: 'e.g. Space Grey',            required: false, col: 1 },
+      { key: 'elecCondition',  label: 'Condition',      placeholder: 'New / Refurbished / Used',   required: true,  col: 1, selectOther: CONDITIONS },
+      { key: 'elecWarranty',   label: 'Warranty',       placeholder: 'e.g. 1 Year Samsung',        required: false, col: 1, selectOther: WARRANTIES },
+      { key: 'elecColor',      label: 'Color / Finish', placeholder: 'e.g. Space Grey',            required: false, col: 1, selectOther: GEN_COLORS },
       { key: 'specifications', label: 'Specifications', placeholder: 'e.g. 55" 4K UHD, OLED',     required: false, col: 2 },
     ],
   },
@@ -138,12 +187,12 @@ const ASSET_CONFIGS = {
     color: 'bg-amber-50 border-amber-200',
     iconColor: '#d97706',
     fields: [
-      { key: 'furnCategory',  label: 'Category',        placeholder: 'e.g. Sofa, Bed, Dining Set',   required: true,  col: 1 },
-      { key: 'furnMaterial',  label: 'Material',        placeholder: 'e.g. Oak Wood, Leather',        required: true,  col: 1 },
+      { key: 'furnCategory',  label: 'Category',        placeholder: 'e.g. Sofa, Bed, Dining Set',   required: true,  col: 1, selectOther: FURNITURE_CATEGORIES },
+      { key: 'furnMaterial',  label: 'Material',        placeholder: 'e.g. Oak Wood, Leather',        required: true,  col: 1, selectOther: FURNITURE_MATERIALS },
       { key: 'furnBrand',     label: 'Brand / Maker',   placeholder: 'e.g. Mobilis, IKEA',            required: false, col: 1 },
-      { key: 'furnColor',     label: 'Color / Finish',  placeholder: 'e.g. Walnut Brown',             required: false, col: 1 },
+      { key: 'furnColor',     label: 'Color / Finish',  placeholder: 'e.g. Walnut Brown',             required: false, col: 1, selectOther: FURNITURE_FINISHES },
       { key: 'furnDimension', label: 'Dimensions',      placeholder: 'e.g. L180 x W90 x H75 cm',     required: false, col: 1 },
-      { key: 'furnCondition', label: 'Condition',       placeholder: 'New / Refurbished / Used',       required: true,  col: 1 },
+      { key: 'furnCondition', label: 'Condition',       placeholder: 'New / Refurbished / Used',       required: true,  col: 1, selectOther: CONDITIONS },
       { key: 'specifications', label: 'Additional Notes', placeholder: 'Other details',               required: false, col: 2 },
     ],
   },
@@ -153,8 +202,8 @@ const ASSET_CONFIGS = {
     color: 'bg-red-50 border-red-200',
     iconColor: '#b91c1c',
     fields: [
-      { key: 'heavyBrand',    label: 'Brand / Make',        placeholder: 'e.g. Caterpillar, Komatsu', required: true,  col: 1 },
-      { key: 'heavyModel',    label: 'Model',               placeholder: 'e.g. CAT 320D',             required: true,  col: 1 },
+      { key: 'heavyBrand',    label: 'Brand / Make',        placeholder: 'e.g. Caterpillar, Komatsu', required: true,  col: 1, selectOther: HEAVY_BRANDS },
+      { key: 'heavyModel',    label: 'Model',               placeholder: 'e.g. CAT 320D',             required: true,  col: 1, modelsOf: 'heavyBrand', optionsMap: HEAVY_MODELS },
       { key: 'heavySerial',   label: 'Serial / VIN',        placeholder: 'Enter serial number',        required: true,  col: 1, upper: true },
       { key: 'heavyYear',     label: 'Year of Manufacture', placeholder: '2020',                      required: true,  col: 1, type: 'number' },
       { key: 'heavyHours',    label: 'Operating Hours',     placeholder: 'e.g. 3200 hrs',             required: false, col: 1, type: 'number' },
@@ -437,19 +486,23 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
 
   // ── Real-time field setters ───────────────────────────────────────────────
   const set = (field, value) => {
+    // Dependent options are keyed by their parent (make → model, brand → model),
+    // so changing the parent invalidates whatever the child holds.
+    const dependents = (cfg?.fields || []).filter(f => f.modelsOf === field).map(f => f.key);
     setFormData(prev => {
       const next = { ...prev, [field]: value };
-      // Model options are keyed by make, so a make change invalidates the model
-      if (field === 'vehicleMake' && value !== prev.vehicleMake) next.vehicleModel = '';
+      if (value !== prev[field]) dependents.forEach(k => { next[k] = ''; });
       return next;
     });
     // Real-time validation
     let err = '';
     if (field === 'description' && (!value || value.trim().length < 3)) err = 'Description must be at least 3 characters';
     if (field === 'assetType'   && !value) err = 'Asset type is required';
-    setErrors(prev => field === 'vehicleMake'
-      ? { ...prev, [field]: err, vehicleModel: '' }
-      : { ...prev, [field]: err });
+    setErrors(prev => {
+      const nextErrors = { ...prev, [field]: err };
+      dependents.forEach(k => { nextErrors[k] = ''; });
+      return nextErrors;
+    });
   };
 
   const setP = (field, value) => {
@@ -590,15 +643,16 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
               if (f.selectOther || f.modelsOf) {
                 const parentVal = f.modelsOf ? formData[f.modelsOf] : null;
                 if (f.modelsOf && !parentVal) {
+                  const parentLabel = cfg.fields.find(x => x.key === f.modelsOf)?.label || 'Make';
                   return (
                     <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]}>
                       <select disabled value="" className={ic(errors[f.key])}>
-                        <option value="">Select Make first</option>
+                        <option value="">Select {parentLabel} first</option>
                       </select>
                     </Field>
                   );
                 }
-                const opts = f.selectOther || VEHICLE_MODELS[parentVal];
+                const opts = f.selectOther || (f.optionsMap ? f.optionsMap[parentVal] : null);
                 if (opts) {
                   return (
                     <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]}>

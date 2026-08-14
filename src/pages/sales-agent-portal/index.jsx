@@ -6,6 +6,7 @@ import CommissionDashboard from './components/CommissionDashboard';
 import ActivityFeed from './components/ActivityFeed';
 import LeadRegistrationModal from './components/LeadRegistrationModal';
 import CreateClientModal from './components/CreateClientModal';
+import ClientsPanel from './components/ClientsPanel';
 import CreateCompanyModal from './components/CreateCompanyModal';
 import CreateSaccoModal from './components/CreateSaccoModal';
 import AssistModal from './components/AssistModal';
@@ -19,6 +20,8 @@ import AgentActivityTrail from './components/AgentActivityTrail';
 import SalesCostTracker from './components/SalesCostTracker';
 import FollowUpsPanel from './components/FollowUpsPanel';
 import ScheduleFollowUpModal from './components/ScheduleFollowUpModal';
+import CatalogPanel from './components/CatalogPanel';
+import ShareListingModal from './components/ShareListingModal';
 import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
 
 // ── Export Modal ─────────────────────────────────────────────────────────────
@@ -617,6 +620,10 @@ const SalesAgentPortal = () => {
     tickets, ticketBuckets, ticketMessages, ticketDirectory, ticketsLoading,
     ticketMessagesLoading, ticketsError, isTicketUnread,
     openTicket, replyToTicket, claimTicket, setTicketStatus, openThread, refetchTickets,
+    catalogAssets, shareLinks, shareLinksByAsset, shareStats,
+    catalogLoading, catalogError, refetchCatalog,
+    clientBook, clientBookCounts, clientBookLoading, clientBookError,
+    clientBookBlocked, tracksSubscriptions, clientBookEnabled, refetchClientBook,
     activeView, setActiveView, modals, openModal, closeModal,
   } = useSalesAgentContext();
 
@@ -687,6 +694,12 @@ const SalesAgentPortal = () => {
   };
 
   const handleConvertToClient = (lead, entity = defaultEntity) => openRegister(entity, lead);
+
+  // Lapsed, lapsing, or never activated — the clients worth a call today.
+  const renewalsDue = (clientBookCounts?.expired || 0)
+    + (clientBookCounts?.expiring || 0)
+    + (clientBookCounts?.pending || 0)
+    + (clientBookCounts?.attention || 0);
 
   const handleAssign = async ({ goldAgentId, adminName, helpType, note }) => {
     // The AssistModal shows its own success state; just persist + refresh here.
@@ -765,6 +778,13 @@ const SalesAgentPortal = () => {
     openModal('scheduleFollowUp');
   };
 
+  // Chasing a renewal is the same appointment as chasing a lead. Accounts
+  // registered without a lead have nothing to link to, so the modal is prefilled
+  // with a name-only stand-in — scheduleFollowUp accepts a null lead_id.
+  const handleClientFollowUp = (client) => {
+    handleScheduleFollowUp(client.lead || { id: null, full_name: client.name });
+  };
+
   const handleFollowUpSubmit = async (payload) => {
     await scheduleFollowUp(payload);
     closeModal('prefillFollowUpLead');
@@ -796,6 +816,14 @@ const SalesAgentPortal = () => {
     } catch (err) {
       showToast(err?.message || 'Could not remove the appointment.', 'error');
     }
+  };
+
+  // ── Shareable listings ─────────────────────────────────────────────────────
+  // The link carries this agent's id, so an enquiry through it arrives as their
+  // lead. Refresh the catalogue so the card shows the link straight away.
+  const handleShared = () => {
+    refetchCatalog();
+    showToast('Link ready — send it and any enquiry comes back as your lead.');
   };
 
   // entity comes from the modal that produced the account, not from the agent
@@ -967,6 +995,21 @@ const SalesAgentPortal = () => {
               )}
             </button>
 
+            {/* Catalogue — what the agent can send a buyer. The badge counts
+                enquiries that came back through their own links. */}
+            <a
+              href="#catalog"
+              className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
+            >
+              <Icon name="Store" size={15} color="currentColor" />
+              Catalogue
+              {shareStats?.totalEnquiries > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center bg-emerald-600">
+                  {shareStats.totalEnquiries}
+                </span>
+              )}
+            </a>
+
             {/* Export */}
             <button
               onClick={() => openModal('showExport')}
@@ -1099,11 +1142,17 @@ const SalesAgentPortal = () => {
               />
               <KPICard
                 label="Clients Created"
-                value={(leads || []).filter(l => l.stage === 'closed').length}
+                value={clientBookEnabled
+                  ? (clientBookCounts?.all || 0)
+                  : (leads || []).filter(l => l.stage === 'closed').length}
                 icon="Users"
                 colorClass="text-blue-600"
-                loading={loading}
-                subtext="Converted from leads"
+                loading={loading || clientBookLoading}
+                subtext={clientBookEnabled
+                  ? (renewalsDue > 0
+                      ? `${renewalsDue} need${renewalsDue === 1 ? 's' : ''} following up`
+                      : 'All up to date')
+                  : 'Converted from leads'}
               />
               <KPICard
                 label="Leads in Pipeline"
@@ -1147,22 +1196,59 @@ const SalesAgentPortal = () => {
               )}
             </div>
 
-            {/* My Clients + Commission */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <MyClientsSection
-                leads={leads}
-                onCreateClient={() => openRegister(defaultEntity)}
-                onCreateSacco={() => openRegister('sacco')}
-                isClientMode={isClientMode}
-                isSaccoMode={isSaccoMode}
-                canRegisterSacco={canRegisterSacco}
-              />
-              <CommissionDashboard
-                kpis={kpis}
-                walletTransactions={walletTransactions}
-                agentProfile={agentProfile}
-                onRequestWithdrawal={requestWithdrawal}
-                loading={loading}
+            {/* My Clients — who signed, and whether they are still paying */}
+            <div id="clients" className="scroll-mt-24">
+              {clientBookEnabled ? (
+                <ClientsPanel
+                  clients={clientBook}
+                  counts={clientBookCounts}
+                  loading={clientBookLoading || loading}
+                  error={clientBookError}
+                  subscriptionsBlocked={clientBookBlocked}
+                  tracksSubscriptions={tracksSubscriptions}
+                  enabled={clientBookEnabled}
+                  onRefresh={refetchClientBook}
+                  onFollowUp={handleClientFollowUp}
+                  onRegister={() => openRegister(defaultEntity)}
+                  onRegisterSacco={() => openRegister('sacco')}
+                  canRegisterSacco={canRegisterSacco}
+                  registerLabel={isClientMode ? 'Create Client' : 'Register Company'}
+                  registerNoun={isClientMode ? 'client' : 'company'}
+                />
+              ) : (
+                /* Sacco-side agents keep the plain converted-lead list. */
+                <MyClientsSection
+                  leads={leads}
+                  onCreateClient={() => openRegister(defaultEntity)}
+                  onCreateSacco={() => openRegister('sacco')}
+                  isClientMode={isClientMode}
+                  isSaccoMode={isSaccoMode}
+                  canRegisterSacco={canRegisterSacco}
+                />
+              )}
+            </div>
+
+            {/* Commission */}
+            <CommissionDashboard
+              kpis={kpis}
+              walletTransactions={walletTransactions}
+              agentProfile={agentProfile}
+              onRequestWithdrawal={requestWithdrawal}
+              loading={loading}
+            />
+
+            {/* Catalogue — pick something, send a buyer a link, watch it land */}
+            <div id="catalog" className="scroll-mt-24">
+              <CatalogPanel
+                assets={catalogAssets}
+                links={shareLinks}
+                linksByAsset={shareLinksByAsset}
+                stats={shareStats}
+                loading={catalogLoading}
+                error={catalogError}
+                onShare={(asset) => openModal('shareListing', asset)}
+                onRefresh={refetchCatalog}
+                onNotify={showToast}
               />
             </div>
 
@@ -1383,6 +1469,18 @@ const SalesAgentPortal = () => {
           directory={ticketDirectory}
           isGoldAgent={isGoldAgent}
           onSubmit={handleRaiseTicket}
+        />
+      )}
+
+      {/* ── Share a listing with a buyer ── */}
+      {modals.shareListing && (
+        <ShareListingModal
+          isOpen={!!modals.shareListing}
+          asset={typeof modals.shareListing === 'object' ? modals.shareListing : null}
+          leads={leads}
+          agentProfile={agentProfile}
+          onShared={handleShared}
+          onClose={() => closeModal('shareListing')}
         />
       )}
 

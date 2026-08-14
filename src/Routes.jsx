@@ -1,5 +1,6 @@
 import React from "react";
-import { BrowserRouter, Routes as RouterRoutes, Route } from "react-router-dom";
+import { BrowserRouter, Routes as RouterRoutes, Route, Navigate } from "react-router-dom";
+import { isAndroidAppContext } from "utils/androidApp";
 import ScrollToTop from "components/ScrollToTop";
 import ErrorBoundary from "components/ErrorBoundary";
 import ProtectedRoute from "components/ProtectedRoute";
@@ -34,6 +35,7 @@ import SaccoDashboard from './pages/sacco-dashboard';
 import SaccoMemberPortal from './pages/sacco-member-portal';
 import SaccoOversight from './pages/sacco-oversight';
 import ChoosePortal from './pages/choose-portal';
+import PublicListing from './pages/public-listing';
 
 const ADMIN_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
 // sacco_admin runs the same back-office tooling as a company admin (finance,
@@ -45,6 +47,18 @@ const STAFF_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collec
 const KYC_RENEWAL_ROLES = STAFF_ROLES.filter((r) => r !== 'admin');
 const ALL_INTERNAL  = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations', 'sales_agent', 'sales', 'sacco_admin'];
 
+/**
+ * Routes the Play Store app must not show, because they sell a subscription.
+ *
+ * The Android build is a Trusted Web Activity — the same site, not a separate
+ * bundle — so this is the only thing standing between a Play reviewer and a
+ * pricing page that charges M-Pesa for a digital service, which is what Google
+ * Play Billing policy covers. Signup and payment stay on the web; the app signs
+ * existing customers in. See utils/androidApp.js.
+ */
+const WebOnly = ({ children }) =>
+  isAndroidAppContext() ? <Navigate to="/login" replace /> : children;
+
 const Routes = () => {
   return (
     <BrowserRouter>
@@ -53,13 +67,18 @@ const Routes = () => {
         <RouterRoutes>
 
           {/* ── Public routes ──────────────────────────────────────────── */}
-          <Route path="/"                         element={<LandingPage />} />
+          {/* The landing page leads with plans and pricing, so the app opens on
+              sign-in instead. /user-registration-screen stays: it takes no payment. */}
+          <Route path="/"                         element={<WebOnly><LandingPage /></WebOnly>} />
           <Route path="/login"                    element={<LoginPage />} />
           <Route path="/reset-password"           element={<ResetPassword />} />
           <Route path="/user-registration-screen" element={<UserRegistrationScreen />} />
-          <Route path="/admin-registration"       element={<AdminRegistration />} />
+          <Route path="/admin-registration"       element={<WebOnly><AdminRegistration /></WebOnly>} />
           {/* External signer one-time link (no auth — token-scoped via edge function) */}
           <Route path="/sign/:token"              element={<ExternalSignPage />} />
+          {/* Shareable listing a sales agent sends a buyer. No auth: the token is
+              the credential, and listing-public decides what is safe to show. */}
+          <Route path="/listing/:token"           element={<PublicListing />} />
           {/* Embedded signing — same token flow, chrome-less, for iframes inside
               client apps; emits ararat-esign postMessage lifecycle events */}
           <Route path="/embed/sign/:token"        element={<ExternalSignPage embedded />} />
