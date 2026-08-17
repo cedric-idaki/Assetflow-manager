@@ -15,6 +15,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { clearTenantCache } from '../lib/tenant';
 import { logger } from '../utils/logger';
 import { registerCurrentDevice } from '../services/deviceService';
 
@@ -122,6 +123,10 @@ export const AuthProvider = ({ children }) => {
   }, [resetInactivityTimer]);
 
   // ── Profile loader (isolated, never called synchronously from auth callback) ─
+  // Always keyed by the auth user id, and every write back into state is gated
+  // on that id still being the signed-in one. A sign-out or a switch of user
+  // while this request is in flight must not paint the previous user's profile
+  // over the new session.
   const loadProfile = async (userId) => {
     if (!userId) return;
     setProfileLoading(true);
@@ -132,21 +137,29 @@ export const AuthProvider = ({ children }) => {
         .eq('id', userId)
         .maybeSingle();
 
+      // Stale response — the session moved on while we were waiting.
+      if (currentUserIdRef.current !== userId) return;
+
       if (error) {
         logger.warn('Profile load error', { userId, error: error.message });
+        // Fail closed: never leave the previous user's profile in state. A
+        // null profile is handled by RoleGuard, which offers a retry.
+        setUserProfile(null);
       } else {
         setUserProfile(data);
       }
     } catch (err) {
       logger.error('Profile load threw unexpectedly', { error: err?.message });
+      if (currentUserIdRef.current === userId) setUserProfile(null);
     } finally {
-      setProfileLoading(false);
+      if (currentUserIdRef.current === userId) setProfileLoading(false);
     }
   };
 
   const clearProfile = () => {
     setUserProfile(null);
     setProfileLoading(false);
+    clearTenantCache();
   };
 
   // ── Device restriction ───────────────────────────────────────────────────────
@@ -286,6 +299,15 @@ export const AuthProvider = ({ children }) => {
         incomingId === currentUserIdRef.current
       ) return;
 
+      // The authenticated user is changing (sign-out, or a different account
+      // signing in on this tab). Drop the outgoing user's profile NOW rather
+      // than when the new fetch lands, so nothing of theirs is ever rendered
+      // inside the incoming session.
+      if (incomingId !== currentUserIdRef.current) {
+        clearProfile();
+        resetDeviceCheck();
+      }
+
       setUser(session?.user ?? null);
       currentUserIdRef.current = incomingId;
       setLoading(false);
@@ -347,8 +369,13 @@ export const AuthProvider = ({ children }) => {
 
           if (!profileError && profile?.role) {
             redirectPath = getRoleRedirectPath(profile.role);
+            // Only merge into a profile that belongs to THIS user; otherwise
+            // start a fresh one. Merging blindly would graft the new user's
+            // role onto whatever profile happened to still be in state.
             setUserProfile((prev) =>
-              prev ? { ...prev, role: profile.role } : { id: userId, role: profile.role }
+              prev && prev.id === userId
+                ? { ...prev, role: profile.role }
+                : { id: userId, role: profile.role }
             );
           }
         } catch (profileFetchError) {

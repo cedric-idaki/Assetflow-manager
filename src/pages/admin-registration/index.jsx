@@ -29,12 +29,18 @@ const C = {
   primaryDark: '#1da8c5',
   navy:        '#0c2037',
   navyMid:     '#1a3a5c',
+  // Cyan ground with a white form card, matching the landing page.
+  ground:      '#34c1dd',
   bg:          '#f5f8fa',
   card:        '#ffffff',
   border:      '#d0dce6',
   inputBg:     '#f5f8fa',
   text:        '#0c2037',
-  textMuted:   '#5a7185',
+  // Darkened off #5a7185, which only reached 3.2:1 against the cyan ground.
+  textMuted:   '#1f3d4d',
+  // Small accent text on white: #34c1dd only reaches 2.1:1. Same value the
+  // login screen and the landing page use for this role.
+  accentDeep:  '#0a4a5a',
   error:       '#b91c1c',
   errorBg:     '#fef2f2',
   errorBorder: '#fecaca',
@@ -396,7 +402,7 @@ const AdminRegistration = () => {
   };
 
   return (
-    <div className="min-h-screen flex" style={{ background: C.card }}>
+    <div className="min-h-screen flex" style={{ background: C.ground }}>
       {/* Left branding panel — same product preview as the sign-in screen, but
           its step list doubles as the live registration progress tracker. */}
       <BrandPreviewPanel
@@ -409,8 +415,13 @@ const AdminRegistration = () => {
       {/* Right form panel. Top-aligned rather than centred: the steps differ a
           lot in height, and centring left a large empty band above the short
           ones (Plan) while making the heading jump between steps. */}
-      <div className="flex-1 flex flex-col items-center px-8 py-12 overflow-y-auto" style={{ background: C.card }}>
-        <div className="w-full max-w-lg">
+      <div className="flex-1 flex flex-col items-center px-6 sm:px-8 py-12 overflow-y-auto" style={{ background: C.ground }}>
+        {/* White card on the cyan, as on the landing page — the controls inside
+            keep their light-ground colours. */}
+        <div
+          className="w-full max-w-lg px-6 py-8 sm:px-9 rounded-2xl"
+          style={{ background: C.card, boxShadow: '0 24px 56px -28px rgba(12,32,55,0.45)' }}
+        >
 
           {/* Brand, mobile only — on lg+ the dark panel carries the lockup.
               Sits above the step header, so it shows on all four steps. */}
@@ -437,7 +448,7 @@ const AdminRegistration = () => {
 
           {/* Step header */}
           <div className="mb-6">
-            <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: C.primary }}>
+            <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: C.accentDeep }}>
               Step {currentStep + 1} of {steps.length}
             </p>
             <h2 className="text-2xl font-bold mb-3" style={{ color: C.navy }}>
@@ -494,7 +505,7 @@ const AdminRegistration = () => {
                         style={{
                           background: active ? 'rgba(52,193,221,0.1)' : C.inputBg,
                           border: `1.5px solid ${active ? C.primary : C.border}`,
-                          color: active ? C.primary : C.text,
+                          color: active ? C.accentDeep : C.text,
                           fontWeight: active ? '600' : '400',
                         }}
                       >
@@ -604,7 +615,7 @@ const AdminRegistration = () => {
                     type="button"
                     onClick={(e) => { e.preventDefault(); setShowTerms(true); }}
                     className="font-semibold underline underline-offset-2"
-                    style={{ color: C.primary }}
+                    style={{ color: C.accentDeep }}
                   >
                     Terms &amp; Privacy Policy
                   </button>
@@ -765,7 +776,7 @@ const AdminRegistration = () => {
                         <div className="flex flex-wrap gap-1.5">
                           {customAssetTypes.map(t => (
                             <span key={t} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs"
-                              style={{ background: 'rgba(52,193,221,0.1)', color: C.primary, border: `1px solid ${C.primary}` }}>
+                              style={{ background: 'rgba(52,193,221,0.1)', color: C.accentDeep, border: `1px solid ${C.primary}` }}>
                               {t}
                               <button type="button" onClick={() => removeCustomType(t)} className="hover:opacity-70">
                                 <Icon name="X" size={11} color={C.primary} />
@@ -850,7 +861,7 @@ const AdminRegistration = () => {
                       {activePlan.name[0]}
                     </div>
                     <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: C.primary }}>
+                      <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: C.accentDeep }}>
                         {isSacco ? 'Your Tier' : 'Your Plan'}
                       </p>
                       <p className="font-bold" style={{ color: C.navy }}>{activePlan.name}</p>
@@ -1030,7 +1041,7 @@ const AdminRegistration = () => {
                     <p className="text-sm mt-1" style={{ color: C.textMuted }}>
                       An Mpesa STK push has been sent to
                     </p>
-                    <p className="font-bold" style={{ color: C.primary }}>{mpesaPhone}</p>
+                    <p className="font-bold" style={{ color: C.accentDeep }}>{mpesaPhone}</p>
                     <p className="text-sm mt-2" style={{ color: C.textMuted }}>
                       Enter your Mpesa PIN to complete the payment of{' '}
                       <span className="font-bold" style={{ color: C.navy }}>
@@ -1048,8 +1059,8 @@ const AdminRegistration = () => {
                   )}
                   <button
                     onClick={() => navigate('/login')}
-                    className="w-full py-3 rounded-xl text-sm font-bold text-white transition-all"
-                    style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
+                    className="w-full py-3 rounded-xl text-sm font-bold transition-all"
+                    style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, color: C.navy, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
                   >
                     I have completed payment — Go to Login
                   </button>
@@ -1091,8 +1102,8 @@ const AdminRegistration = () => {
               <button
                 onClick={handleNext}
                 disabled={loading}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold text-white transition-all disabled:opacity-60 ml-auto"
-                style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-60 ml-auto"
+                style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, color: C.navy, boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
               >
                 {loading ? (
                   <>

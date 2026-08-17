@@ -211,6 +211,56 @@ Deno.serve(async (req) => {
       return json({ error: `Role "${callerRole}" is not permitted to create "${role}" accounts.` }, 403);
     }
 
+    // ── 4b. Decide the new account's TENANT — server-side ──────────────────
+    // SECURITY: admin_id decides which tenant's data the new login can reach
+    // (public.current_admin_id() reads it, and every tenant policy is built on
+    // that). It used to be taken straight from the request body, so any caller
+    // could POST `admin_id: <another tenant's admin uuid>` and mint themselves
+    // an account inside that tenant. It is now derived from the caller's own
+    // session, and only super_admin — the one role that legitimately acts
+    // across tenants — may still name a tenant explicitly.
+    //
+    //   • tenant-owner roles (admin, sacco_admin) sit at the top of their own
+    //     tree, so their admin_id is NULL. That is what makes a newly
+    //     registered admin a clean, independent account.
+    //   • everyone else joins the caller's tenant.
+    const callerTenantId = (callerProfile.admin_id as string | null) ?? caller.id;
+    const isTenantOwnerRole = role === 'admin' || role === 'sacco_admin';
+
+    let resolvedAdminId: string | null;
+    if (isTenantOwnerRole) {
+      resolvedAdminId = null;
+    } else if (callerRole === 'super_admin') {
+      // The platform operator may place an account in any tenant.
+      resolvedAdminId = (admin_id as string | null) ?? null;
+    } else {
+      resolvedAdminId = callerTenantId;
+    }
+
+    // A sales agent's tenant lives on their `agents` row, which can differ from
+    // user_profiles.admin_id for agents provisioned by a super admin. Accept a
+    // body-supplied tenant ONLY when the caller demonstrably belongs to it.
+    if (
+      !isTenantOwnerRole &&
+      callerRole !== 'super_admin' &&
+      admin_id &&
+      admin_id !== resolvedAdminId
+    ) {
+      const { data: ownAgentRow } = await adminClient
+        .from('agents')
+        .select('id')
+        .eq('user_id', caller.id)
+        .eq('admin_id', admin_id)
+        .maybeSingle();
+
+      if (!ownAgentRow) {
+        return json({
+          error: 'Not authorised to create an account in another tenant.',
+        }, 403);
+      }
+      resolvedAdminId = admin_id as string;
+    }
+
     const cleanEmail = String(email).toLowerCase().trim();
 
     // ── 5. Create the auth user with service role (bypasses RLS) ──────────
@@ -223,7 +273,7 @@ Deno.serve(async (req) => {
         role,
         phone:      phone || null,
         department: department || null,
-        admin_id:   admin_id || null,
+        admin_id:   resolvedAdminId,
         created_by: caller.id,
         // Every account provisioned here starts on a password someone else
         // chose (a temp password or one typed by the creating admin). The app
@@ -253,7 +303,7 @@ Deno.serve(async (req) => {
         gender:     gender || null, // 'male' | 'female' (constrained in DB)
         role,
         department: department || null,
-        admin_id:   admin_id || null,
+        admin_id:   resolvedAdminId,
         is_active:  true,
       }, { onConflict: 'id' });
 

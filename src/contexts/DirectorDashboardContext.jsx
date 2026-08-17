@@ -6,27 +6,25 @@
  * Key behaviours:
  *  - hasLoaded guard (useRef) prevents re-fetch on remount after first load
  *  - refetch() bypasses the guard so the "Refresh" button still works
- *  - user?.id in useEffect deps resets the guard on auth change (logout/login)
+ *  - useAuthScopedLoader clears the data and reloads whenever the signed-in
+ *    user changes, so one user's figures are never shown to the next
  *  - modals / openModal / closeModal follow the same pattern as AdminDashboardContext
  */
 import React, {
   createContext,
   useContext,
   useState,
-  useEffect,
   useCallback,
   useRef,
 } from 'react';
 import { supabase } from '../lib/supabase';
-import { useAuth } from './AuthContext';
+import { useAuthScopedLoader } from '../hooks/useAuthScopedLoader';
 
 const DirectorDashboardContext = createContext(null);
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export const DirectorDashboardProvider = ({ children }) => {
-  const { user } = useAuth();
-
   // ── Data state ──────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(true);
   const [kpis, setKpis] = useState({});
@@ -168,20 +166,23 @@ export const DirectorDashboardProvider = ({ children }) => {
     return fetchAll();
   }, [fetchAll]);
 
-  // ── Trigger fetch on mount; guard prevents re-fetch on remount ─────────────
-  // user?.id in deps resets the guard when the authenticated user changes
-  useEffect(() => {
-    if (hasLoaded.current) return;
-    fetchAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount only — hasLoaded guard handles remount protection
-
-  // ── Reset hasLoaded when user changes (logout / login) ─────────────────────
-  useEffect(() => {
+  // ── Clear this user's data before anyone else's session can render it ─────
+  const resetState = useCallback(() => {
     hasLoaded.current = false;
-    fetchAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+    setKpis({});
+    setCollectionTrend([]);
+    setTopAssets([]);
+    setAgentPerformance([]);
+    setPortfolioHealth({});
+    setLastUpdated(null);
+    setLoading(true);
+  }, []);
+
+  // Loads once per signed-in user; resets on every change of user, including
+  // sign-out. The queries here are deliberately unfiltered — a director sees
+  // their whole company — so RLS is what keeps them inside their own tenant,
+  // and this is what keeps the previous tenant's figures off the screen.
+  useAuthScopedLoader(fetchAll, resetState);
 
   // ── Context value ───────────────────────────────────────────────────────────
   const value = {

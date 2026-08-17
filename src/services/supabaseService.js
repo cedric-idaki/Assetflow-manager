@@ -154,7 +154,9 @@ export var assetsService = {
 
       if (f.status) query = query.eq('asset_status', f.status);
       if (f.type) query = query.eq('asset_type', f.type);
-      if (f.adminId) query = query.eq('registered_by', f.adminId);
+      // Tenant, not "whoever keyed the row in": an asset registered by a staff
+      // member belongs to the admin that owns them.
+      if (f.adminId) query = query.eq('admin_id', f.adminId);
       if (f.search) {
         query = query.or(
           'description.ilike.%' + f.search + '%,' +
@@ -326,7 +328,7 @@ export var assetsService = {
         .select('id, asset_code, description, asset_type, asset_status, selling_price, quantity_available')
         .eq('asset_status', status)
         .order('updated_at', { ascending: false });
-      if (adminId) query = query.eq('registered_by', adminId);
+      if (adminId) query = query.eq('admin_id', adminId);
       return query;
     }, 'assetsService.getByStatus');
   },

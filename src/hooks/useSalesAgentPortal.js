@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { auditLogsService } from '../services/supabaseService';
 import { sendAssistRequest, sendAssistUpdate } from '../services/emailService';
 import {
@@ -394,9 +395,29 @@ export const useSalesAgentPortal = () => {
     }
   }, [user?.id, fetchAgentProfile, fetchLeads, fetchWallet, fetchExpenses, fetchFollowUps, fetchCompletedFollowUps, fetchActivityFeed, fetchAssists]);
 
-  useEffect(() => {
-    if (user?.id) loadAll();
-  }, [user?.id]);
+  // Everything below belongs to one agent. Clearing it on every change of user
+  // — not just reloading — is what stops the next agent to sign in on this
+  // browser from seeing the previous agent's leads, wallet and commissions
+  // while their own data is still in flight.
+  const resetState = useCallback(() => {
+    setAgentProfile(null);
+    setAgentMode('company');
+    setLeads([]);
+    setGoldAgents([]);
+    setAssists([]);
+    setAssistsError(null);
+    setWalletTransactions([]);
+    setExpenses([]);
+    setFollowUps([]);
+    setCompletedFollowUps([]);
+    setActivityFeed([]);
+    setCommissions([]);
+    setLoading(true);
+    setConnected(false);
+    setError(null);
+  }, []);
+
+  useAuthScopedLoader(loadAll, resetState);
 
   // ── Realtime subscriptions ────────────────────────────────────────────────
   useEffect(() => {

@@ -6,6 +6,21 @@ import { auditLogsService } from '../services/supabaseService';
 export const VAT_RATE = 0.16;
 
 // ── Amortisation engine (BRS Section 4.3) ────────────────────────────────────
+
+// The level monthly payment that clears `financed` over `tenureMonths` at
+// `annualInterestRate`. Exported so anything that has to restate a plan's
+// installment (the Finance Hub invoice, for one) uses this exact formula
+// instead of re-deriving it.
+export const monthlyInstallmentFor = ({ financed, annualInterestRate, tenureMonths }) => {
+  const principal = parseFloat(financed) || 0;
+  const months    = parseInt(tenureMonths, 10) || 0;
+  if (months <= 0) return 0;
+  const monthlyRate = (parseFloat(annualInterestRate) || 0) / 100 / 12;
+  if (monthlyRate === 0) return principal / months;
+  return (principal * monthlyRate * Math.pow(1 + monthlyRate, months)) /
+         (Math.pow(1 + monthlyRate, months) - 1);
+};
+
 export const buildInstallmentSchedule = ({
   sellingPrice,
   deposit,
@@ -15,18 +30,9 @@ export const buildInstallmentSchedule = ({
   penaltyRatePerMonth = 0,
   gracePeriodDays = 0,
 }) => {
-  const financed   = sellingPrice - deposit;
+  const financed    = sellingPrice - deposit;
   const monthlyRate = annualInterestRate / 100 / 12;
-  let monthlyInstallment;
-
-  if (monthlyRate === 0) {
-    monthlyInstallment = financed / tenureMonths;
-  } else {
-    // Standard amortisation formula
-    monthlyInstallment =
-      (financed * monthlyRate * Math.pow(1 + monthlyRate, tenureMonths)) /
-      (Math.pow(1 + monthlyRate, tenureMonths) - 1);
-  }
+  const monthlyInstallment = monthlyInstallmentFor({ financed, annualInterestRate, tenureMonths });
 
   const schedule = [];
   let openingBalance = financed;
@@ -158,7 +164,8 @@ export const usePOS = () => {
       const { data, error } = await supabase
         .from('assets')
         .select('*')
-        .eq('registered_by', aId)
+        // Tenant-owned stock, however it got registered.
+        .eq('admin_id', aId)
         .eq('asset_status', 'available')
         .order('description');
 

@@ -16,16 +16,21 @@ const STEPS = [
 const C = {
   primary:     '#34c1dd',
   primaryDark: '#1da8c5',
+  // Small accent text on light: #1da8c5 only reaches 2.8:1. Shared with the
+  // landing page's --accent-deep so the two screens use one accent.
+  accentDeep:  '#0a4a5a',
   primarySoft: '#5dd3e8',
   navy:        '#0c2037',
   navyMid:     '#1a3a5c',
-  bg:          '#f5f8fa',
-  bg2:         '#eaf1f6',
+  // Cyan ground with a white form card, matching the landing page.
+  bg:          '#34c1dd',
+  bg2:         '#effafd',
   card:        '#ffffff',
   border:      '#d0dce6',
   inputBg:     '#f5f8fa',
   text:        '#0c2037',
-  textMuted:   '#5a7185',
+  // Darkened off #5a7185, which only reached 3.2:1 against the cyan ground.
+  textMuted:   '#1f3d4d',
   onNavy:      '#ffffff',
   onNavyMuted: '#7a9cb8',
   onNavyFaint: '#3a5a7a',
@@ -159,11 +164,13 @@ const LoginPage = () => {
 
   const brand = (
     <div className="relative z-10 flex items-center gap-3">
+      {/* Navy tile with a cyan glyph — the landing page's brand-mark. A cyan
+          tile would disappear into the cyan ground. */}
       <div
         className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
-        style={{ background: 'linear-gradient(135deg, #34c1dd, #1da8c5)', boxShadow: '0 4px 14px rgba(52,193,221,0.35)' }}
+        style={{ background: C.navy, boxShadow: '0 4px 14px rgba(12,32,55,0.30)' }}
       >
-        <Icon name="Building2" size={22} color={C.navy} />
+        <Icon name="Building2" size={22} color={C.primary} />
       </div>
       <div style={{ ...SERIF, fontSize: '20px', fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>Ararat</div>
     </div>
@@ -242,12 +249,18 @@ const LoginPage = () => {
       <div
         className="relative flex flex-col min-h-screen px-6 py-8 sm:px-12 sm:py-9"
         style={{
-          background: 'radial-gradient(700px 340px at 10% -10%, rgba(52,193,221,0.10), transparent 60%), ' + C.bg,
+          background: 'radial-gradient(700px 340px at 10% -10%, rgba(255,255,255,0.30), transparent 60%), ' + C.bg,
         }}
       >
         {brand}
 
-        <div className="relative z-10 flex-1 flex flex-col justify-center w-full max-w-[400px] mx-auto py-8">
+        {/* The form sits in a white card on the cyan, the way the landing page
+            floats its cards — so every control inside keeps its light-ground
+            colours and needs no re-tuning. */}
+        <div
+          className="relative z-10 flex flex-col justify-center w-full max-w-[440px] mx-auto my-auto px-7 py-9 sm:px-9 rounded-2xl"
+          style={{ background: C.card, boxShadow: '0 24px 56px -28px rgba(12,32,55,0.45)' }}
+        >
 
           {/* ── Forgot password ── */}
           {showForgot ? (
@@ -272,7 +285,7 @@ const LoginPage = () => {
                     Check your email
                   </h2>
                   <p className="text-sm mb-2" style={{ color: C.textMuted }}>We sent a password reset link to:</p>
-                  <p className="text-sm font-bold mb-4" style={{ ...MONO, color: C.primaryDark }}>{forgotEmail}</p>
+                  <p className="text-sm font-bold mb-4" style={{ ...MONO, color: C.accentDeep }}>{forgotEmail}</p>
                   <p className="text-xs" style={{ color: C.textMuted }}>
                     Click the link in the email to set a new password. Check your spam folder if you do not see it.
                   </p>
@@ -281,13 +294,13 @@ const LoginPage = () => {
                 <div>
                   <div
                     className="inline-flex items-center gap-2 rounded mb-5"
-                    style={{ ...LABEL, fontSize: '12px', color: C.primaryDark, background: C.bg2, border: '1px solid ' + C.border, padding: '6px 11px 6px 9px', width: 'fit-content' }}
+                    style={{ ...LABEL, fontSize: '12px', color: C.accentDeep, background: C.bg2, border: '1px solid ' + C.border, padding: '6px 11px 6px 9px', width: 'fit-content' }}
                   >
                     <span className="rounded-full" style={{ width: '6px', height: '6px', background: C.primary }} />
                     Password reset
                   </div>
                   <h1 style={{ ...SERIF, fontSize: 'clamp(26px, 3.2vw, 34px)', lineHeight: 1.12, fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>
-                    Let&rsquo;s get you<br />back in<span style={{ color: C.primary }}>.</span>
+                    Let&rsquo;s get you<br />back in<span style={{ color: C.accentDeep }}>.</span>
                   </h1>
                   <p className="mt-2.5 text-sm" style={{ color: C.textMuted, maxWidth: '38ch' }}>
                     Enter your email address and we&rsquo;ll send you a link to set a new password.
@@ -353,17 +366,17 @@ const LoginPage = () => {
             <div>
               <div
                 className="inline-flex items-center gap-2 rounded mb-5"
-                style={{ ...LABEL, fontSize: '12px', color: C.primaryDark, background: C.bg2, border: '1px solid ' + C.border, padding: '6px 11px 6px 9px', width: 'fit-content' }}
+                style={{ ...LABEL, fontSize: '12px', color: C.accentDeep, background: C.bg2, border: '1px solid ' + C.border, padding: '6px 11px 6px 9px', width: 'fit-content' }}
               >
                 <span className="rounded-full" style={{ width: '6px', height: '6px', background: C.primary }} />
                 Member sign-in
               </div>
 
               <h1 style={{ ...SERIF, fontSize: 'clamp(26px, 3.2vw, 34px)', lineHeight: 1.12, fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>
-                Good to see you<br />back<span style={{ color: C.primary }}>.</span>
+                Good to see you<br />back<span style={{ color: C.accentDeep }}>.</span>
               </h1>
               <p className="mt-2.5 text-sm" style={{ color: C.textMuted, maxWidth: '38ch' }}>
-                Sign in and pick up right where you left off — no re-learning, no lost work.
+                Sign in and pick up right where you left off no re-learning, no lost work.
               </p>
 
               {error && (
@@ -452,7 +465,7 @@ const LoginPage = () => {
                     type="button"
                     onClick={function() { setShowForgot(true); setForgotEmail(email); }}
                     className="text-[13.5px] font-semibold hover:underline transition-colors"
-                    style={{ color: C.primaryDark, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                    style={{ color: C.accentDeep, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                   >
                     Forgot password?
                   </button>

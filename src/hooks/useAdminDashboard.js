@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, getAccessToken } from '../lib/supabase';
+import { getTenantAdminId } from '../lib/tenant';
+import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { emailLoginCredentials, generateTempPassword } from '../services/credentialsEmailService';
 
 // Account number (BRS 3.4 format, same as the client registration form):
@@ -75,10 +77,10 @@ export const useAdminDashboard = () => {
   const channelsRef = useRef([]);
   const hasLoaded   = useRef(false);
 
-  const getAdminId = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    return user?.id;
-  };
+  // The TENANT that owns this session's data, not the signed-in user's own id:
+  // an admin's staff must see the admin's rows, and never anyone else's.
+  // Mirrors public.current_admin_id(), which is what RLS enforces server-side.
+  const getAdminId = async () => getTenantAdminId();
 
   // ── Company profile ──────────────────────────────────────────────────────────
   const fetchCompanyProfile = useCallback(async () => {
@@ -127,9 +129,9 @@ export const useAdminDashboard = () => {
         supabase.from('clients').select('id', { count: 'exact', head: true }).eq('admin_id', adminId),
         supabase.from('clients').select('id', { count: 'exact', head: true }).eq('admin_id', adminId).eq('client_status', 'active'),
         supabase.from('clients').select('id', { count: 'exact', head: true }).eq('admin_id', adminId).eq('kyc_status', 'unverified'),
-        supabase.from('assets').select('selling_price').eq('registered_by', adminId),
+        supabase.from('assets').select('selling_price').eq('admin_id', adminId),
         supabase.from('agents').select('id', { count: 'exact', head: true }).eq('admin_id', adminId),
-        supabase.from('payments').select('amount, payment_status').eq('processed_by', adminId),
+        supabase.from('payments').select('amount, payment_status').eq('admin_id', adminId),
         supabase.from('clients').select('outstanding_balance').eq('admin_id', adminId),
         supabase.from('company_contracts').select('id', { count: 'exact', head: true }).eq('admin_id', adminId),
         supabase.from('user_profiles').select('id', { count: 'exact', head: true }).eq('admin_id', adminId).eq('is_active', true),
@@ -173,7 +175,7 @@ export const useAdminDashboard = () => {
     const { data } = await supabase
       .from('assets')
       .select('*, linked_client:clients(full_name, account_number)')
-      .eq('registered_by', adminId);
+      .eq('admin_id', adminId);
     setAssets(data || []);
   }, []);
 
@@ -205,7 +207,7 @@ export const useAdminDashboard = () => {
     const { data } = await supabase
       .from('payments')
       .select('*, client:clients(full_name, account_number)')
-      .eq('processed_by', adminId);
+      .eq('admin_id', adminId);
     setPayments(data || []);
   }, []);
 
@@ -490,14 +492,37 @@ const uploadContract = useCallback(async (formData, file, onProgress) => {
     URL.revokeObjectURL(url);
   }, []);
 
-  // ── Initial load ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (hasLoaded.current) return;
-    fetchAll();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Reset ────────────────────────────────────────────────────────────────────
+  // Wipes every row this hook holds. This provider is mounted above the router
+  // and therefore outlives a sign-out, so without this the next user to sign in
+  // on the same tab would render the previous user's data.
+  const resetState = useCallback(() => {
+    hasLoaded.current = false;
+    setStats({
+      totalClients: 0, activeClients: 0, totalAssets: 0, totalRevenue: 0,
+      outstandingBalance: 0, totalAgents: 0, pendingKYC: 0, totalContracts: 0,
+      totalStaff: 0,
+    });
+    setClients([]);
+    setAssets([]);
+    setAgents([]);
+    setStaff([]);
+    setContracts([]);
+    setPayments([]);
+    setAuditLogs([]);
+    setSubscription(null);
+    setCompanyProfile(null);
+    setSalesAnalytics([]);
+    setLoading(true);
+    setConnectionStatus('connecting');
+  }, []);
+
+  // ── Initial load — once per signed-in user, never while signed out ──────────
+  const userId = useAuthScopedLoader(fetchAll, resetState);
 
   // ── Realtime ─────────────────────────────────────────────────────────────────
   useEffect(() => {
+    if (!userId) return undefined;
     const t = Date.now();
 
     const clientsCh = supabase
@@ -532,7 +557,9 @@ const uploadContract = useCallback(async (formData, file, onProgress) => {
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-subscribed per user: a channel opened for the previous session would
+    // otherwise keep pushing refetches into the new one.
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Return ───────────────────────────────────────────────────────────────────
   return {

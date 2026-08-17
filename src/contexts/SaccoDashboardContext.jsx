@@ -14,6 +14,7 @@ import React, {
   createContext, useContext, useState, useEffect, useCallback, useRef,
 } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuthScopedLoader } from '../hooks/useAuthScopedLoader';
 import { generateSchedule } from '../utils/saccoAmortization';
 import { tierForMembers, calculateMonthlyBill } from '../config/saccoTiers';
 
@@ -1293,14 +1294,52 @@ export const SaccoDashboardProvider = ({ children }) => {
     URL.revokeObjectURL(url);
   }, []);
 
-  // ── Initial load ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (hasLoaded.current) return;
-    fetchAll();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Reset ────────────────────────────────────────────────────────────────────
+  // One sacco's entire book lives in this provider, and the provider outlives a
+  // sign-out because it is mounted above the router. Everything goes back to
+  // its initial value whenever the signed-in user changes, so a second sacco
+  // admin signing in on the same browser never sees the first one's members,
+  // contributions, loans or share register.
+  const resetState = useCallback(() => {
+    hasLoaded.current = false;
+    setSacco(null);
+    setMembers([]);
+    setContributions([]);
+    setContributionTypes([]);
+    setContributionAudit([]);
+    setLoanProducts([]);
+    setLoans([]);
+    setSchedules([]);
+    setShares([]);
+    setSharePrices([]);
+    setListings([]);
+    setTransfers([]);
+    setTreasury(null);
+    setShareSettings(null);
+    setShareTxns([]);
+    setCertificates([]);
+    setDividends([]);
+    setDividendAllocations([]);
+    setShareAudit([]);
+    setMotions([]);
+    setVotes([]);
+    setElections([]);
+    setElectionPositions([]);
+    setElectionCandidates([]);
+    setElectionVoters([]);
+    setElectionAudit([]);
+    setDocuments([]);
+    setInvoices([]);
+    setLoading(true);
+    setConnectionStatus('connecting');
+  }, []);
+
+  // ── Initial load — once per signed-in user ───────────────────────────────────
+  const userId = useAuthScopedLoader(fetchAll, resetState);
 
   // ── Realtime (core tables) ────────────────────────────────────────────────────
   useEffect(() => {
+    if (!userId) return undefined;
     const t = Date.now();
     const mk = (name, table, cb) => supabase
       .channel(`sacco_${name}_${t}`)
@@ -1332,7 +1371,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       channelsRef.current.forEach((ch) => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
     sacco, members, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,

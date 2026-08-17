@@ -42,8 +42,8 @@ export const useAgentCatalog = (agentProfile) => {
   const [error,   setError]   = useState(null);
 
   const fetchAssets = useCallback(async () => {
-    // RLS scopes this to the agent's tenant; there is no admin_id to filter on
-    // here because assets are tenanted through registered_by.
+    // RLS (assets_tenant_staff) scopes this to the agent's own tenant via
+    // assets.admin_id, so the catalogue can never list another company's stock.
     const { data, error: err } = await supabase
       .from('assets')
       .select(CATALOG_COLUMNS)

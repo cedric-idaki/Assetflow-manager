@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuthScopedLoader } from './useAuthScopedLoader';
+import { monthlyInstallmentFor } from './usePOS';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // KENYA TAX ENGINE (2025/26)
@@ -94,6 +96,56 @@ export const TRIGGER_LABELS = {
 };
 
 export const DEFAULT_COA = [];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POS PLAN TERMS
+//
+// The hire-purchase terms a POS sale carries, restated in the shape the invoice
+// renders: what the client pays each month and over how long. `firstInstallment`
+// is row 1 of the sale's amortised schedule when it exists — that row is what
+// the collections hub actually bills against, so it wins over the formula.
+// ─────────────────────────────────────────────────────────────────────────────
+export const buildSalePlan = (sale, firstInstallment = null) => {
+  if (!sale) return null;
+  const tenure = parseInt(sale.tenure_months, 10) || 0;
+  if (tenure <= 0 || sale.pricing_model === 'cash') return null;
+
+  const financed = parseFloat(sale.finance_balance || 0);
+  const deposit  = parseFloat(sale.deposit_amount  || 0);
+  const monthly  = firstInstallment
+    ? parseFloat(firstInstallment.installment_amount || 0)
+    : monthlyInstallmentFor({
+        financed,
+        annualInterestRate: sale.interest_rate,
+        tenureMonths:       tenure,
+      });
+
+  // The schedule's own first due date is the truth; `payment_start_date` is the
+  // date the plan was set up against and only stands in when rows are missing.
+  const startDate = firstInstallment?.due_date || sale.payment_start_date || null;
+  let finalDue = null;
+  if (startDate) {
+    const d = new Date(startDate);
+    if (!Number.isNaN(d.getTime())) {
+      d.setMonth(d.getMonth() + (tenure - 1));
+      finalDue = d.toISOString().split('T')[0];
+    }
+  }
+
+  return {
+    sale_id:             sale.id,
+    sale_invoice_no:     sale.invoice_number || '',
+    pricing_model:       sale.pricing_model,
+    tenure_months:       tenure,
+    monthly_installment: round2(monthly),
+    deposit,
+    financed,
+    interest_rate:       parseFloat(sale.interest_rate || 0),
+    start_date:          startDate,
+    final_due_date:      finalDue,
+    plan_total:          round2(deposit + monthly * tenure),
+  };
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HOOK
@@ -203,8 +255,78 @@ export const useFinanceHub = () => {
         reference:    inv.reference      || '—',
         notes:        inv.notes          || '',
         items,
+        plan:         null,   // hand-raised invoices carry no POS plan
+        seller:       null,   // …and are headed by the tenant raising them
       };
     });
+  }, []);
+
+  // ── POS hire-purchase terms ──────────────────────────────────────────────────
+  // A payment on its own says nothing about the plan it belongs to. The POS
+  // writes the terms to `sales` (tenure, deposit, rate) and the amortised
+  // schedule to `installment_schedules`, so the invoice reads both back and can
+  // state what the client pays each month and for how long.
+  //
+  // Payments link to their sale by invoice number (the POS puts the sale's
+  // invoice_number on the deposit as transaction_id); later collections carry a
+  // receipt number instead, so those fall back to the client's most recent sale
+  // of that asset.
+  const fetchSalePlans = useCallback(async (aId, payments) => {
+    const clientIds = [...new Set((payments || []).map(p => p.client_id).filter(Boolean))];
+    if (clientIds.length === 0) return {};
+
+    const { data: sales, error: sErr } = await supabase
+      .from('sales')
+      .select('id, invoice_number, client_id, asset_id, pricing_model, selling_price, deposit_amount, finance_balance, interest_rate, tenure_months, payment_start_date, sale_date')
+      .eq('admin_id', aId)
+      .in('client_id', clientIds)
+      .order('sale_date', { ascending: false })
+      .limit(500);
+    if (sErr) throw sErr;
+
+    // Cash sales have nothing to schedule — only financed plans carry terms.
+    const financed = (sales || []).filter(
+      s => s.pricing_model !== 'cash' && parseInt(s.tenure_months, 10) > 0
+    );
+    if (financed.length === 0) return {};
+
+    const byInvoiceNo = {};
+    const byClientAsset = {};
+    financed.forEach(s => {
+      if (s.invoice_number && !byInvoiceNo[s.invoice_number]) byInvoiceNo[s.invoice_number] = s;
+      const key = `${s.client_id}|${s.asset_id}`;
+      if (!byClientAsset[key]) byClientAsset[key] = s;   // rows arrive newest-first
+    });
+
+    // Only the sales actually behind the payments on screen.
+    const saleFor = {};
+    (payments || []).forEach(p => {
+      const sale = (p.transaction_id && byInvoiceNo[p.transaction_id])
+        || byClientAsset[`${p.client_id}|${p.asset_id}`];
+      if (sale) saleFor[p.id] = sale;
+    });
+    const saleIds = [...new Set(Object.values(saleFor).map(s => s.id))];
+    if (saleIds.length === 0) return {};
+
+    // The schedule is the authority on the monthly figure — it is what the
+    // collections hub bills against. The formula below only covers plans whose
+    // schedule rows never got written.
+    const firstRow = {};
+    try {
+      const { data: rows } = await supabase
+        .from('installment_schedules')
+        .select('sale_id, installment_amount, due_date')
+        .in('sale_id', saleIds)
+        .eq('installment_no', 1);
+      (rows || []).forEach(r => { firstRow[r.sale_id] = r; });
+    } catch { /* fall through to the computed installment */ }
+
+    const plans = {};
+    Object.entries(saleFor).forEach(([paymentId, s]) => {
+      const plan = buildSalePlan(s, firstRow[s.id] || null);
+      if (plan) plans[paymentId] = plan;
+    });
+    return plans;
   }, []);
 
   const fetchInvoices = useCallback(async (aId) => {
@@ -212,7 +334,9 @@ export const useFinanceHub = () => {
       const { data: payments, error: pErr } = await supabase
         .from('payments')
         .select('id, amount, payment_date, payment_status, transaction_id, reference_number, payment_method, notes, created_at, client_id, asset_id')
-        .eq('processed_by', aId)
+        // The tenant's payments, not just the ones this admin keyed in
+        // personally — M-Pesa settlements and staff-entered receipts count too.
+        .eq('admin_id', aId)
         .order('payment_date', { ascending: false })
         .limit(200);
       if (pErr) throw pErr;
@@ -232,10 +356,31 @@ export const useFinanceHub = () => {
       if (assetIds.length > 0) {
         const { data: assets } = await supabase
           .from('assets')
-          .select('id, asset_code, description, asset_type, make, model, year, plate_number')
+          .select('id, asset_code, description, asset_type, make, model, year, plate_number, admin_id')
           .in('id', assetIds);
         (assets || []).forEach(a => { assetMap[a.id] = a; });
       }
+
+      // The company an invoice is raised under is the one the ASSET belongs to —
+      // that is who the client bought from, and whose name, PIN and address the
+      // invoice has to be headed with. Assets are tenant-scoped by admin_id, so
+      // that id resolves straight to a company profile. Selected with '*' because
+      // the optional columns (kra_pin, physical_address) are not on every
+      // deployment and naming a missing one would fail the whole read.
+      const sellerIds = [...new Set(Object.values(assetMap).map(a => a.admin_id).filter(Boolean))];
+      let sellerMap = {};
+      if (sellerIds.length > 0) {
+        try {
+          const { data: sellers } = await supabase
+            .from('company_profiles').select('*').in('admin_id', sellerIds);
+          (sellers || []).forEach(c => { sellerMap[c.admin_id] = c; });
+        } catch { sellerMap = {}; }   // falls back to the hub's own company profile
+      }
+
+      // Plan terms are additive: a failure to read them (missing table, RLS)
+      // must still leave the invoice list intact, just without the plan block.
+      let planMap = {};
+      try { planMap = await fetchSalePlans(aId, payments || []); } catch { planMap = {}; }
 
       const now = new Date();
       const mapped = (payments || []).map((p, i) => {
@@ -274,6 +419,8 @@ export const useFinanceHub = () => {
           reference:    p.reference_number || '—',
           notes:        p.notes            || '',
           items:        null,
+          plan:         planMap[p.id] || null,
+          seller:       (asset && sellerMap[asset.admin_id]) || null,
         };
       });
 
@@ -288,7 +435,7 @@ export const useFinanceHub = () => {
       setInvoices(all);
       return all;
     } catch { setInvoices([]); return []; }
-  }, [fetchManualInvoices]);
+  }, [fetchManualInvoices, fetchSalePlans]);
 
   const fetchJournalEntries = useCallback(async (aId) => {
     try {
@@ -327,15 +474,13 @@ export const useFinanceHub = () => {
 
   const fetchAssets = useCallback(async (aId) => {
     try {
-      // assets are keyed by registered_by, so the tenant's set is "registered by
-      // the admin or by anyone under them" — staff-registered assets count too.
-      const { data: staff } = await supabase
-        .from('user_profiles').select('id').eq('admin_id', aId);
-      const registrants = [aId, ...(staff || []).map(s => s.id)];
+      // assets.admin_id names the owning tenant directly, so the old
+      // "registered by the admin or anyone under them" expansion is gone:
+      // staff-registered assets carry the same admin_id as the admin's own.
       const { data } = await supabase
         .from('assets')
         .select('id, asset_code, description, asset_type, make, model, year, plate_number, selling_price, linked_client_id')
-        .in('registered_by', registrants)
+        .eq('admin_id', aId)
         .order('created_at', { ascending: false })
         .limit(500);
       setAssets(data || []);
@@ -426,7 +571,35 @@ export const useFinanceHub = () => {
       fetchEmployees, fetchCompanyProfile, fetchCOA, fetchClients, fetchAssets,
       computeSummary]);
 
-  useEffect(() => { loadAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Finance Hub holds an entire company's books, so nothing may survive a
+  // change of signed-in user — including adminId itself, which is the tenant
+  // every fetch and every realtime channel here is keyed on.
+  const resetState = useCallback(() => {
+    setAdminId(null);
+    setCompanyProfile(null);
+    setInvoices([]);
+    setJournalEntries([]);
+    setAutomatedEntries([]);
+    setPayrollRecords([]);
+    setEmployees([]);
+    setClients([]);
+    setAssets([]);
+    setChartOfAccounts([]);
+    setFinancialSummary({
+      totalRevenue: 0, totalExpenses: 0, netProfit: 0,
+      totalAssets: 0, totalLiabilities: 0, equity: 0,
+      totalInterestIncome: 0, totalPenaltyIncome: 0,
+      totalCOGS: 0, grossProfit: 0, grossMargin: 0,
+      totalSalaries: 0, pendingInvoices: 0, overdueInvoices: 0,
+      outputVAT: 0, inputVAT: 0, netVAT: 0,
+      cashFromOperations: 0, cashFromInvesting: 0, cashFromFinancing: 0,
+      openingCash: 0, closingCash: 0,
+    });
+    setLoading(true);
+    setError(null);
+  }, []);
+
+  useAuthScopedLoader(loadAll, resetState);
 
   // Real-time journal updates
   useEffect(() => {

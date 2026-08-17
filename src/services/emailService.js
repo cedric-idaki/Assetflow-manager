@@ -25,10 +25,14 @@ export const sendPaymentConfirmation = async (toEmail, { transaction, client, as
 /**
  * Send invoice email
  * @param {string} toEmail - Recipient email
- * @param {{ invoice, client, asset, lineItems }} data
+ * @param {{ invoice, client, asset, lineItems, plan, company }} data
+ *   `plan` is the hire-purchase schedule behind the invoice (monthly
+ *   installment, tenure, deposit) — omitted for cash sales.
+ *   `company` is the selling company the asset came from, which heads the
+ *   invoice.
  */
-export const sendInvoiceEmail = async (toEmail, { invoice, client, asset, lineItems }) => {
-  return callEmailFunction('invoice', toEmail, { invoice, client, asset, lineItems });
+export const sendInvoiceEmail = async (toEmail, { invoice, client, asset, lineItems, plan, company }) => {
+  return callEmailFunction('invoice', toEmail, { invoice, client, asset, lineItems, plan, company });
 };
 
 /**

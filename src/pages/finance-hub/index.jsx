@@ -19,6 +19,38 @@ const fmtDate  = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-di
 const fmtMonth = (m) => m ? new Date(m + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) : '—';
 const fmtPct   = (n) => `${parseFloat(n || 0).toFixed(1)}%`;
 
+// The company an invoice is headed with: the one the asset came from, falling
+// back to the tenant viewing the hub when the asset carries no profile of its
+// own (a hand-raised invoice, or a company profile RLS keeps out of reach).
+export const invoiceSeller = (inv, companyProfile) => {
+  const co = inv?.seller || companyProfile || null;
+  return {
+    name:    co?.company_name || 'Ararat Company',
+    kra_pin: co?.kra_pin || '',
+    // Registration captures location + city; physical_address is filled in later
+    // from settings, so the invoice takes whichever the tenant actually has.
+    address: co?.physical_address || [co?.location, co?.city].filter(Boolean).join(', '),
+    email:   co?.email || '',
+    phone:   co?.phone || '',
+    reg_no:  co?.business_registration_number || '',
+  };
+};
+
+// Plan length stated both ways — "24 months (2 years)" — so a client reading the
+// invoice never has to convert one into the other.
+const fmtDuration = (months) => {
+  const m = parseInt(months, 10) || 0;
+  if (m <= 0) return '—';
+  const inMonths = `${m} month${m === 1 ? '' : 's'}`;
+  if (m < 12) return inMonths;
+  const years = Math.floor(m / 12);
+  const rest  = m % 12;
+  const inYears = `${years} year${years === 1 ? '' : 's'}`;
+  return rest === 0
+    ? `${inMonths} (${inYears})`
+    : `${inMonths} (${inYears} ${rest} mo)`;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN TOKENS (FINNOVA-inspired dark-mode aesthetic adapted for Ararat)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -226,10 +258,12 @@ const printPayslip = ({ company, employee, month, data }) => {
 
 // Printable invoice — opens a clean, print-ready window for the given invoice,
 // generated on the fly from the live invoice record (client, asset, amounts).
-const printInvoice = ({ company, invoice: inv }) => {
+// Exported so the printed document can be asserted on directly.
+export const printInvoice = ({ company, invoice: inv }) => {
   const w = window.open('', '_blank');
   if (!w) { toast('Allow pop-ups to print the invoice', 'error'); return; }
-  const coName = company?.company_name || 'Ararat Company';
+  const seller = invoiceSeller(inv, company);
+  const coName = seller.name;
   const total  = (inv.amount || 0) + (inv.vat_amount || 0);
   const assetDesc = inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment';
   const assetRef  = [inv.asset_code, inv.plate_number].filter(Boolean).join(' · ');
@@ -247,8 +281,36 @@ const printInvoice = ({ company, invoice: inv }) => {
             <td>${assetDesc}${assetRef ? rawHtml(html`<div class="muted">${assetRef}</div>`) : ''}</td>
             <td class="r">${money(inv.amount)}</td>
           </tr>`;
+  // Hire-purchase terms from the POS sale — what the client pays each month and
+  // for how long. Cash sales and hand-raised invoices carry no plan.
+  const plan = inv.plan;
+  const planBlock = plan ? html`
+      <div class="plan">
+        <div class="plan-h">Payment Plan</div>
+        <div class="plan-hero">
+          <div>
+            <div class="lbl">Monthly Installment</div>
+            <div class="plan-amt">${fmt(plan.monthly_installment)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="lbl">Payment Duration</div>
+            <div class="plan-amt">${fmtDuration(plan.tenure_months)}</div>
+          </div>
+        </div>
+        <table class="plan-t">
+          <tr><td>Deposit paid</td><td class="r">${money(plan.deposit)}</td></tr>
+          <tr><td>Balance financed</td><td class="r">${money(plan.financed)}</td></tr>
+          <tr><td>Interest rate</td><td class="r">${plan.interest_rate}% p.a.</td></tr>
+          <tr><td>First installment due</td><td class="r">${fmtDate(plan.start_date)}</td></tr>
+          <tr><td>Final installment due</td><td class="r">${fmtDate(plan.final_due_date)}</td></tr>
+          <tr><td><strong>Total payable over the plan</strong></td><td class="r"><strong>${money(plan.plan_total)}</strong></td></tr>
+        </table>
+        <div class="muted" style="margin-top:8px;">
+          ${plan.tenure_months} monthly installments of ${fmt(plan.monthly_installment)}, payable from ${fmtDate(plan.start_date)}.
+        </div>
+      </div>` : '';
   w.document.write(html`
-    <html><head><title>Invoice — ${inv.invoice_no} — ${inv.client_name || 'Client'}</title>
+    <html><head><title>${coName} — Invoice ${inv.invoice_no} — ${inv.client_name || 'Client'}</title>
     <style>
       body { font-family: Arial, sans-serif; max-width: 680px; margin: 32px auto; color: #111; }
       .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1A56DB; padding-bottom: 16px; margin-bottom: 20px; }
@@ -266,14 +328,25 @@ const printInvoice = ({ company, invoice: inv }) => {
       .total { display: flex; justify-content: space-between; align-items: center; background: #1A56DB; color: #fff; padding: 14px 18px; border-radius: 8px; margin-top: 14px; }
       .total .amt { font-family: monospace; font-size: 20px; font-weight: 800; }
       .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; }
+      .plan { margin-top: 18px; border: 1px solid #c7d7f7; background: #f5f8ff; border-radius: 8px; padding: 14px 16px; }
+      .plan-h { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #1A56DB; margin-bottom: 10px; }
+      .plan-hero { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid #dbe5fa; }
+      .plan-amt { font-size: 16px; font-weight: 800; color: #111; margin-top: 2px; }
+      table.plan-t { width: 100%; border-collapse: collapse; margin-top: 8px; }
+      table.plan-t td { font-size: 12px; padding: 4px 0; color: #444; }
+      table.plan-t td.r { text-align: right; font-family: monospace; }
       .note { margin-top: 16px; font-size: 12px; color: #666; font-style: italic; }
       .foot { margin-top: 28px; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 12px; }
     </style></head><body>
       <div class="head">
         <div>
           <div class="co">${coName}</div>
-          ${company?.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${company.kra_pin}</div>`) : ''}
-          ${company?.physical_address ? rawHtml(html`<div class="muted">${company.physical_address}</div>`) : ''}
+          ${seller.reg_no  ? rawHtml(html`<div class="muted">Reg No: ${seller.reg_no}</div>`) : ''}
+          ${seller.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${seller.kra_pin}</div>`) : ''}
+          ${seller.address ? rawHtml(html`<div class="muted">${seller.address}</div>`) : ''}
+          ${seller.phone || seller.email
+            ? rawHtml(html`<div class="muted">${[seller.phone, seller.email].filter(Boolean).join(' · ')}</div>`)
+            : ''}
         </div>
         <div>
           <div class="title">INVOICE</div>
@@ -310,6 +383,7 @@ const printInvoice = ({ company, invoice: inv }) => {
         <span style="font-weight:700;">TOTAL DUE</span>
         <span class="amt">${fmt(total)}</span>
       </div>
+      ${rawHtml(planBlock)}
       ${inv.notes ? rawHtml(html`<div class="note">Note: ${inv.notes}</div>`) : ''}
       <div class="foot">Generated by ${coName} on ${fmtDate(new Date())} · Computer-generated invoice.</div>
     </body></html>
@@ -453,6 +527,8 @@ const InvoicesTab = ({
   if (selected) {
     const inv = selected;
     const co  = companyProfile;
+    // Headed by the company the asset came from, not whoever is signed in.
+    const seller = invoiceSeller(inv, companyProfile);
 
     const handleEmail = async () => {
       if (!inv.client_email) { toast('This client has no email address on file', 'warning'); return; }
@@ -464,6 +540,16 @@ const InvoicesTab = ({
             issueDate:     inv.date,
             dueDate:       inv.due_date,
             total:         (inv.amount || 0) + (inv.vat_amount || 0),
+          },
+          // The selling company — the emailed copy is headed the same way the
+          // printed one is.
+          company: {
+            name:    seller.name,
+            kra_pin: seller.kra_pin,
+            address: seller.address,
+            email:   seller.email,
+            phone:   seller.phone,
+            reg_no:  seller.reg_no,
           },
           client: {
             full_name:      inv.client_name,
@@ -480,6 +566,18 @@ const InvoicesTab = ({
               : [{ description: inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment', quantity: 1, unitPrice: inv.amount || 0 }]),
             { description: `VAT (${inv.vat_rate ?? 16}%)`, quantity: 1, unitPrice: inv.vat_amount || 0 },
           ],
+          // The emailed copy states the same plan as the printed one.
+          plan: inv.plan ? {
+            monthlyInstallment: inv.plan.monthly_installment,
+            tenureMonths:       inv.plan.tenure_months,
+            duration:           fmtDuration(inv.plan.tenure_months),
+            deposit:            inv.plan.deposit,
+            financed:           inv.plan.financed,
+            interestRate:       inv.plan.interest_rate,
+            firstDueDate:       inv.plan.start_date,
+            finalDueDate:       inv.plan.final_due_date,
+            planTotal:          inv.plan.plan_total,
+          } : null,
         });
         toast(`Invoice ${inv.invoice_no} emailed to ${inv.client_email}`, 'success');
       } catch (e) {
@@ -498,9 +596,13 @@ const InvoicesTab = ({
           {/* Header */}
           <div className="flex justify-between items-start mb-8 pb-6 border-b-2 border-primary">
             <div>
-              <p className="text-base font-semibold text-gray-900 dark:text-foreground">{co?.company_name || 'Ararat Company'}</p>
-              <p className="text-xs text-gray-500 mt-1">KRA PIN: {co?.kra_pin || 'N/A'}</p>
-              <p className="text-xs text-gray-500">{co?.physical_address || ''}</p>
+              <p className="text-base font-semibold text-gray-900 dark:text-foreground">{seller.name}</p>
+              {seller.reg_no && <p className="text-xs text-gray-500 mt-1">Reg No: {seller.reg_no}</p>}
+              <p className="text-xs text-gray-500 mt-1">KRA PIN: {seller.kra_pin || 'N/A'}</p>
+              {seller.address && <p className="text-xs text-gray-500">{seller.address}</p>}
+              {(seller.phone || seller.email) && (
+                <p className="text-xs text-gray-500">{[seller.phone, seller.email].filter(Boolean).join(' · ')}</p>
+              )}
             </div>
             <div className="text-right">
               <p className="text-2xl font-black text-primary">INVOICE</p>
@@ -572,6 +674,46 @@ const InvoicesTab = ({
             <span className="font-bold text-base">TOTAL DUE</span>
             <span className="font-black text-xl font-mono">{fmt(inv.amount + inv.vat_amount)}</span>
           </div>
+          {/* Hire-purchase terms carried over from the POS sale */}
+          {inv.plan && (
+            <div className="mt-5 rounded-lg border border-primary/25 bg-primary/5 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Icon name="CalendarClock" size={14} color="var(--primary)" />
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">Payment Plan</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4 pb-3 mb-3 border-b border-primary/20">
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Monthly Installment</p>
+                  <p className="text-lg font-black font-mono text-gray-900 dark:text-foreground">{fmt(inv.plan.monthly_installment)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Payment Duration</p>
+                  <p className="text-lg font-black text-gray-900 dark:text-foreground">{fmtDuration(inv.plan.tenure_months)}</p>
+                </div>
+              </div>
+              <dl className="space-y-1.5 text-sm">
+                {[
+                  ['Deposit paid',          fmt(inv.plan.deposit)],
+                  ['Balance financed',      fmt(inv.plan.financed)],
+                  ['Interest rate',         `${inv.plan.interest_rate}% p.a.`],
+                  ['First installment due', fmtDate(inv.plan.start_date)],
+                  ['Final installment due', fmtDate(inv.plan.final_due_date)],
+                ].map(([label, value]) => (
+                  <div key={label} className="flex justify-between">
+                    <dt className="text-gray-600 dark:text-muted-foreground">{label}</dt>
+                    <dd className="font-mono text-gray-800 dark:text-foreground">{value}</dd>
+                  </div>
+                ))}
+                <div className="flex justify-between pt-2 border-t border-primary/20 font-semibold">
+                  <dt className="text-gray-700 dark:text-foreground">Total payable over the plan</dt>
+                  <dd className="font-mono text-gray-900 dark:text-foreground">{fmt(inv.plan.plan_total)}</dd>
+                </div>
+              </dl>
+              <p className="mt-3 text-xs text-gray-500">
+                {inv.plan.tenure_months} monthly installments of {fmt(inv.plan.monthly_installment)}, payable from {fmtDate(inv.plan.start_date)}.
+              </p>
+            </div>
+          )}
           {inv.notes && <p className="mt-4 text-xs text-gray-500 italic">Note: {inv.notes}</p>}
           <div className="mt-6 flex gap-3">
             <button className={S.btnPri} onClick={() => printInvoice({ company: co, invoice: inv })}>
@@ -809,7 +951,14 @@ const InvoicesTab = ({
                   <td className={S.td + ' max-w-32 truncate'}>{inv.asset}</td>
                   <td className={S.td}>{fmtDate(inv.date)}</td>
                   <td className={S.td}>{fmtDate(inv.due_date)}</td>
-                  <td className={`${S.td} font-mono font-semibold text-foreground`}>{fmt(inv.amount)}</td>
+                  <td className={`${S.td} font-mono font-semibold text-foreground`}>
+                    {fmt(inv.amount)}
+                    {inv.plan && (
+                      <span className="block text-[11px] font-normal text-muted-foreground">
+                        then {fmt(inv.plan.monthly_installment)}/mo × {inv.plan.tenure_months}
+                      </span>
+                    )}
+                  </td>
                   <td className={S.td}>{inv.method}</td>
                   <td className={S.td}><StatusBadge status={inv.status} /></td>
                   <td className={S.td}>

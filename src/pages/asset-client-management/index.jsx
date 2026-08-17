@@ -15,6 +15,7 @@ import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { auditLogsService } from '../../services/supabaseService';
 import { supabase } from '../../lib/supabase';
+import { getTenantAdminId } from '../../lib/tenant';
 
 let _acmChannelSeq = 0;
 
@@ -53,19 +54,20 @@ const AssetClientManagement = () => {
   const [portalCredentials, setPortalCredentials] = useState(null);
   const [showWebsiteSync, setShowWebsiteSync] = useState(false);
 
-  // ── Get current admin ID and company profile ───────────────────────────────
+  // ── Get current tenant and company profile ─────────────────────────────────
+  // The tenant, not the signed-in user's own id: an admin's staff work inside
+  // the admin's tenant, and must see exactly what that admin sees — no more.
   useEffect(() => {
     const fetchAdmin = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setAdminId(user.id);
-        const { data: profile } = await supabase
-          .from('company_profiles')
-          .select('*')
-          .eq('admin_id', user.id)
-          .single();
-        setCompanyProfile(profile);
-      }
+      const tenantId = await getTenantAdminId();
+      if (!tenantId) return;
+      setAdminId(tenantId);
+      const { data: profile } = await supabase
+        .from('company_profiles')
+        .select('*')
+        .eq('admin_id', tenantId)
+        .maybeSingle();
+      setCompanyProfile(profile);
     };
     fetchAdmin();
   }, []);
@@ -79,7 +81,7 @@ const AssetClientManagement = () => {
       const { data, error: err } = await supabase
         .from('assets')
         .select('*, linked_client:clients(full_name, account_number)')
-        .eq('registered_by', adminId)
+        .eq('admin_id', adminId)
         .order('created_at', { ascending: false });
 
       if (err) throw err;
@@ -268,6 +270,10 @@ const AssetClientManagement = () => {
             metadata: assetData.details || {},
             specifications: assetData.specifications,
             registered_by: adminId,
+            // The tenant that owns the row. The BEFORE INSERT trigger derives
+            // the same value server-side, so this is belt-and-braces — RLS
+            // rejects the insert if it ever disagreed with the session.
+            admin_id: adminId,
           });
         await auditLogsService?.log('create', 'assets', `Registered new asset ${assetData.description}`);
       }

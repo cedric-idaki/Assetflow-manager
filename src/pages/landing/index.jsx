@@ -4,13 +4,18 @@ import Icon from '../../components/AppIcon';
 
 // ── Landing page ────────────────────────────────────────────────────────
 // Layout/structure follows the marketing design brief (ledger + receipt
-// motif). Colors are the system brand palette from tailwind.css so the page
-// matches the rest of the product:
-//   ink #0c2037 (brand-dark) · accent #34c1dd (brand-accent) · paper #f5f8fa
-// --accent-deep is a darkened brand cyan used only where the accent has to
-// carry small text on a light background (the brand cyan itself fails
-// contrast at body sizes). --mark is the system error red (#b91c1c), used
-// only for the "crossed out / stamped" marks.
+// motif). Colors are taken from smebusinessclinic.com, which owns this
+// product, so the two sites read as one brand. #34c1dd is the page ground
+// itself; navy bands and white cards sit on top of it.
+//   #34c1dd ground · #0c2037 bands/buttons · #ffffff cards · #effafd pale band
+//   #2e2e2e / #1f3d4d / #999ea4 text ramp
+// The ramp is darker than SBC's own (#5a5a5a, #12758c) because those were
+// picked against white and drop to ~3:1 on cyan.
+// Two deliberate departures from that site: --accent-deep is a darkened cyan
+// for small text on light (the cyan itself fails contrast at body sizes), and
+// buttons keep dark text on cyan rather than SBC's white, which measures
+// 1.9:1. --mark is the system error red (#b91c1c), used only for the
+// "crossed out / stamped" marks.
 //
 // Styles live in a scoped stylesheet rather than inline styles because the
 // design needs pseudo-elements, media queries and hover states.
@@ -19,23 +24,26 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 .arr{
-  --ink:#0c2037;
+  --ink:#0c2037;          /* SBC footer / secondary button */
   --ink-2:#112844;
   --ink-3:#1a3a5c;
-  --paper:#f5f8fa;
-  --paper-2:#eaf1f5;
+  --paper:#34c1dd;        /* page ground is the brand cyan */
+  --paper-2:#effafd;      /* pale band, for separation against the cyan */
   --paper-3:#dbe6ee;
   --card:#ffffff;
-  --accent:#34c1dd;
+  --accent:#34c1dd;       /* SBC primary button */
   --accent-dark:#20a8c5;
-  --accent-deep:#12758c;
+  --accent-deep:#0a4a5a;  /* deep teal: the old #12758c only reached 2.5:1 once
+                             the ground became cyan. Clears AA on both cyan
+                             and the white cards. */
   --mark:#b91c1c;
   --success:#0b7a4e;
-  --text:#0c2037;
-  --text-muted:#5a7185;
+  --text:#2e2e2e;         /* SBC body copy; 6.4:1 on cyan, 12.7:1 on cards */
+  --text-muted:#1f3d4d;   /* darkened off SBC's #5a5a5a, which fell to 3.2:1
+                             against the cyan ground */
   --text-on-ink:#ffffff;
-  --text-on-ink-muted:rgba(255,255,255,0.66);
-  --line:#d0dce6;
+  --text-on-ink-muted:#999ea4; /* SBC muted, as used on their dark sections */
+  --line:rgba(12,32,55,0.22); /* navy-tinted: #d0dce6 vanished on cyan */
   --line-on-ink:rgba(255,255,255,0.16);
 
   background:var(--paper);
@@ -49,7 +57,7 @@ const CSS = `
 .arr img,.arr svg{display:block;max-width:100%;}
 .arr a{color:inherit;text-decoration:none;}
 .arr .mono{font-family:'IBM Plex Mono',monospace;}
-.arr ::selection{background:var(--accent);color:var(--ink);}
+.arr ::selection{background:var(--ink);color:#ffffff;}
 .arr section[id]{scroll-margin-top:80px;}
 
 @media (prefers-reduced-motion: reduce){
@@ -62,7 +70,7 @@ const CSS = `
 /* ---------- NAV ---------- */
 .arr .site-nav{
   position:sticky;top:0;z-index:50;
-  background:rgba(245,248,250,0.9);
+  background:rgba(52,193,221,0.92);
   backdrop-filter:blur(10px);
   border-bottom:1px solid var(--line);
 }
@@ -88,7 +96,7 @@ const CSS = `
 /* ---------- HERO ---------- */
 .arr .hero{
   position:relative;padding:80px 0 96px;overflow:hidden;
-  background:radial-gradient(1100px 480px at 82% -10%, rgba(52,193,221,0.14), transparent 60%),var(--paper);
+  background:radial-gradient(1100px 480px at 82% -10%, rgba(255,255,255,0.30), transparent 60%),var(--paper);
 }
 .arr .hero-grid{display:grid;grid-template-columns:1.05fr 0.75fr;gap:56px;align-items:start;}
 @media (max-width:920px){.arr .hero-grid{grid-template-columns:1fr;gap:64px;}}
@@ -126,13 +134,13 @@ const CSS = `
   border:1px solid transparent;cursor:pointer;
   transition:transform 0.15s ease,background 0.15s ease,color 0.15s ease,border-color 0.15s ease;
 }
-.arr .btn-primary{background:var(--accent);color:var(--ink);}
-.arr .btn-primary:hover{background:var(--ink);color:var(--paper);transform:translateY(-1px);}
+.arr .btn-primary{background:var(--ink);color:#ffffff;}
+.arr .btn-primary:hover{background:var(--ink-3);color:#ffffff;transform:translateY(-1px);}
 .arr .hero-link{
   display:inline-flex;align-items:center;gap:7px;margin-top:22px;
   font-family:'Space Grotesk',sans-serif;font-size:14.5px;font-weight:600;
   color:var(--accent-deep);text-decoration:none;
-  border-bottom:1px solid rgba(18,117,140,0.35);padding-bottom:2px;
+  border-bottom:1px solid rgba(10,74,90,0.45);padding-bottom:2px;
   transition:color 0.2s ease,border-color 0.2s ease;
 }
 .arr .hero-link:hover{color:var(--ink);border-color:var(--ink);}
@@ -214,7 +222,7 @@ const CSS = `
 .arr .ledger-item .body{display:flex;align-items:center;gap:18px;}
 .arr .ledger-item .icon{
   width:44px;height:44px;flex-shrink:0;border-radius:3px;
-  background:rgba(52,193,221,0.12);
+  background:rgba(255,255,255,0.55);
   display:flex;align-items:center;justify-content:center;
 }
 .arr .ledger-item .name{font-weight:600;font-size:16.5px;color:var(--ink);}
@@ -282,6 +290,8 @@ const CSS = `
 .arr .sub-error{margin-top:12px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--mark);}
 
 /* ---------- CLOSING ---------- */
+/* Dark again now that the page itself is cyan - the CTA needs to read as a
+   break in the page, not blend into it. */
 .arr .closing{
   background:linear-gradient(135deg,var(--ink) 0%,var(--ink-2) 55%,var(--ink-3) 100%);
   color:var(--text-on-ink);padding:104px 0;text-align:center;position:relative;overflow:hidden;
@@ -292,17 +302,19 @@ const CSS = `
 }
 .arr .closing-inner{position:relative;z-index:1;max-width:700px;margin:0 auto;}
 .arr .closing .ctitle{font-family:'Fraunces',serif;font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.12;letter-spacing:-0.01em;}
-.arr .closing .csub{margin-top:18px;font-size:16.5px;color:var(--text-on-ink-muted);line-height:1.65;}
+.arr .closing .csub{margin-top:18px;font-size:16.5px;color:rgba(255,255,255,0.82);line-height:1.65;}
 .arr .closing .ctas{justify-content:center;}
-.arr .closing .btn-primary:hover{background:var(--paper);color:var(--ink);}
-.arr .closing .btn-ghost{border-color:rgba(255,255,255,0.5);color:var(--paper);}
-.arr .closing .btn-ghost:hover{background:var(--paper);color:var(--ink);}
+/* Here the cyan fill works again - this band is dark. */
+.arr .closing .btn-primary{background:var(--accent);color:var(--ink);}
+.arr .closing .btn-primary:hover{background:var(--card);color:var(--ink);}
+.arr .closing .btn-ghost{border-color:rgba(255,255,255,0.5);color:#ffffff;}
+.arr .closing .btn-ghost:hover{background:#ffffff;color:var(--ink);}
 
 /* ---------- FOOTER ---------- */
 .arr footer{background:var(--ink);color:var(--text-on-ink-muted);padding:56px 0 40px;font-size:13.5px;border-top:3px solid var(--accent);}
 .arr .foot-inner{display:grid;grid-template-columns:1.15fr 1fr;gap:56px;align-items:start;}
 @media (max-width:760px){.arr .foot-inner{grid-template-columns:1fr;gap:40px;}}
-.arr .foot-inner .fbrand{font-family:'Fraunces',serif;color:var(--accent-deep);font-weight:700;font-size:20px;letter-spacing:0.01em;}
+.arr .foot-inner .fbrand{font-family:'Fraunces',serif;color:var(--accent);font-weight:700;font-size:20px;letter-spacing:0.01em;}
 .arr .foot-tagline{margin-top:12px;line-height:1.7;max-width:38ch;}
 
 .arr .foot-heading{

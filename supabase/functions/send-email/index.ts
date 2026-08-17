@@ -100,8 +100,46 @@ const buildPaymentConfirmationEmail = (data: any) => {
 };
 
 const buildInvoiceEmail = (data: any) => {
-  const { invoice, client, asset, lineItems } = data;
+  const { invoice, client, asset, lineItems, plan, company } = data;
   const total = parseFloat(invoice?.total || 0);
+
+  // The selling company — the one the asset came from. Heads the invoice and
+  // signs off the closing note.
+  const sellerName = company?.name || company?.company_name || "Ararat Management";
+  const sellerLines = [
+    company?.reg_no ? `Reg No: ${company.reg_no}` : "",
+    company?.kra_pin ? `KRA PIN: ${company.kra_pin}` : "",
+    company?.address || "",
+    [company?.phone, company?.email].filter(Boolean).join(" · "),
+  ].filter(Boolean);
+
+  // Hire-purchase terms behind the invoice. Absent on cash sales and on
+  // invoices raised by hand, in which case the block is simply not rendered.
+  const planBlock = plan ? `
+    <div style="border:1px solid #bfdbfe;background:#f5f8ff;border-radius:8px;padding:16px;margin-bottom:24px">
+      <p style="margin:0 0 12px;font-size:12px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:0.05em">Payment Plan</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
+        <tr>
+          <td style="padding:0 0 10px">
+            <p style="margin:0;font-size:11px;color:#6b7280;text-transform:uppercase">Monthly Installment</p>
+            <p style="margin:2px 0 0;font-size:18px;font-weight:800;color:#111827">${formatCurrency(plan.monthlyInstallment)}</p>
+          </td>
+          <td style="padding:0 0 10px;text-align:right">
+            <p style="margin:0;font-size:11px;color:#6b7280;text-transform:uppercase">Payment Duration</p>
+            <p style="margin:2px 0 0;font-size:18px;font-weight:800;color:#111827">${plan.duration || `${plan.tenureMonths} months`}</p>
+          </td>
+        </tr>
+      </table>
+      <table style="width:100%;border-collapse:collapse;border-top:1px solid #dbe5fa;padding-top:8px">
+        <tr><td style="padding:5px 0;font-size:13px;color:#4b5563">Deposit paid</td><td style="padding:5px 0;font-size:13px;color:#111827;text-align:right">${formatCurrency(plan.deposit)}</td></tr>
+        <tr><td style="padding:5px 0;font-size:13px;color:#4b5563">Balance financed</td><td style="padding:5px 0;font-size:13px;color:#111827;text-align:right">${formatCurrency(plan.financed)}</td></tr>
+        <tr><td style="padding:5px 0;font-size:13px;color:#4b5563">Interest rate</td><td style="padding:5px 0;font-size:13px;color:#111827;text-align:right">${plan.interestRate}% p.a.</td></tr>
+        <tr><td style="padding:5px 0;font-size:13px;color:#4b5563">First installment due</td><td style="padding:5px 0;font-size:13px;color:#111827;text-align:right">${formatDate(plan.firstDueDate)}</td></tr>
+        <tr><td style="padding:5px 0;font-size:13px;color:#4b5563">Final installment due</td><td style="padding:5px 0;font-size:13px;color:#111827;text-align:right">${formatDate(plan.finalDueDate)}</td></tr>
+        <tr><td style="padding:8px 0 0;font-size:13px;font-weight:700;color:#111827;border-top:1px solid #dbe5fa">Total payable over the plan</td><td style="padding:8px 0 0;font-size:13px;font-weight:700;color:#111827;text-align:right;border-top:1px solid #dbe5fa">${formatCurrency(plan.planTotal)}</td></tr>
+      </table>
+      <p style="margin:10px 0 0;font-size:12px;color:#6b7280">${plan.tenureMonths} monthly installments of ${formatCurrency(plan.monthlyInstallment)}, payable from ${formatDate(plan.firstDueDate)}.</p>
+    </div>` : "";
   const itemRows = (lineItems || []).map((item: any) => `
     <tr>
       <td style="padding:10px 0;color:#374151;font-size:14px;border-bottom:1px solid #f3f4f6">${item.description}</td>
@@ -118,6 +156,7 @@ const buildInvoiceEmail = (data: any) => {
   <div style="background:linear-gradient(135deg,#1e40af 0%,#3b82f6 100%);border-radius:12px 12px 0 0;padding:28px 32px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start">
       <div>
+        <p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#fff">${sellerName}</p>
         <h1 style="margin:0;font-size:24px;font-weight:800;color:#fff">INVOICE</h1>
         <p style="margin:4px 0 0;color:rgba(255,255,255,0.8);font-size:13px">${invoice?.invoiceNumber || invoice?.invoice_number || "INV-" + Date.now()}</p>
       </div>
@@ -131,6 +170,13 @@ const buildInvoiceEmail = (data: any) => {
   </div>
 
   <div style="padding:28px 0 0">
+    ${sellerLines.length > 0 ? `
+    <div style="margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #f3f4f6">
+      <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase">From</p>
+      <p style="margin:0;font-size:15px;font-weight:700;color:#111827">${sellerName}</p>
+      ${sellerLines.map((l: string) => `<p style="margin:2px 0;font-size:13px;color:#6b7280">${l}</p>`).join("")}
+    </div>` : ""}
+
     ${client ? `
     <div style="display:flex;gap:24px;margin-bottom:24px">
       <div style="flex:1">
@@ -165,8 +211,10 @@ const buildInvoiceEmail = (data: any) => {
       </tfoot>
     </table>
 
+    ${planBlock}
+
     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;text-align:center">
-      <p style="margin:0;font-size:13px;color:#1e40af">Please ensure payment is made by the due date. For queries, contact <strong>Ararat Management</strong>.</p>
+      <p style="margin:0;font-size:13px;color:#1e40af">Please ensure payment is made by the due date. For queries, contact <strong>${sellerName}</strong>.</p>
     </div>
   </div>
 </div>

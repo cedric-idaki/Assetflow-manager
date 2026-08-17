@@ -17,18 +17,19 @@ import Icon from './AppIcon';
 const C = {
   primary:     '#34c1dd',
   primaryDark: '#1da8c5',
+  deep:        '#0a4a5a', /* small accent text on the light card surfaces */
   navy:        '#0c2037',
   navyMid:     '#1a3a5c',
   bg2:         '#eaf1f6',
   card:        '#ffffff',
   border:      '#d0dce6',
   text:        '#0c2037',
-  textMuted:   '#5a7185',
+  textMuted:   '#4a5c6b', /* #5a7185 sat at 4.45:1 on the 9.5px stat labels */
   done:        '#10b981',
   onNavy:      '#ffffff',
   onNavyMuted: '#7a9cb8',
-  onNavyFaint: 'rgba(255,255,255,0.38)',
-  copyright:   '#3a5a7a',
+  onNavyFaint: 'rgba(255,255,255,0.52)', /* 0.38 left upcoming steps at 3.5:1 */
+  copyright:   '#6f90ab', /* dimmer than the tagline, but #3a5a7a was 2.3:1 */
   lineOnNavy:  'rgba(52,193,221,0.16)',
 };
 
@@ -229,7 +230,7 @@ const BrandPreviewPanel = function(props) {
                       style={{ background: C.bg2, border: '1px solid ' + C.border }}
                     >
                       <div style={{ ...LABEL, fontSize: '9.5px', color: C.textMuted }}>{s.k}</div>
-                      <div style={{ ...MONO, fontSize: '15px', fontWeight: 700, color: C.primaryDark, marginTop: '3px' }}>{s.v}</div>
+                      <div style={{ ...MONO, fontSize: '15px', fontWeight: 700, color: C.deep, marginTop: '3px' }}>{s.v}</div>
                     </div>
                   );
                 })}
@@ -272,7 +273,7 @@ const BrandPreviewPanel = function(props) {
                   return (
                     <div key={r[0]} className="flex justify-between" style={{ fontSize: '12px', color: C.text }}>
                       <span>{r[0]}</span>
-                      <span style={{ ...MONO, color: C.primaryDark, fontWeight: 700 }}>{r[1]}</span>
+                      <span style={{ ...MONO, color: C.deep, fontWeight: 700 }}>{r[1]}</span>
                     </div>
                   );
                 })}
@@ -304,9 +305,9 @@ const BrandPreviewPanel = function(props) {
               </div>
               <div
                 className="flex items-center gap-2 mt-3.5"
-                style={{ fontSize: '12.5px', fontWeight: 700, color: C.primaryDark }}
+                style={{ fontSize: '12.5px', fontWeight: 700, color: C.deep }}
               >
-                <Icon name="CheckCircle2" size={15} color={C.primaryDark} />
+                <Icon name="CheckCircle2" size={15} color={C.deep} />
                 Approved by committee vote — KES 60,000
               </div>
             </Slide>
@@ -349,9 +350,9 @@ const BrandPreviewPanel = function(props) {
                 <span
                   key={'stamp-' + slide}
                   className="bp-stamp flex items-center gap-1"
-                  style={{ ...LABEL, fontSize: '10px', color: C.primaryDark, fontWeight: 700 }}
+                  style={{ ...LABEL, fontSize: '10px', color: C.deep, fontWeight: 700 }}
                 >
-                  <Icon name="Check" size={13} color={C.primaryDark} />
+                  <Icon name="Check" size={13} color={C.deep} />
                   Signed
                 </span>
               </div>
@@ -372,7 +373,7 @@ const BrandPreviewPanel = function(props) {
                     className="flex flex-col items-center justify-center rounded-full"
                     style={{ width: '52px', height: '52px', background: C.card }}
                   >
-                    <b style={{ ...MONO, fontSize: '13px', color: C.primaryDark }}>62%</b>
+                    <b style={{ ...MONO, fontSize: '13px', color: C.deep }}>62%</b>
                     <span style={{ ...LABEL, fontSize: '7.5px', color: C.textMuted }}>Paid off</span>
                   </div>
                 </div>

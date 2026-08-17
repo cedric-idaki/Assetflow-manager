@@ -15,8 +15,8 @@
  * IDEMPOTENT: upsert is keyed on (admin_id, external_ref) — the client's own
  *       listing id / SKU / serial. Re-sending the same item UPDATES it.
  *
- * TENANT-SAFE: runs as service_role and sets assets.registered_by explicitly to
- *       the key's owner — the same column the app filters assets by per tenant.
+ * TENANT-SAFE: runs as service_role and sets assets.admin_id explicitly to the
+ *       key's owning tenant — the column RLS and every app query filter on.
  *
  * GENERIC CONTRACT — the only universal, required fields are:
  *   external_ref  (your stable listing id / SKU)   +   price
@@ -158,7 +158,9 @@ serve(async (req: Request) => {
     if (!profile || profile.role === 'client') {
       return json({ error: 'Forbidden — only staff/admin accounts can import assets.' }, 403);
     }
-    adminId = user.id;   // assets are scoped by registered_by = the uploader's id
+    // The TENANT that owns the import, not the uploader: staff import into the
+    // admin's catalogue. Same COALESCE as public.current_admin_id().
+    adminId = (profile.admin_id as string | null) ?? user.id;
   }
 
   if (!adminId) return json({ error: 'Could not resolve a tenant for this request.' }, 401);
@@ -270,7 +272,9 @@ serve(async (req: Request) => {
       const { data: existing } = await admin
         .from('assets')
         .select('id')
-        .eq('registered_by', adminId)
+        // Dedupe within the TENANT: two staff members importing the same feed
+        // must not create two copies of the same asset.
+        .eq('admin_id', adminId)
         .eq('external_ref', externalRef)
         .maybeSingle();
 
@@ -289,7 +293,8 @@ serve(async (req: Request) => {
           asset_code: `AST-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
           asset_status: soldFlag ? 'sold' : defaultStatus,
           external_ref: externalRef,
-          registered_by: adminId,   // tenant owner — the column the app filters assets by
+          admin_id: adminId,        // tenant owner — what RLS and every query filter on
+          registered_by: adminId,   // provenance: who/what put the row here
         });
         if (error) throw error;
         created++;

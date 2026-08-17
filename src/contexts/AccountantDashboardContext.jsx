@@ -6,25 +6,23 @@
  * Key behaviours:
  *  - hasLoaded guard (useRef) prevents re-fetch on remount after first load
  *  - refetch() bypasses the guard so the "Refresh" button still works
- *  - user?.id in useEffect deps resets the guard on auth change (logout/login)
+ *  - useAuthScopedLoader clears the data and reloads whenever the signed-in
+ *    user changes, so one user's figures are never shown to the next
  *  - modals / openModal / closeModal follow the same pattern as AdminDashboardContext
  */
 import React, {
   createContext,
   useContext,
   useState,
-  useEffect,
   useCallback,
   useRef,
 } from 'react';
 import { supabase } from '../lib/supabase';
-import { useAuth } from './AuthContext';
+import { useAuthScopedLoader } from '../hooks/useAuthScopedLoader';
 
 const AccountantDashboardContext = createContext(null);
 
 export const AccountantDashboardProvider = ({ children }) => {
-  const { user } = useAuth();
-
   // ── Data state ──────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(true);
   const [kpis, setKpis] = useState({});
@@ -228,20 +226,22 @@ export const AccountantDashboardProvider = ({ children }) => {
     return fetchAll();
   }, [fetchAll]);
 
-  // ── Trigger fetch on mount; guard prevents re-fetch on remount ─────────────
-  // user?.id in deps resets the guard when the authenticated user changes
-  useEffect(() => {
-    if (hasLoaded.current) return;
-    fetchAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount only — hasLoaded guard handles remount protection
-
-  // ── Reset hasLoaded when user changes (logout / login) ─────────────────────
-  useEffect(() => {
+  // ── Clear this user's data before anyone else's session can render it ─────
+  const resetState = useCallback(() => {
     hasLoaded.current = false;
-    fetchAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+    setKpis({});
+    setMonthlyBreakdown([]);
+    setPaymentMethods([]);
+    setRecentPayments([]);
+    setOverdueAccounts([]);
+    setLastUpdated(null);
+    setLoading(true);
+  }, []);
+
+  // Loads once per signed-in user; resets on every change of user, including
+  // sign-out. Replaces the old mount-only fetch, which left the previous
+  // user's figures on screen until the next fetch happened to land.
+  useAuthScopedLoader(fetchAll, resetState);
 
   // ── Context value ───────────────────────────────────────────────────────────
   const value = {

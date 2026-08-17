@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuthScopedLoader } from './useAuthScopedLoader';
 
 export const useRealtimeDashboard = () => {
   const [kpis, setKpis] = useState({
@@ -160,14 +161,35 @@ export const useRealtimeDashboard = () => {
     setLoading(false);
   }, [fetchKPIs, fetchAgingAnalysis, fetchRecentPayments, fetchActivityFeed]);
 
-  // Initial load — runs once on mount
-  useEffect(() => {
-    if (hasLoaded.current) return;
-    fetchAll();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // These figures are whatever the caller's tenant is allowed to see, so they
+  // must not outlive the session that fetched them.
+  const resetState = useCallback(() => {
+    hasLoaded.current = false;
+    setKpis({
+      totalAssetValueSold: 0,
+      totalCollected: 0,
+      outstandingBalance: 0,
+      collectionEfficiency: 0,
+      pendingApprovals: 0,
+    });
+    setAgingBuckets([
+      { label: '1-30 Days', days: '1-30', amount: 0, count: 0, severity: 'low' },
+      { label: '31-60 Days', days: '31-60', amount: 0, count: 0, severity: 'medium' },
+      { label: '60+ Days', days: '60+', amount: 0, count: 0, severity: 'high' },
+    ]);
+    setRecentPayments([]);
+    setActivityFeed([]);
+    setLastUpdated(null);
+    setLoading(true);
+    setConnectionStatus('connecting');
+  }, []);
 
-  // Realtime subscriptions — set up once, callbacks are stable useCallback refs
+  // Initial load — once per signed-in user
+  const userId = useAuthScopedLoader(fetchAll, resetState);
+
+  // Realtime subscriptions — re-established per user
   useEffect(() => {
+    if (!userId) return undefined;
     const assetsCh = supabase
       ?.channel('rt_db_assets')
       ?.on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, () => fetchKPIs())
@@ -210,7 +232,7 @@ export const useRealtimeDashboard = () => {
       channelsRef?.current?.forEach(ch => supabase?.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     kpis,

@@ -572,9 +572,54 @@ export const SaccoMemberProvider = ({ children }) => {
     URL.revokeObjectURL(url);
   }, []);
 
+  // ── Reset ─────────────────────────────────────────────────────────────────
+  // This is one member's own financial position — savings, loans, shares,
+  // ballots. It must be gone the moment the session that owns it ends.
+  const resetState = useCallback(() => {
+    setMe(null);
+    setSacco(null);
+    setMembers([]);
+    setContributions([]);
+    setContributionTypes([]);
+    setContributionStats(null);
+    setLoanProducts([]);
+    setLoans([]);
+    setSchedules([]);
+    setShares([]);
+    setListings([]);
+    setTransfers([]);
+    setSharePrices([]);
+    setSaccoTotals({ totalShares: 0, totalMarketValue: 0, shareholders: 0 });
+    setShareSettings(null);
+    setShareTxns([]);
+    setCertificates([]);
+    setDividends([]);
+    setDividendAllocations([]);
+    setTreasury(null);
+    setMotions([]);
+    setVotes([]);
+    setElections([]);
+    setElectionPositions([]);
+    setElectionCandidates([]);
+    setMyVoterRows([]);
+    setDocuments([]);
+    setContracts([]);
+    setLoading(true);
+  }, []);
+
   // ── Initial load — only for sacco members ─────────────────────────────────
+  // The reset runs first and only when the signed-in user actually changes, so
+  // a different member (or a sign-out) never leaves the previous member's
+  // position on screen. `isMember` arrives a tick after the session, which is
+  // why the load is keyed on both.
+  const memberUserIdRef = useRef(null);
   useEffect(() => {
-    if (!isMember || !user?.id) return;
+    const uid = user?.id ?? null;
+    if (memberUserIdRef.current !== uid) {
+      memberUserIdRef.current = uid;
+      resetState();
+    }
+    if (!uid || !isMember) return;
     fetchAll();
   }, [isMember, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 

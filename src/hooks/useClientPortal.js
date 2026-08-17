@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuthScopedLoader } from './useAuthScopedLoader';
 
 export const useClientPortal = () => {
   const [clientProfile, setClientProfile] = useState(null);
@@ -72,8 +73,8 @@ export const useClientPortal = () => {
 
   // ── Fetch available assets from the client's company to browse ─────────────
   // RLS (clients_browse_company_market_assets) scopes the read to the client's
-  // own company, including assets registered by the admin's staff — filtering
-  // on registered_by = admin_id here would hide staff-registered stock.
+  // own company through assets.admin_id, so staff-registered stock is included
+  // and no other company's market is ever visible here.
   const fetchBrowseAssets = useCallback(async (clientId) => {
     try {
       let query = supabase
@@ -254,10 +255,22 @@ export const useClientPortal = () => {
     }
   }, [fetchClientProfile, fetchMyAssets, fetchBrowseAssets, fetchPayments, fetchInstallmentPlans, fetchEnquiries]);
 
-  useEffect(() => {
-    if (hasLoaded.current) return;
-    fetchAll();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Every field here belongs to one client. This provider lives above the
+  // router, so without an explicit reset the next person to sign in on this
+  // tab would see the previous client's assets, payments and plans.
+  const resetState = useCallback(() => {
+    hasLoaded.current = false;
+    setClientProfile(null);
+    setMyAssets([]);
+    setBrowseAssets([]);
+    setPayments([]);
+    setInstallmentPlans([]);
+    setEnquiries([]);
+    setLoading(true);
+    setConnectionStatus('connecting');
+  }, []);
+
+  useAuthScopedLoader(fetchAll, resetState);
 
   return {
     clientProfile,

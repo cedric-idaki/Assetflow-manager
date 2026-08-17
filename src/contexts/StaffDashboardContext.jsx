@@ -21,6 +21,7 @@ import React, {
 } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from './AuthContext';
+import { useAuthScopedLoader } from '../hooks/useAuthScopedLoader';
 
 const StaffDashboardContext = createContext(null);
 
@@ -103,17 +104,24 @@ export const StaffDashboardProvider = ({ children }) => {
     return loadData();
   }, [loadData]);
 
-  // ── Trigger fetch on mount; guard prevents re-fetch on remount ─────────────
-  // user?.id in deps resets the guard when the authenticated user changes
-  useEffect(() => {
-    if (hasLoaded.current) return;
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount only — hasLoaded guard handles remount protection
-
-  // ── Reset hasLoaded when user or admin_id changes (logout / login) ──────────
-  useEffect(() => {
+  // ── Clear this user's data before anyone else's session can render it ─────
+  const resetState = useCallback(() => {
     hasLoaded.current = false;
+    setKpis({ clients: 0, payments: 0, assets: 0, revenue: 0 });
+    setActivity([]);
+    setAdminName('');
+    setLastUpdated(null);
+    setLoading(true);
+  }, []);
+
+  // Loads once per signed-in user; resets on every change of user.
+  useAuthScopedLoader(loadData, resetState);
+
+  // The tenant is read from the profile, which lands a tick after the session.
+  // Reload when it arrives, so a staff member's first paint is their own
+  // tenant's data rather than an empty dashboard.
+  useEffect(() => {
+    if (!user?.id || !userProfile?.admin_id) return;
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, userProfile?.admin_id]);
