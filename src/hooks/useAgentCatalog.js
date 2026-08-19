@@ -7,6 +7,14 @@
  * Agents could always READ their tenant's assets — the assets_tenant_manage
  * policy (20260708150000) admits any staff member of the registrant's tenant —
  * they just had nowhere to see them. This hook is that missing half.
+ *
+ * ONLY for agents created by a company admin. A super-admin-created agent sells
+ * the platform (they onboard new companies) and a sacco agent sells membership;
+ * neither has a product catalogue, and letting them load one would show them
+ * the super admin's own tenant. Pass isCompanyAgent=false and the hook stays
+ * completely inert — no query, no realtime channel. The database refuses them
+ * too, in create_asset_share_link (20260819120000); this half just keeps the
+ * portal from showing an empty shelf it would never be allowed to sell from.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -33,8 +41,10 @@ export const firstImage = (asset) => {
   return null;
 };
 
-export const useAgentCatalog = (agentProfile) => {
-  const agentId = agentProfile?.id || null;
+export const useAgentCatalog = (agentProfile, isCompanyAgent = false) => {
+  // Everything below guards on agentId, so withholding it here switches the
+  // whole hook off in one place rather than in five.
+  const agentId = (isCompanyAgent && agentProfile?.id) || null;
 
   const [assets,  setAssets]  = useState([]);
   const [links,   setLinks]   = useState([]);

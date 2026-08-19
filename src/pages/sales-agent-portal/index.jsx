@@ -685,12 +685,17 @@ const SalesAgentPortal = () => {
   const defaultEntity = isClientMode ? 'client' : isSaccoMode ? 'sacco' : 'company';
 
   // Every register/convert entry point goes through here so the modal that
-  // opens is stated, never inferred: a super-admin agent can open either.
+  // opens is stated, never inferred. One modal per entity now that an
+  // admin-created agent has both 'client' and 'company' available — the old
+  // shape overloaded createClient to mean "whatever this agent's default is",
+  // which cannot express an agent who has two.
+  const MODAL_FOR_ENTITY = { sacco: 'createSacco', company: 'createCompany', client: 'createClient' };
+
   const openRegister = (entity, lead = null) => {
     closeModal('leadDetail');
     if (lead) openModal('prefillLead', lead);
     else      closeModal('prefillLead');
-    openModal(entity === 'sacco' ? 'createSacco' : 'createClient');
+    openModal(MODAL_FOR_ENTITY[entity] || 'createClient');
   };
 
   const handleConvertToClient = (lead, entity = defaultEntity) => openRegister(entity, lead);
@@ -869,6 +874,20 @@ const SalesAgentPortal = () => {
       gradient: 'linear-gradient(135deg, #059669, #047857)',
       onClick: () => openRegister(defaultEntity),
     },
+    // An admin-created agent sells their company's stock AND can sign a brand
+    // new company up to the platform, the same flow and the same commission a
+    // super-admin agent gets. The company created this way is an INDEPENDENT
+    // tenant -- create-staff-user stamps admin_id NULL for the `admin` role --
+    // not a client of the agent's own admin. Super-admin agents already reach
+    // this through their default entity, hence isClientMode only.
+    isClientMode && {
+      id: 'register-company',
+      label: 'Register Company',
+      icon: 'Building2',
+      color: '#818cf8',
+      gradient: 'linear-gradient(135deg, #4f46e5, #4338ca)',
+      onClick: () => openRegister('company'),
+    },
     // Second product for super-admin agents -- same commission plan, different
     // tenant type.
     canRegisterSacco && {
@@ -918,8 +937,11 @@ const SalesAgentPortal = () => {
       onClick: () => { closeModal('prefillFollowUpLead'); openModal('scheduleFollowUp'); },
     },
     // Catalogue -- what the agent can send a buyer. The badge counts enquiries
-    // that came back through their own links.
-    {
+    // that came back through their own links. Admin-created agents only: they
+    // are the ones with a company whose stock is theirs to sell. A platform or
+    // sacco agent has no catalogue, and create_asset_share_link refuses them
+    // outright (20260819120000), so offering the tab would only mislead.
+    isClientMode && {
       id: 'catalogue',
       label: 'Catalogue',
       icon: 'Store',
@@ -1241,7 +1263,10 @@ const SalesAgentPortal = () => {
               loading={loading}
             />
 
-            {/* Catalogue — pick something, send a buyer a link, watch it land */}
+            {/* Catalogue — pick something, send a buyer a link, watch it land.
+                Admin-created agents only: the catalogue IS their admin's stock,
+                and no other kind of agent has one. */}
+            {isClientMode && (
             <div id="catalog" className="scroll-mt-24">
               <CatalogPanel
                 assets={catalogAssets}
@@ -1255,6 +1280,7 @@ const SalesAgentPortal = () => {
                 onNotify={showToast}
               />
             </div>
+            )}
 
             {/* Follow-ups & Appointments */}
             <div id="follow-ups" className="scroll-mt-24">
@@ -1379,25 +1405,28 @@ const SalesAgentPortal = () => {
         />
       )}
 
-      {/* ── Convert / register modal — the agent's default entity ── */}
+      {/* ── Register a client of the agent's own admin ── */}
       {modals.createClient && (
-        isClientMode ? (
-          <CreateClientModal
-            isOpen={modals.createClient}
-            onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
-            agentProfile={agentProfile}
-            prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
-            onSuccess={(account) => handleClientCreated(account, 'client')}
-          />
-        ) : (
-          <CreateCompanyModal
-            isOpen={modals.createClient}
-            onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
-            agentProfile={agentProfile}
-            prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
-            onSuccess={(account) => handleClientCreated(account, 'company')}
-          />
-        )
+        <CreateClientModal
+          isOpen={modals.createClient}
+          onClose={() => { closeModal('createClient'); closeModal('prefillLead'); }}
+          agentProfile={agentProfile}
+          prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
+          onSuccess={(account) => handleClientCreated(account, 'client')}
+        />
+      )}
+
+      {/* ── Sign a brand-new company up to the platform. Reached by
+             super-admin agents as their default entity, and now by
+             admin-created agents from their own Register Company action. ── */}
+      {modals.createCompany && (
+        <CreateCompanyModal
+          isOpen={modals.createCompany}
+          onClose={() => { closeModal('createCompany'); closeModal('prefillLead'); }}
+          agentProfile={agentProfile}
+          prefillLead={typeof modals.prefillLead === 'object' ? modals.prefillLead : null}
+          onSuccess={(account) => handleClientCreated(account, 'company')}
+        />
       )}
 
       {/* ── Register a sacco — the default for sacco-side agents, and the

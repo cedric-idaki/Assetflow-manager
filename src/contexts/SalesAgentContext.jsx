@@ -19,7 +19,9 @@ export const SalesAgentProvider = ({ children }) => {
   const tickets = useAgentTickets(portal.agentProfile);
   // The shareable catalogue, same reasoning: a buyer opening a link changes the
   // counts while the agent is on another tab.
-  const catalog = useAgentCatalog(portal.agentProfile);
+  // Only an admin-created agent ('client' mode) sells a company's stock, so
+  // only they get a catalogue. Platform and sacco agents get an inert hook.
+  const catalog = useAgentCatalog(portal.agentProfile, portal.agentMode === 'client');
   // The client book — who the agent signed and whether those accounts still
   // pay. It reads the portal's leads rather than re-fetching them, so it mounts
   // here where both are already resolved.
@@ -27,11 +29,16 @@ export const SalesAgentProvider = ({ children }) => {
   const [activeView, setActiveView] = useState('portal');
   const [modals, setModals] = useState({
     leadRegistration: false,
-    // createClient covers the agent's default entity (a client for admin-created
-    // agents, a company for super-admin ones); createSacco is its own modal so a
-    // super-admin agent can register either without changing agent mode.
+    // One key per entity. These used to be two, with createClient standing in
+    // for "the agent's default", but an admin-created agent now registers both
+    // clients and companies, so the default can no longer name the modal.
     createClient: false,
     createSacco: false,
+    // Onboarding a brand-new company onto the platform. Its own key rather than
+    // riding on createClient, because an admin-created agent now has BOTH: they
+    // register clients for their admin AND can sign up new companies, so the two
+    // have to be openable independently.
+    createCompany: false,
     leadDetail: null,
     showExport: false,
     selectedLead: null,
