@@ -12,7 +12,7 @@
 
 // One-time fee, charged on first registration only. Renewals/upgrades must NOT
 // re-charge it.
-export const INSTALLATION_FEE = 3000; // KES
+export const INSTALLATION_FEE = 4000; // KES
 
 export const COMPANY_PLANS = [
   {

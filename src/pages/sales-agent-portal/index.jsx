@@ -849,8 +849,101 @@ const SalesAgentPortal = () => {
   const fmt = (n) =>
     `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
+  // -- Toolbar ---------------------------------------------------------------
+  // The portal's actions live on the sidebar rail, not above the content: the
+  // header row had grown to ten buttons that wrapped onto a second line and
+  // pushed the KPIs down the page, while the agent sidebar sat nearly empty.
+  // One list feeds both surfaces -- the rail on desktop, and a compact row on
+  // phones, where the sidebar is behind the hamburger. `color` is the version
+  // that reads on the dark rail; `gradient` is the light-background version.
+  const registerEntityLabel = isClientMode ? 'Create Client' : isSaccoMode ? 'Register Sacco' : 'Register Company';
+
+  const portalActions = [
+    // Create a client (admin agents), register a company (super-admin agents)
+    // or register a sacco (sacco-oversight agents)
+    {
+      id: 'register-entity',
+      label: registerEntityLabel,
+      icon: isClientMode ? 'UserPlus' : isSaccoMode ? 'PiggyBank' : 'Building2',
+      color: '#34d399',
+      gradient: 'linear-gradient(135deg, #059669, #047857)',
+      onClick: () => openRegister(defaultEntity),
+    },
+    // Second product for super-admin agents -- same commission plan, different
+    // tenant type.
+    canRegisterSacco && {
+      id: 'register-sacco',
+      label: 'Register Sacco',
+      icon: 'PiggyBank',
+      color: '#22d3ee',
+      gradient: 'linear-gradient(135deg, #0891b2, #0e7490)',
+      onClick: () => openRegister('sacco'),
+    },
+    // Assist -- bronze agents hand an admin to a gold agent for onboarding
+    isBronzeCompanyAgent && {
+      id: 'assist',
+      label: 'Assist',
+      icon: 'LifeBuoy',
+      color: '#fbbf24',
+      gradient: 'linear-gradient(135deg, #f59e0b, #d97706)',
+      onClick: () => openModal('assist'),
+    },
+    // Assist inbox -- opens the requests rather than scrolling at them, so it
+    // works from the Activity view too and cannot land short.
+    isGoldAgent && {
+      id: 'assists',
+      label: 'Assists',
+      icon: 'LifeBuoy',
+      badge: assistBuckets?.actionable,
+      badgeColor: assistBuckets?.pending?.length > 0 ? '#f59e0b' : '#3b82f6',
+      onClick: () => openModal('assistInbox'),
+    },
+    // Tickets -- the conversation channel between agents. The badge is the
+    // point: an unread reply nobody notices is a phone call.
+    hasTickets && {
+      id: 'tickets',
+      label: 'Tickets',
+      icon: 'Ticket',
+      badge: ticketBuckets?.actionable,
+      badgeColor: ticketBuckets?.unreadCount > 0 ? '#2563eb' : '#f59e0b',
+      onClick: () => openModal('tickets'),
+    },
+    // Schedule a follow-up -- badge shows what is due or overdue
+    {
+      id: 'follow-ups',
+      label: 'Follow-ups',
+      icon: 'CalendarClock',
+      badge: followUpBuckets?.actionable,
+      badgeColor: followUpBuckets?.overdue?.length > 0 ? '#dc2626' : '#f59e0b',
+      onClick: () => { closeModal('prefillFollowUpLead'); openModal('scheduleFollowUp'); },
+    },
+    // Catalogue -- what the agent can send a buyer. The badge counts enquiries
+    // that came back through their own links.
+    {
+      id: 'catalogue',
+      label: 'Catalogue',
+      icon: 'Store',
+      href: '#catalog',
+      badge: shareStats?.totalEnquiries,
+      badgeColor: '#059669',
+    },
+    { id: 'export', label: 'Export', icon: 'Download', onClick: () => openModal('showExport') },
+    {
+      id: 'register-lead',
+      label: 'Register Lead',
+      icon: 'Plus',
+      color: '#60a5fa',
+      gradient: 'linear-gradient(135deg, #1A56DB, #1E429F)',
+      onClick: () => openModal('leadRegistration'),
+    },
+  ].filter(Boolean);
+
+  const sidebarActions = [
+    { label: 'Actions', items: portalActions },
+  ];
+
   return (
-    <MainLayout>
+    <MainLayout sidebarActions={sidebarActions}>
       <div className="space-y-5">
 
         {/* ── Header ── */}
@@ -904,131 +997,42 @@ const SalesAgentPortal = () => {
                 My Activity
               </button>
             </div>
-
-            {/* Create a client (admin agents), register a company (super-admin
-                agents) or register a sacco (sacco-oversight agents) */}
-            <button
-              onClick={() => openRegister(defaultEntity)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
-              style={{ background: 'linear-gradient(135deg, #059669, #047857)' }}
-            >
-              <Icon name={isClientMode ? 'UserPlus' : isSaccoMode ? 'PiggyBank' : 'Building2'} size={15} color="white" />
-              {isClientMode ? 'Create Client' : isSaccoMode ? 'Register Sacco' : 'Register Company'}
-            </button>
-
-            {/* Second product for super-admin agents — same commission plan,
-                different tenant type. */}
-            {canRegisterSacco && (
-              <button
-                onClick={() => openRegister('sacco')}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
-                style={{ background: 'linear-gradient(135deg, #0891b2, #0e7490)' }}
-              >
-                <Icon name="PiggyBank" size={15} color="white" />
-                Register Sacco
-              </button>
-            )}
-
-            {/* Assist — bronze agents hand an admin to a gold agent for onboarding */}
-            {isBronzeCompanyAgent && (
-              <button
-                onClick={() => openModal('assist')}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
-                style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
-              >
-                <Icon name="LifeBuoy" size={15} color="white" />
-                Assist
-              </button>
-            )}
-
-            {/* Assist inbox — opens the requests rather than scrolling at them,
-                so it works from the Activity view too and cannot land short. */}
-            {isGoldAgent && (
-              <button
-                onClick={() => openModal('assistInbox')}
-                className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-              >
-                <Icon name="LifeBuoy" size={15} color="currentColor" />
-                Assists
-                {assistBuckets?.actionable > 0 && (
-                  <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center ${
-                    assistBuckets.pending.length > 0 ? 'bg-amber-500' : 'bg-blue-500'
-                  }`}>
-                    {assistBuckets.actionable}
-                  </span>
-                )}
-              </button>
-            )}
-
-            {/* Tickets — the conversation channel between agents. The badge is
-                the point: an unread reply nobody notices is a phone call. */}
-            {hasTickets && (
-              <button
-                onClick={() => openModal('tickets')}
-                className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-              >
-                <Icon name="Ticket" size={15} color="currentColor" />
-                Tickets
-                {ticketBuckets?.actionable > 0 && (
-                  <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center ${
-                    ticketBuckets.unreadCount > 0 ? 'bg-blue-600' : 'bg-amber-500'
-                  }`}>
-                    {ticketBuckets.actionable}
-                  </span>
-                )}
-              </button>
-            )}
-
-            {/* Schedule a follow-up — badge shows what is due or overdue */}
-            <button
-              onClick={() => { closeModal('prefillFollowUpLead'); openModal('scheduleFollowUp'); }}
-              className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-            >
-              <Icon name="CalendarClock" size={15} color="currentColor" />
-              Follow-ups
-              {followUpBuckets?.actionable > 0 && (
-                <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center ${
-                  followUpBuckets.overdue.length > 0 ? 'bg-red-600' : 'bg-amber-500'
-                }`}>
-                  {followUpBuckets.actionable}
-                </span>
-              )}
-            </button>
-
-            {/* Catalogue — what the agent can send a buyer. The badge counts
-                enquiries that came back through their own links. */}
-            <a
-              href="#catalog"
-              className="relative flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-            >
-              <Icon name="Store" size={15} color="currentColor" />
-              Catalogue
-              {shareStats?.totalEnquiries > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center bg-emerald-600">
-                  {shareStats.totalEnquiries}
-                </span>
-              )}
-            </a>
-
-            {/* Export */}
-            <button
-              onClick={() => openModal('showExport')}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-semibold text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-            >
-              <Icon name="Download" size={15} color="currentColor" />
-              Export
-            </button>
-
-            {/* Register lead */}
-            <button
-              onClick={() => openModal('leadRegistration')}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
-              style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
-            >
-              <Icon name="Plus" size={15} color="white" />
-              Register Lead
-            </button>
           </div>
+        </div>
+
+        {/* -- Actions (phones only) --
+            The same list the sidebar rail renders from. */}
+        <div className="lg:hidden flex items-center gap-2 flex-wrap">
+          {portalActions.map((a) => {
+            const cls = `relative flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold ${
+              a.gradient
+                ? 'text-white'
+                : 'border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-all'
+            }`;
+            const inner = (
+              <>
+                <Icon name={a.icon} size={14} color={a.gradient ? 'white' : 'currentColor'} />
+                {a.label}
+                {a.badge > 0 && (
+                  <span
+                    className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-xs font-bold text-white flex items-center justify-center"
+                    style={{ background: a.badgeColor || '#ef4444' }}
+                  >
+                    {a.badge > 99 ? '99+' : a.badge}
+                  </span>
+                )}
+              </>
+            );
+            return a.href ? (
+              <a key={a.id} href={a.href} className={cls} style={a.gradient ? { background: a.gradient } : undefined}>
+                {inner}
+              </a>
+            ) : (
+              <button key={a.id} onClick={a.onClick} className={cls} style={a.gradient ? { background: a.gradient } : undefined}>
+                {inner}
+              </button>
+            );
+          })}
         </div>
 
         {/* ── Activity Trail View ── */}

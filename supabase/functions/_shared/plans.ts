@@ -20,7 +20,7 @@
 // The installation fee is first-registration only; renewals must not re-charge
 // it, which is why chargeInstallation is a parameter rather than an assumption.
 
-export const INSTALLATION_FEE = 3000; // KES, both product lines
+export const INSTALLATION_FEE = 4000; // KES, both product lines
 
 interface CompanyPlan {
   id: string;

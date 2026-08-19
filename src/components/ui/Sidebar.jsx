@@ -22,11 +22,20 @@ const B = {
   activeText: '#34c1dd',
 };
 
+/* A page action keeps its own colour; on the dark rail it needs a tint, not a fill */
+var tintOf = function(hex, alpha) {
+  var n = parseInt(String(hex).replace('#', ''), 16);
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
+};
+
 var Sidebar = function(props) {
   var isCollapsed    = props.isCollapsed    || false;
   var onToggleCollapse = props.onToggleCollapse;
   var isMobileOpen   = props.isMobileOpen   || false;
   var onMobileClose  = props.onMobileClose;
+  // Page-supplied toolbar. MainLayout passes it straight through so a page can
+  // keep its actions beside the navigation instead of stacked above its content.
+  var actionGroups   = props.actionGroups   || [];
 
   var location = useLocation();
   var authContext = useAuth();
@@ -289,6 +298,129 @@ var Sidebar = function(props) {
             </Link>
           );
         })}
+
+        {/* ── Page actions ─────────────────────────────────────────────────
+            Same rail, same scroll container as the nav, so a long toolbar
+            scrolls with it instead of pushing the sign-out block off screen. */}
+        {actionGroups.map(function(group, gi) {
+          if (!group || !group.items || group.items.length === 0) return null;
+          return (
+            <div key={group.label || gi} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <div style={{
+                marginTop: '12px',
+                paddingTop: isCollapsed ? '10px' : '8px',
+                borderTop: `1px solid ${B.borderSubtle}`,
+              }}>
+                {!isCollapsed && group.label && (
+                  <span style={{
+                    display: 'block', padding: '0 10px 4px',
+                    fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em',
+                    textTransform: 'uppercase', color: B.textDim,
+                    fontFamily: 'Open Sans, Arial, sans-serif',
+                  }}>
+                    {group.label}
+                  </span>
+                )}
+              </div>
+
+              {group.items.map(function(item, ii) {
+                var tone   = item.color || null;
+                var active = !!item.active;
+
+                var style = {
+                  display: 'flex',
+                  alignItems: 'center',
+                  width: '100%',
+                  height: '38px',
+                  padding: '0 10px',
+                  borderRadius: '7px',
+                  textDecoration: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  gap: isCollapsed ? 0 : '10px',
+                  justifyContent: isCollapsed ? 'center' : 'flex-start',
+                  position: 'relative',
+                  transition: 'background 150ms ease',
+                  background: active ? B.activeBg : (tone ? tintOf(tone, 0.13) : 'transparent'),
+                  border: active
+                    ? `1px solid ${B.borderSubtle}`
+                    : (tone ? `1px solid ${tintOf(tone, 0.32)}` : '1px solid transparent'),
+                };
+
+                var iconColor  = active ? B.accent : (tone || B.textDim);
+                var labelColor = active ? B.accent : (tone || B.textMid);
+
+                var body = (
+                  <React.Fragment>
+                    <Icon name={item.icon} size={17} color={iconColor} />
+                    {!isCollapsed && (
+                      <span style={{
+                        fontSize: '13.5px',
+                        fontWeight: (active || tone) ? 600 : 400,
+                        color: labelColor,
+                        flex: 1,
+                        fontFamily: 'Open Sans, Arial, sans-serif',
+                      }}>
+                        {item.label}
+                      </span>
+                    )}
+                    {!isCollapsed && item.badge > 0 && (
+                      <span style={{
+                        minWidth: '18px', height: '18px', borderRadius: '9px',
+                        background: item.badgeColor || '#ef4444', color: '#fff',
+                        fontSize: '10px', fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px',
+                      }}>
+                        {item.badge > 99 ? '99+' : item.badge}
+                      </span>
+                    )}
+                    {isCollapsed && item.badge > 0 && (
+                      <span style={{
+                        position: 'absolute', top: '4px', right: '4px',
+                        width: '7px', height: '7px', borderRadius: '50%',
+                        background: item.badgeColor || '#ef4444',
+                      }} />
+                    )}
+                  </React.Fragment>
+                );
+
+                var hoverIn  = function(e) { if (!active && !tone) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; };
+                var hoverOut = function(e) { if (!active && !tone) e.currentTarget.style.background = 'transparent'; };
+
+                if (item.href) {
+                  return (
+                    <a
+                      key={item.id || ii}
+                      href={item.href}
+                      onClick={close}
+                      title={isCollapsed ? item.label : ''}
+                      style={style}
+                      onMouseEnter={hoverIn}
+                      onMouseLeave={hoverOut}
+                    >
+                      {body}
+                    </a>
+                  );
+                }
+
+                return (
+                  <button
+                    key={item.id || ii}
+                    type="button"
+                    title={isCollapsed ? item.label : ''}
+                    onClick={function() { close(); if (item.onClick) item.onClick(); }}
+                    style={style}
+                    onMouseEnter={hoverIn}
+                    onMouseLeave={hoverOut}
+                  >
+                    {body}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+
       </nav>
 
       {/* Bottom — user + signout */}

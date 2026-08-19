@@ -14,7 +14,7 @@
 // One-time onboarding fee, charged on first registration only (BRS §7.1).
 // Covers account setup, initial configuration and a 30-minute onboarding
 // session with the administrator.
-export const INSTALLATION_FEE = 3000; // KES
+export const INSTALLATION_FEE = 4000; // KES
 
 // Excess storage above the tier's free quota (BRS §7.2 / §7.5).
 export const EXCESS_STORAGE_PER_GB = 10; // KES per additional GB / month

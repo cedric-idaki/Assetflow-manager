@@ -7,6 +7,9 @@ import ForcePasswordChange from '../components/ForcePasswordChange';
 
 const MainLayout = function(props) {
   var children = props.children;
+  // A page can hand its toolbar to the sidebar rather than render it above
+  // its own content — see the sales agent portal.
+  var sidebarActions = props.sidebarActions || [];
   var location = useLocation();
 
   var collapsedState = useState(false);
@@ -70,6 +73,7 @@ const MainLayout = function(props) {
         onToggleCollapse={handleToggleSidebar}
         isMobileOpen={isMobileOpen}
         onMobileClose={function() { setIsMobileOpen(false); }}
+        actionGroups={sidebarActions}
       />
 
       {/* Main area */}
