@@ -306,7 +306,16 @@ const AdminRegistration = () => {
         .select('id')
         .maybeSingle();
       if (subscriptionError) throw subscriptionError;
-      setCreatedSubscriptionId(subscriptionData?.id ?? null);
+      // mpesa-stk-push now REFUSES a subscription push it cannot price, and it
+      // prices it from this row. Without an id the payment step would fail with
+      // a payment-shaped error for what is really a signup problem, so stop here
+      // instead — the account exists and the user can retry this step.
+      if (!subscriptionData?.id) {
+        throw new Error(
+          'Your subscription record could not be created, so we cannot take payment yet. Please try again.',
+        );
+      }
+      setCreatedSubscriptionId(subscriptionData.id);
 
       // 5. Confirmation email to the admin — best-effort: registration must
       //    never fail because the mail didn't go out.
@@ -355,7 +364,8 @@ const AdminRegistration = () => {
         amount: Math.round(totalPrice),
         accountRef,
       };
-      if (createdSubscriptionId) payload.subscriptionId = createdSubscriptionId;
+      // Always sent: the server refuses a subscription push without it.
+      payload.subscriptionId = createdSubscriptionId;
 
       const data = await invokeSupabaseFunction('mpesa-stk-push', { body: payload });
       if (data?.error) throw new Error(data.error);

@@ -67,7 +67,7 @@ const buildCtx = (over = {}) => ({
     allow_member_transfers: true, require_transfer_approval: false, auto_settle: true,
     allow_partial_fills: true, price_floor_is_par: true, lock_in_days: 0,
     market_open_time: '00:00', market_close_time: '00:00', market_days: [0, 1, 2, 3, 4, 5, 6],
-    trading_suspended: false, require_kyc_to_trade: true, large_trade_threshold: 0,
+    trading_suspended: false, large_trade_threshold: 0,
     certificate_prefix: 'CERT',
   },
   // Engine actions

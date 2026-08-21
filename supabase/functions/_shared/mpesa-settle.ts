@@ -169,7 +169,17 @@ async function settleSubscription(
     .eq('admin_id', txn.admin_id)
     .in('status', ['pending', 'expired', 'suspended']);
 
-  if (error) console.error('Failed to activate subscription:', error.message);
+  // The customer paid for portal access and did not get it. Same class of
+  // failure as an unrecorded payment: confirmed money, no delivery, no retry.
+  if (error) {
+    await reportUnbankedMoney(supabase, txn, {
+      kind: 'subscription_not_activated',
+      summary: 'SUBSCRIPTION PAID BUT NOT ACTIVATED — the admin was charged and the portal stayed shut',
+      reason: error.message,
+      receipt,
+      amount,
+    });
+  }
 }
 
 /** Tenant collected from its own client — record the payment against them. */
@@ -194,11 +204,14 @@ async function settleCollection(
 
   if (error && !/duplicate key/i.test(error.message)) {
     // The transaction is already claimed, so nothing will retry this. Money has
-    // been taken and there is no payments row for it — that needs a human, and
-    // this log line is the only thing that will tell them.
-    console.error(
-      `UNRECORDED M-PESA PAYMENT — receipt ${receipt}, KES ${amount}, client ${txn.client_id}, admin ${txn.admin_id}: ${error.message}`,
-    );
+    // been taken and there is no payments row for it — that needs a human.
+    await reportUnbankedMoney(supabase, txn, {
+      kind: 'unrecorded_payment',
+      summary: 'UNRECORDED M-PESA PAYMENT — money received but no payment record was created',
+      reason: error.message,
+      receipt,
+      amount,
+    });
   }
 
   if (txn.charge_id) {
@@ -208,9 +221,13 @@ async function settleCollection(
       .eq('id', txn.charge_id);
 
     if (chargeErr) {
-      console.error(
-        `Payment ${receipt} banked but installment charge ${txn.charge_id} not marked paid: ${chargeErr.message}`,
-      );
+      await reportUnbankedMoney(supabase, txn, {
+        kind: 'installment_charge_not_closed',
+        summary: `Payment banked but installment charge ${txn.charge_id} was not marked paid`,
+        reason: chargeErr.message,
+        receipt,
+        amount,
+      });
     }
   }
 }
@@ -236,7 +253,16 @@ async function settleSaccoContribution(
   { receipt, amount, phone }: { receipt: string; amount: number; phone: string },
 ) {
   if (!txn.contribution_id) {
-    console.error('sacco_contribution callback with no contribution_id:', txn.checkout_request_id);
+    // mpesa-stk-push refuses to push a contribution without one, so reaching
+    // here means the transaction row lost it — the member has paid and there is
+    // nothing to credit it to.
+    await reportUnbankedMoney(supabase, txn, {
+      kind: 'contribution_unlinked',
+      summary: 'SACCO CONTRIBUTION PAID BUT UNLINKED — the transaction carries no contribution_id',
+      reason: 'txn.contribution_id is null',
+      receipt,
+      amount,
+    });
     return;
   }
 
@@ -263,11 +289,98 @@ async function settleSaccoContribution(
   if (error) {
     // The duplicate-receipt index firing here means Safaricom sent us a receipt
     // we have already banked against another contribution. Leave the row
-    // pending for a human rather than crediting the member twice.
-    console.error('Failed to settle sacco contribution:', error.message);
+    // pending rather than crediting the member twice — and tell the human whose
+    // job it is to reconcile it, because the member's money has already moved.
+    await reportUnbankedMoney(supabase, txn, {
+      kind: 'contribution_not_settled',
+      summary: `SACCO CONTRIBUTION PAID BUT NOT CREDITED — contribution ${txn.contribution_id} is still pending`,
+      reason: error.message,
+      receipt,
+      amount,
+    });
     return;
   }
   if (!settled) {
     console.warn('Sacco contribution was no longer pending:', txn.contribution_id);
+  }
+}
+
+/**
+ * A customer's money moved but the books did not follow.
+ *
+ * Every caller of this is a path where Safaricom has confirmed the payment and
+ * `settled_at` is already claimed, so nothing will retry on its own. Until now
+ * the only trace was a console.error in the function logs, which nobody reads
+ * until a customer complains — by which time the receipt is hard to match.
+ *
+ * So write it somewhere a human actually looks:
+ *   * `audit_logs`, scoped to the tenant's admin_id, severity 'critical' — this
+ *     is the one the affected admin can see in their own Audit Trail.
+ *   * `payment_alerts_log`, the payments-domain ops log.
+ *
+ * Each write is independent and best-effort: this function runs at the exact
+ * moment something has already gone wrong, so it must never throw and must
+ * never let one failed insert hide the other. The console.error stays as the
+ * last resort if both tables are unreachable.
+ */
+async function reportUnbankedMoney(
+  supabase: any,
+  txn: Record<string, any>,
+  { kind, summary, reason, receipt, amount }: {
+    kind: string;
+    summary: string;
+    reason: string;
+    receipt: string;
+    amount: number;
+  },
+): Promise<void> {
+  console.error(
+    `${summary} — receipt ${receipt || '(none)'}, KES ${amount}, purpose ${txn.purpose}, `
+    + `checkout ${txn.checkout_request_id}, client ${txn.client_id ?? '-'}, admin ${txn.admin_id ?? '-'}: ${reason}`,
+  );
+
+  const detail = {
+    kind,
+    reason,
+    receipt: receipt || null,
+    amount,
+    purpose: txn.purpose ?? null,
+    checkout_request_id: txn.checkout_request_id ?? null,
+    client_id: txn.client_id ?? null,
+    admin_id: txn.admin_id ?? null,
+    phone_number: txn.phone_number ?? null,
+    occurred_at: new Date().toISOString(),
+  };
+
+  try {
+    await supabase.from('audit_logs').insert({
+      action: 'create',
+      admin_id: txn.admin_id ?? null,
+      client_id: txn.client_id ?? null,
+      table_name: 'mpesa_transactions',
+      record_id: txn.id ?? null,
+      severity: 'critical',
+      change_type: kind,
+      description: `${summary}. M-Pesa receipt ${receipt || '(none)'}, KES ${amount}. ${reason}`,
+      metadata: detail,
+    });
+  } catch (err) {
+    console.error(`Could not write the audit record for ${kind}: ${(err as Error).message}`);
+  }
+
+  try {
+    await supabase.from('payment_alerts_log').insert({
+      alert_type: 'settlement_failure',
+      event_type: kind,
+      amount,
+      transaction_id: txn.checkout_request_id ?? null,
+      recipient_phone: txn.phone_number ?? null,
+      subject: summary,
+      message: `${summary}. M-Pesa receipt ${receipt || '(none)'}, KES ${amount}.`,
+      error_message: reason,
+      metadata: detail,
+    });
+  } catch (err) {
+    console.error(`Could not write the payment alert for ${kind}: ${(err as Error).message}`);
   }
 }

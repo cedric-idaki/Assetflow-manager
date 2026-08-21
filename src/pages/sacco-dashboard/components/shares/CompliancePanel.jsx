@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useToast } from '../../../../components/Toast';
 import Icon from '../../../../components/AppIcon';
-import { Card, StatCard, Table, Badge, GhostButton, Select, EmptyState, KES, fmtDate } from '../_shared';
+import { Card, StatCard, Table, GhostButton, Select, EmptyState, KES, fmtDate } from '../_shared';
 import { int, num, pct, withDefaults } from './_util';
 
 const SEVERITY = {
@@ -21,7 +21,7 @@ const ACTION_LABELS = {
 };
 
 /**
- * Compliance: the KYC gate, ownership limits, AML flags, and the audit trail of
+ * Compliance: ownership limits, AML flags, and the audit trail of
  * every share action — who, when, old value, new value, reason.
  */
 const CompliancePanel = ({ ctx, ov }) => {
@@ -46,12 +46,6 @@ const CompliancePanel = ({ ctx, ov }) => {
 
   const memberName = (id) => members.find((m) => m.id === id)?.full_name || '—';
 
-  const unverifiedHolders = shares.filter((r) => {
-    if (int(r.shares_held) <= 0) return false;
-    const m = members.find((x) => x.id === r.member_id);
-    return (m?.kyc_status || 'pending') !== 'verified';
-  });
-
   const capShares = num(s.max_holding_percent) > 0 && ov.totalIssued > 0
     ? Math.floor(ov.totalIssued * num(s.max_holding_percent) / 100)
     : num(s.max_holding_shares);
@@ -64,12 +58,9 @@ const CompliancePanel = ({ ctx, ov }) => {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <StatCard label="High-severity alerts" value={bySeverity('high')} icon="AlertOctagon"
           tone={bySeverity('high') ? 'warning' : 'success'} />
-        <StatCard label="KYC gate" value={s.require_kyc_to_trade ? 'Enforced' : 'Off'}
-          icon="ShieldCheck" tone={s.require_kyc_to_trade ? 'success' : 'muted'}
-          hint={unverifiedHolders.length ? `${unverifiedHolders.length} holder(s) unverified` : 'All holders verified'} />
         <StatCard label="Ownership ceiling" value={capShares > 0 ? capShares.toLocaleString() : 'None'}
           icon="Crown" tone="muted"
           hint={num(s.max_holding_percent) > 0 ? `${s.max_holding_percent}% of the issue` : (capShares > 0 ? 'shares per member' : 'No limit set')} />
@@ -123,61 +114,34 @@ const CompliancePanel = ({ ctx, ov }) => {
         )}
       </Card>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <Card title="KYC before trading"
-          subtitle={s.require_kyc_to_trade ? 'Unverified members are refused by the engine' : 'The KYC gate is switched off'}>
-          {unverifiedHolders.length === 0 ? (
-            <EmptyState icon="ShieldCheck" title="Every shareholder is verified" />
-          ) : (
-            <Table columns={['Member', 'Shares', 'KYC status', 'Can trade?']}>
-              {unverifiedHolders.map((r) => {
-                const m = members.find((x) => x.id === r.member_id) || {};
-                return (
-                  <tr key={r.id} className="border-b border-border/60">
-                    <td className="py-2.5 pr-4 font-medium text-foreground">{m.full_name || memberName(r.member_id)}</td>
-                    <td className="py-2.5 pr-4 text-foreground">{int(r.shares_held).toLocaleString()}</td>
-                    <td className="py-2.5 pr-4"><Badge status={m.kyc_status || 'pending'} /></td>
-                    <td className="py-2.5 pr-4 text-sm">
-                      {s.require_kyc_to_trade
-                        ? <span className="text-red-600 font-semibold">Blocked</span>
-                        : <span className="text-muted-foreground">Allowed</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </Table>
-          )}
-        </Card>
-
-        <Card title="Ownership limits"
-          subtitle={capShares > 0 ? `No member may hold more than ${capShares.toLocaleString()} shares` : 'No ownership ceiling is set'}>
-          {capShares === 0 ? (
-            <EmptyState icon="Crown" title="No ownership ceiling"
-              hint="Set a maximum holding in Settings to stop any one member dominating the society." />
-          ) : nearCap.length === 0 ? (
-            <EmptyState icon="ShieldCheck" title="Everyone is comfortably inside the limit" />
-          ) : (
-            <Table columns={['Member', 'Shares', 'Ownership', 'Headroom']}>
-              {nearCap.map((r) => {
-                const m = members.find((x) => x.id === r.member_id) || {};
-                const held = int(r.shares_held);
-                return (
-                  <tr key={r.id} className="border-b border-border/60">
-                    <td className="py-2.5 pr-4 font-medium text-foreground">{m.full_name || memberName(r.member_id)}</td>
-                    <td className="py-2.5 pr-4 text-foreground">{held.toLocaleString()}</td>
-                    <td className="py-2.5 pr-4 text-foreground">
-                      {ov.totalIssued > 0 ? pct((held / ov.totalIssued) * 100, 2) : '—'}
-                    </td>
-                    <td className={`py-2.5 pr-4 font-semibold ${capShares - held <= 0 ? 'text-red-600' : 'text-amber-600'}`}>
-                      {Math.max(0, capShares - held).toLocaleString()} shares
-                    </td>
-                  </tr>
-                );
-              })}
-            </Table>
-          )}
-        </Card>
-      </div>
+      <Card title="Ownership limits"
+        subtitle={capShares > 0 ? `No member may hold more than ${capShares.toLocaleString()} shares` : 'No ownership ceiling is set'}>
+        {capShares === 0 ? (
+          <EmptyState icon="Crown" title="No ownership ceiling"
+            hint="Set a maximum holding in Settings to stop any one member dominating the society." />
+        ) : nearCap.length === 0 ? (
+          <EmptyState icon="ShieldCheck" title="Everyone is comfortably inside the limit" />
+        ) : (
+          <Table columns={['Member', 'Shares', 'Ownership', 'Headroom']}>
+            {nearCap.map((r) => {
+              const m = members.find((x) => x.id === r.member_id) || {};
+              const held = int(r.shares_held);
+              return (
+                <tr key={r.id} className="border-b border-border/60">
+                  <td className="py-2.5 pr-4 font-medium text-foreground">{m.full_name || memberName(r.member_id)}</td>
+                  <td className="py-2.5 pr-4 text-foreground">{held.toLocaleString()}</td>
+                  <td className="py-2.5 pr-4 text-foreground">
+                    {ov.totalIssued > 0 ? pct((held / ov.totalIssued) * 100, 2) : '—'}
+                  </td>
+                  <td className={`py-2.5 pr-4 font-semibold ${capShares - held <= 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                    {Math.max(0, capShares - held).toLocaleString()} shares
+                  </td>
+                </tr>
+              );
+            })}
+          </Table>
+        )}
+      </Card>
 
       {/* Audit trail */}
       <Card

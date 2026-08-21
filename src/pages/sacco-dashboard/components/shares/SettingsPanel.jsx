@@ -187,9 +187,6 @@ const SettingsPanel = ({ ctx, ov }) => {
               <Toggle label="Allow member-to-member transfers" checked={form.allow_member_transfers}
                 onChange={(v) => set('allow_member_transfers', v)}
                 hint="Members can gift or transfer shares outside the marketplace." />
-              <Toggle label="Require verified KYC to trade" checked={form.require_kyc_to_trade}
-                onChange={(v) => set('require_kyc_to_trade', v)}
-                hint="Unverified members cannot place or fill orders." />
             </div>
             {form.auto_settle && form.require_transfer_approval && (
               <p className="mt-3 text-xs text-amber-700">

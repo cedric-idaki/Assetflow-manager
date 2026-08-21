@@ -167,14 +167,20 @@ Deno.serve(async (req) => {
     }
 
     // ── Subscription: is this the right price for the plan? ──────────────────
-    // LOG ONLY, DELIBERATELY. The expected figure is recomputed server-side
-    // from _shared/plans.ts, which is a third copy of pricing that already
-    // lives in two frontend files (see that file). Rejecting on a mismatch
-    // today would turn any drift between those copies into failed
-    // registrations. So: record every mismatch, let the payment through, and
-    // switch to enforcing once the logs have been clean for a while.
+    // ENFORCED. The expected figure is recomputed server-side from
+    // _shared/plans.ts, a third copy of pricing that
+    // src/config/planCatalogs.sync.test.js fails on if it drifts from the two
+    // frontend catalogs.
+    //
+    // Everything the payer controls fails CLOSED — a missing, unknown or
+    // foreign subscriptionId, a seat count no tier covers, or a wrong amount
+    // all stop the push. That is the whole point: settleSubscription activates
+    // on txn.admin_id alone and never reads subscriptionId, so a push that
+    // skipped this check would still open the portal at whatever price it
+    // named. Only an unexpected exception fails open, and it says so loudly.
     if (purpose === 'subscription') {
-      await auditSubscriptionPrice(admin, { subscriptionId, adminId, payable });
+      const verdict = await verifySubscriptionPrice(admin, { subscriptionId, adminId, payable });
+      if (!verdict.ok) return json({ error: verdict.error, code: verdict.code }, verdict.status);
     }
 
     // ── Resolve credentials for this flow ────────────────────────────────────
@@ -302,32 +308,46 @@ Deno.serve(async (req) => {
   }
 });
 
+/** The answer from verifySubscriptionPrice: proceed, or refuse with this reason. */
+type PriceVerdict =
+  | { ok: true }
+  | { ok: false; error: string; code: string; status: number };
+
 /**
- * Check what was posted against what the plan should cost, and record the
- * answer. Does NOT block the payment — see the call site.
+ * Check what was posted against what the plan should cost, and refuse the push
+ * when they disagree.
  *
  * The seat count comes from the subscription row, which the browser also wrote,
  * and that is fine: this enforces "the price is right for what you claimed",
  * while max_users bounds what the account actually gets. Buying a 1-seat plan
  * is legitimate; buying 50 seats for the price of one is not.
  *
- * Every path here is best-effort. A failure to verify must never stop somebody
- * paying — it just means this particular push goes unchecked, and says so.
+ * FAILS CLOSED on every branch the payer can influence. The previous version
+ * logged all of them and let the payment through, which verified nothing in
+ * practice: the registration page only sends subscriptionId when it has one, so
+ * omitting it skipped the check entirely and KES 1 still bought a month.
  */
-async function auditSubscriptionPrice(
+async function verifySubscriptionPrice(
   admin: any,
   { subscriptionId, adminId, payable }: {
     subscriptionId: string | null;
     adminId: string;
     payable: number;
   },
-): Promise<void> {
+): Promise<PriceVerdict> {
   try {
     if (!subscriptionId) {
-      console.warn(
-        `Subscription push with no subscriptionId (admin ${adminId}, KES ${payable}) — price not verifiable.`,
+      console.error(
+        `Subscription push with no subscriptionId (admin ${adminId}, KES ${payable}) — refused.`,
       );
-      return;
+      return {
+        ok: false,
+        error:
+          'This payment is missing its subscription reference, so its price cannot be confirmed. '
+          + 'Reload the registration page and try again.',
+        code: 'SUBSCRIPTION_REQUIRED',
+        status: 400,
+      };
     }
 
     const { data: sub } = await admin
@@ -337,24 +357,36 @@ async function auditSubscriptionPrice(
       .maybeSingle();
 
     if (!sub) {
-      console.warn(`Subscription ${subscriptionId} not found — price not verifiable.`);
-      return;
+      console.error(`Subscription ${subscriptionId} not found — refused.`);
+      return {
+        ok: false,
+        error: 'That subscription no longer exists. Reload the registration page and try again.',
+        code: 'SUBSCRIPTION_NOT_FOUND',
+        status: 404,
+      };
     }
 
-    // Paying against somebody else's subscription is never legitimate. It
-    // cannot currently activate their account — settleSubscription keys off the
-    // transaction's own admin_id — but it does write a bogus row into
-    // mpesa_subscription_payments, and it should be visible.
+    // Paying against somebody else's subscription is never legitimate — the
+    // registration wizard is the only caller and always pays for the row it
+    // just created. It could not activate their account either way
+    // (settleSubscription keys off the transaction's own admin_id), but it
+    // would write a bogus row into mpesa_subscription_payments.
     if (sub.admin_id !== adminId) {
       console.error(
-        `Subscription ${subscriptionId} belongs to ${sub.admin_id}, not the caller ${adminId}.`,
+        `Subscription ${subscriptionId} belongs to ${sub.admin_id}, not the caller ${adminId} — refused.`,
       );
-      return;
+      return {
+        ok: false,
+        error: 'That subscription belongs to another account.',
+        code: 'SUBSCRIPTION_NOT_YOURS',
+        status: 403,
+      };
     }
 
     // Company and sacco catalogs share the ids 'bronze'/'silver'/'gold' with
     // different prices, so plan_name alone cannot say which one applies. The
-    // presence of a saccos row for this admin is what distinguishes them.
+    // presence of a saccos row for this admin is what distinguishes them, and
+    // registration writes that row before it creates the subscription.
     const { data: sacco } = await admin
       .from('saccos')
       .select('id')
@@ -366,15 +398,22 @@ async function auditSubscriptionPrice(
       seats: Number(sub.max_users),
     });
 
+    // Only reachable when max_users is absent or below 1, which the wizard
+    // never produces — so this is a malformed claim, not an unpriceable one.
     if (expected === null) {
-      console.warn(
-        `No tier covers max_users=${sub.max_users} on subscription ${subscriptionId} — price not verifiable.`,
+      console.error(
+        `No tier covers max_users=${sub.max_users} on subscription ${subscriptionId} — refused.`,
       );
-      return;
+      return {
+        ok: false,
+        error: 'That plan has an invalid number of seats, so its price cannot be confirmed.',
+        code: 'SUBSCRIPTION_SEATS_INVALID',
+        status: 400,
+      };
     }
 
     if (expected !== payable) {
-      console.error('SUBSCRIPTION PRICE MISMATCH (not enforced)', {
+      console.error('SUBSCRIPTION PRICE MISMATCH (refused)', {
         subscriptionId,
         adminId,
         isSacco: Boolean(sacco),
@@ -383,8 +422,22 @@ async function auditSubscriptionPrice(
         posted: payable,
         expected,
       });
+      return {
+        ok: false,
+        error:
+          `This plan costs KES ${expected}, but KES ${payable} was submitted. `
+          + 'Reload the registration page to pick up the current price.',
+        code: 'SUBSCRIPTION_PRICE_MISMATCH',
+        status: 400,
+      };
     }
+
+    return { ok: true };
   } catch (err) {
-    console.error('Subscription price audit failed:', (err as Error).message);
+    // Genuinely unexpected — a service-role read failing, not anything the
+    // payer chose. Let it through rather than block a real customer at the till,
+    // but make it loud: this is the one path where an unpriced push still goes.
+    console.error('SUBSCRIPTION PRICE CHECK FAILED OPEN:', (err as Error).message);
+    return { ok: true };
   }
 }

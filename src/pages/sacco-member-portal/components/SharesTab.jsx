@@ -96,7 +96,6 @@ const SharesTab = ({ ctx }) => {
   const blocked = (() => {
     if (s.trading_suspended) return s.suspension_reason || 'Trading is suspended by the society.';
     if (pos.frozen) return shares?.freeze_reason || 'Your holding is frozen.';
-    if (s.require_kyc_to_trade && (me?.kyc_status || 'pending') !== 'verified') return 'Your KYC must be verified before you can trade.';
     if (!open) return `The market is closed. It trades ${String(s.market_open_time).slice(0, 5)}–${String(s.market_close_time).slice(0, 5)}.`;
     return null;
   })();
