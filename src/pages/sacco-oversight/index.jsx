@@ -109,35 +109,57 @@ const useSaccoOversight = () => {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-    const signUpRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+    // Through the create-staff-user Edge Function, like both dashboard twins.
+    // The old /auth/v1/signup + client-side profile upsert could not reliably
+    // set admin_id: handle_new_user() has already created that profile row
+    // WITHOUT one, so the upsert lands as an UPDATE and RLS applies. On the
+    // admin side that silently matched zero rows and shipped agents whose
+    // agents.admin_id and user_profiles.admin_id disagreed, orphaning them from
+    // their own tenant. Service-role write, no such gap.
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('Your session has expired — sign in again to create an agent.');
+
+    const signUpRes = await fetch(`${supabaseUrl}/functions/v1/create-staff-user`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
         'apikey': supabaseAnonKey,
       },
       body: JSON.stringify({
         email: agentData.email,
         password: agentData.password,
-        // must_change_password: the portal blocks access until the agent
-        // replaces this admin-issued password with their own.
-        data: { full_name: agentData.fullName, role: 'sales_agent', must_change_password: true },
+        full_name: agentData.fullName,
+        role: 'sales_agent',
+        phone: agentData.phone || '',
+        admin_id: adminId,
       }),
     });
 
     const signUpJson = await signUpRes.json();
     if (!signUpRes.ok) {
-      throw new Error(signUpJson?.msg || signUpJson?.message || 'Failed to create agent auth account.');
+      throw new Error(signUpJson?.error || signUpJson?.message || 'Failed to create agent account.');
     }
 
-    const userId = signUpJson?.id ?? signUpJson?.user?.id;
+    const userId = signUpJson?.id;
     if (!userId) throw new Error('Agent creation failed — no user ID returned.');
 
-    const { error: profileError } = await supabase.from('user_profiles').upsert({
-      id: userId, email: agentData.email, full_name: agentData.fullName,
-      role: 'sales_agent', phone: agentData.phone || '', is_active: true,
-      admin_id: adminId,
-    });
-    if (profileError) console.error('Profile upsert error:', profileError.message);
+    // Confirm the tenant key landed before the agents row is written, so the
+    // two can no longer disagree.
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('admin_id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!profile || profile.admin_id !== adminId) {
+      throw new Error(
+        'The agent login was created but could not be linked to your account, '
+        + 'so it would not resolve an admin when registering saccos. Do not use '
+        + 'it — repair the ownership record first.',
+      );
+    }
 
     const { data: agent, error: agentError } = await supabase
       .from('agents')

@@ -402,43 +402,77 @@ export const useSuperAdminDashboard = () => {
   const upgradeSalesAgentToGold = useCallback(async (agentId) => updateSalesAgentPlan(agentId, 'gold'), [updateSalesAgentPlan]);
   const downgradeSalesAgentToBronze = useCallback(async (agentId) => updateSalesAgentPlan(agentId, 'bronze'), [updateSalesAgentPlan]);
 
+  // The super admin creating the agent becomes the agent's admin. Without this,
+  // agents.admin_id stays null and the agent's portal can't resolve an admin when
+  // creating clients ("Cannot determine admin. Contact support.").
+  //
+  // Routed through the create-staff-user Edge Function for the same reason as the
+  // admin-side twin in useAdminDashboard: the old path was /auth/v1/signup plus a
+  // client-side user_profiles upsert, and handle_new_user() has already inserted
+  // that profile row with NO admin_id by the time the upsert runs — so the upsert
+  // is an UPDATE, and an UPDATE is subject to RLS.
+  //
+  // That happened to keep working HERE only because is_global_viewer() lets a
+  // super admin see every profile, so the UPDATE matched its row. The identical
+  // code on the admin side matched ZERO rows, silently, and shipped agents whose
+  // agents.admin_id and user_profiles.admin_id disagreed. Depending on a
+  // global-read escape hatch for correctness is one policy change away from the
+  // same silent failure, so this path no longer relies on it.
+  //
+  // admin_id is sent explicitly: the Edge Function lets a super_admin place an
+  // account in any tenant, and defaults to NULL when none is named — which would
+  // orphan the agent rather than making them this super admin's.
   const createSalesAgent = useCallback(async (agentData) => {
-    // The super admin creating the agent becomes the agent's admin. Without this,
-    // agents.admin_id stays null and the agent's portal can't resolve an admin when
-    // creating clients ("Cannot determine admin. Contact support.").
     const adminId = await getAdminId();
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-    const signUpRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('Your session has expired — sign in again to create an agent.');
+
+    const res = await fetch(`${supabaseUrl}/functions/v1/create-staff-user`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
         'apikey': supabaseAnonKey,
       },
       body: JSON.stringify({
         email: agentData.email,
         password: agentData.password,
-        // must_change_password: the portal blocks access until the agent
-        // replaces this admin-issued password with their own.
-        data: { full_name: agentData.fullName, role: 'sales_agent', must_change_password: true },
+        full_name: agentData.fullName,
+        role: 'sales_agent',
+        phone: agentData.phone || '',
+        admin_id: adminId,
       }),
     });
 
-    const signUpJson = await signUpRes.json();
-    if (!signUpRes.ok) {
-      throw new Error(signUpJson?.msg || signUpJson?.message || 'Failed to create agent auth account.');
+    const signUpJson = await res.json();
+    if (!res.ok) {
+      throw new Error(signUpJson?.error || signUpJson?.message || 'Failed to create agent account.');
     }
 
-    const userId = signUpJson?.id ?? signUpJson?.user?.id;
+    const userId = signUpJson?.id;
     if (!userId) throw new Error('Agent creation failed — no user ID returned.');
 
-    const { error: profileError } = await supabase.from('user_profiles').upsert({
-      id: userId, email: agentData.email, full_name: agentData.fullName,
-      role: 'sales_agent', phone: agentData.phone || '', is_active: true,
-      admin_id: adminId,
-    });
-    if (profileError) console.error('Profile upsert error:', profileError.message);
+    // Verify the tenant key landed before creating the agents row, so the two
+    // can no longer disagree. A missing row counts as failure too: a super admin
+    // reads every profile via is_global_viewer(), so an empty result here means
+    // the profile does not exist at all.
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('admin_id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!profile || profile.admin_id !== adminId) {
+      throw new Error(
+        'The agent login was created but could not be linked to your account, '
+        + 'so it would not resolve an admin when registering clients. Do not use '
+        + 'it — repair the ownership record first.',
+      );
+    }
 
     const { data: agent, error: agentError } = await supabase
       .from('agents')

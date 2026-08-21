@@ -15,6 +15,7 @@ import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 
 import KYCReviewTab   from './components/KYCReviewTab';
+import CrmOversightTab from '../../components/crm/CrmOversightTab';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -87,6 +88,7 @@ const AdminDashboard = () => {
     { id: 'overview',  label: 'Overview',      icon: 'LayoutDashboard' },
     { id: 'clients',   label: 'Clients',        icon: 'Users',     badge: stats.pendingKYC },
     { id: 'agents',    label: 'Sales Agents',   icon: 'UserCheck' },
+    { id: 'crm',       label: 'CRM',            icon: 'Contact' },
     { id: 'staff',     label: 'Staff',          icon: 'UserCog',   badge: staffSlotsLeft !== null && staffSlotsLeft <= 0 ? '!' : 0 },
     { id: 'contracts', label: 'Contracts',      icon: 'FileText' },
     { id: 'kyc',       label: 'KYC Review',     icon: 'Shield',    badge: stats.pendingKYC },
@@ -190,7 +192,7 @@ const AdminDashboard = () => {
         </div>
 
         {/* Tab content */}
-        {loading && activeTab !== 'contracts' ? (
+        {loading && !['contracts', 'crm'].includes(activeTab) ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[1,2,3,4,5,6].map(i => (
@@ -264,6 +266,14 @@ const AdminDashboard = () => {
             )}
           </>
         )}
+
+        {/* CRM TAB — the pipeline and contact history behind the Sales Agents
+            tab. Rendered outside the loading swap because it fetches its own
+            rows (leads / crm_interactions arrive through the supervisor
+            policies, not through useAdminDashboard) and carries its own
+            skeleton — gating it on this page's spinner would leave it blank
+            while its data was already there. */}
+        {activeTab === 'crm' && <CrmOversightTab onExport={exportCSV} />}
 
         {/* CONTRACTS TAB — render directly (no loading swap) so the upload modal
             and its selected-file state aren't torn down by a background refetch */}

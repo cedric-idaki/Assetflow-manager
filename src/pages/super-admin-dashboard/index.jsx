@@ -23,6 +23,7 @@ import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 import KYCReviewTab from './components/KYCReviewTab';
 import MpesaSettingsTab from './components/MpesaSettingsTab';
+import CrmOversightTab from '../../components/crm/CrmOversightTab';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -162,6 +163,7 @@ const SuperAdminDashboard = () => {
   const tabs = [
     { id: 'overview',     label: 'Overview',                icon: 'LayoutDashboard' },
     { id: 'agents',       label: 'Sales Agents',            icon: 'UserCheck' },
+    { id: 'crm',          label: 'CRM',                     icon: 'Contact' },
     { id: 'withdrawals',  label: 'Withdrawals',             icon: 'Wallet', badge: withdrawalRequests.length || 0 },
     { id: 'contracts',    label: 'Contracts',               icon: 'FileText' },
     { id: 'kyc',          label: 'KYC Review',              icon: 'Shield', badge: stats?.pendingKYC || 0 },
@@ -319,6 +321,11 @@ const SuperAdminDashboard = () => {
             )}
           </div>
         )}
+
+        {/* CRM TAB — every agent on the platform. Reads its own data through
+            the supervisor policies rather than useSuperAdminDashboard, and has
+            its own loading state, so it is not gated on `loading` here. */}
+        {activeTab === 'crm' && <CrmOversightTab onExport={exportCSV} />}
 
         {/* WITHDRAWAL REQUESTS TAB */}
         {activeTab === 'withdrawals' && (

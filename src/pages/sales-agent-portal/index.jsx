@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Icon from '../../components/AppIcon';
 import MainLayout from '../../layouts/MainLayout';
 import PipelineStage from './components/PipelineStage';
@@ -22,7 +22,12 @@ import FollowUpsPanel from './components/FollowUpsPanel';
 import ScheduleFollowUpModal from './components/ScheduleFollowUpModal';
 import CatalogPanel from './components/CatalogPanel';
 import ShareListingModal from './components/ShareListingModal';
+import CrmPanel from './components/CrmPanel';
+import LogInteractionModal from './components/LogInteractionModal';
+import InteractionTimeline from './components/InteractionTimeline';
+import CustomerRecord from '../../components/crm/CustomerRecord';
 import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
+import { deriveStaleLeads } from '../../hooks/useCrmInteractions';
 
 // ── Export Modal ─────────────────────────────────────────────────────────────
 const EXPORT_PRESETS = [
@@ -340,7 +345,7 @@ const KPICard = ({ label, value, icon, colorClass, loading, subtext }) => (
 );
 
 // ── Lead Detail Modal ─────────────────────────────────────────────────────────
-const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onScheduleFollowUp, isClientMode, isSaccoMode, canRegisterSacco }) => {
+const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onScheduleFollowUp, onLogInteraction, onOpenRecord, history = [], isClientMode, isSaccoMode, canRegisterSacco }) => {
   const [newStage, setNewStage] = useState(lead?.stage || 'new_lead');
   const [saving, setSaving]     = useState(false);
   const isConverted = Boolean(lead?.converted_at);
@@ -417,6 +422,42 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onSc
             >
               {stages.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
+          </div>
+
+          {/* Contact history. The single `notes` field above is whatever was
+              typed at registration; this is everything that has happened since,
+              which is the half the modal never used to show. */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Contact history
+                {history.length > 0 && <span className="ml-1.5 font-normal normal-case">({history.length})</span>}
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => { onClose(); onOpenRecord?.(lead); }}
+                  className="flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-primary"
+                >
+                  <Icon name="Maximize2" size={12} color="currentColor" />
+                  Full record
+                </button>
+                <button
+                  onClick={() => onLogInteraction?.(lead)}
+                  className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                >
+                  <Icon name="Plus" size={12} color="currentColor" />
+                  Log contact
+                </button>
+              </div>
+            </div>
+            <InteractionTimeline
+              interactions={history}
+              showContact={false}
+              limit={5}
+              emptyLabel="Nothing logged for this lead yet."
+              emptyHint="Log the call or meeting and the next person to open this lead will know what was said."
+              onLog={() => onLogInteraction?.(lead)}
+            />
           </div>
 
           {/* Not ready yet — park it as a dated follow-up instead of losing it. */}
@@ -624,6 +665,8 @@ const SalesAgentPortal = () => {
     catalogLoading, catalogError, refetchCatalog,
     clientBook, clientBookCounts, clientBookLoading, clientBookError,
     clientBookBlocked, tracksSubscriptions, clientBookEnabled, refetchClientBook,
+    interactions, interactionsByLead, crmStats, crmLoading, crmError,
+    logInteraction, deleteInteraction, refetchInteractions,
     activeView, setActiveView, modals, openModal, closeModal,
   } = useSalesAgentContext();
 
@@ -783,6 +826,50 @@ const SalesAgentPortal = () => {
     openModal('scheduleFollowUp');
   };
 
+  // ── CRM: recording what has already happened ───────────────────────────────
+  // Open leads with no recorded contact for a fortnight. Drives the sidebar
+  // badge and the panel's call list, so both count the same thing.
+  const staleLeadCount = useMemo(() => deriveStaleLeads(leads).length, [leads]);
+
+  // The full customer record — everything known about one person, opened over
+  // the top of whatever the agent was looking at.
+  const [recordLead, setRecordLead] = useState(null);
+
+  // Only kind 'client' rows can be logged against: their id IS a public.clients
+  // id, which is what crm_interactions.client_id references. A company-mode
+  // row's id is an admin's user_profiles id and would fail that FK.
+  const crmClientOptions = useMemo(
+    () => (clientBook || [])
+      .filter(c => c.kind === 'client')
+      .map(c => ({ id: c.id, full_name: c.name, phone: c.phone })),
+    [clientBook],
+  );
+
+  const handleOpenLogInteraction = (lead = null) => {
+    closeModal('leadDetail');
+    if (lead) openModal('prefillInteractionLead', lead);
+    else      closeModal('prefillInteractionLead');
+    openModal('logInteraction');
+  };
+
+  const handleLogInteraction = async (payload) => {
+    const result = await logInteraction(payload);
+    if (result?.error) return result;
+    closeModal('prefillInteractionLead');
+    // The trigger moves leads.last_contact_at and interaction_count; the board
+    // above still holds the pre-log copy, so pull the leads back in.
+    refetch();
+    showToast('Contact logged.');
+    return result;
+  };
+
+  const handleDeleteInteraction = async (id) => {
+    const result = await deleteInteraction(id);
+    if (result?.error) { showToast(result.error, 'error'); return; }
+    refetch();
+    showToast('Entry removed.');
+  };
+
   // Chasing a renewal is the same appointment as chasing a lead. Accounts
   // registered without a lead have nothing to link to, so the modal is prefilled
   // with a name-only stand-in — scheduleFollowUp accepts a null lead_id.
@@ -926,6 +1013,20 @@ const SalesAgentPortal = () => {
       badge: ticketBuckets?.actionable,
       badgeColor: ticketBuckets?.unreadCount > 0 ? '#2563eb' : '#f59e0b',
       onClick: () => openModal('tickets'),
+    },
+    // Log a contact -- the other half of the follow-up button. That one books
+    // the next conversation; this one writes down the one just had. The badge
+    // counts open leads nobody has touched in a fortnight, because an agent who
+    // never opens this is exactly the agent whose leads go cold.
+    {
+      id: 'log-contact',
+      label: 'Log Contact',
+      icon: 'Contact',
+      color: '#a78bfa',
+      gradient: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+      badge: staleLeadCount,
+      badgeColor: '#f59e0b',
+      onClick: () => handleOpenLogInteraction(null),
     },
     // Schedule a follow-up -- badge shows what is due or overdue
     {
@@ -1222,6 +1323,24 @@ const SalesAgentPortal = () => {
               )}
             </div>
 
+            {/* Customer relationships — the contact history behind the board
+                above. The pipeline says where a deal is; this says what was
+                actually said, and who has gone quiet. */}
+            <div id="crm" className="scroll-mt-24">
+              <CrmPanel
+                interactions={interactions}
+                leads={leads}
+                loading={crmLoading}
+                error={crmError}
+                stats={crmStats}
+                onLog={() => handleOpenLogInteraction(null)}
+                onLogForLead={handleOpenLogInteraction}
+                onOpenRecord={setRecordLead}
+                onRefresh={refetchInteractions}
+                onDelete={handleDeleteInteraction}
+              />
+            </div>
+
             {/* My Clients — who signed, and whether they are still paying */}
             <div id="clients" className="scroll-mt-24">
               {clientBookEnabled ? (
@@ -1388,9 +1507,36 @@ const SalesAgentPortal = () => {
           onStageChange={updateLeadStage}
           onConvertToClient={handleConvertToClient}
           onScheduleFollowUp={handleScheduleFollowUp}
+          onLogInteraction={handleOpenLogInteraction}
+          onOpenRecord={setRecordLead}
+          history={interactionsByLead?.[modals.leadDetail.id] || []}
           isClientMode={isClientMode}
           isSaccoMode={isSaccoMode}
           canRegisterSacco={canRegisterSacco}
+        />
+      )}
+
+      {/* ── Full customer record ── */}
+      {recordLead && (
+        <CustomerRecord
+          lead={recordLead}
+          agentName={agentProfile?.full_name}
+          onClose={() => setRecordLead(null)}
+          onLogInteraction={(l) => { setRecordLead(null); handleOpenLogInteraction(l); }}
+          onScheduleFollowUp={(l) => { setRecordLead(null); handleScheduleFollowUp(l); }}
+        />
+      )}
+
+      {/* ── Log Contact Modal ── */}
+      {modals.logInteraction && (
+        <LogInteractionModal
+          isOpen={modals.logInteraction}
+          leads={leads}
+          clients={crmClientOptions}
+          prefillLead={typeof modals.prefillInteractionLead === 'object' ? modals.prefillInteractionLead : null}
+          onSubmit={handleLogInteraction}
+          onScheduleFollowUp={handleScheduleFollowUp}
+          onClose={() => { closeModal('logInteraction'); closeModal('prefillInteractionLead'); }}
         />
       )}
 

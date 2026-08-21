@@ -9,6 +9,7 @@ import { useSalesAgentPortal } from '../hooks/useSalesAgentPortal';
 import { useAgentTickets } from '../hooks/useAgentTickets';
 import { useAgentCatalog } from '../hooks/useAgentCatalog';
 import { useAgentClients } from '../hooks/useAgentClients';
+import { useCrmInteractions } from '../hooks/useCrmInteractions';
 
 const SalesAgentContext = createContext(null);
 
@@ -26,6 +27,10 @@ export const SalesAgentProvider = ({ children }) => {
   // pay. It reads the portal's leads rather than re-fetching them, so it mounts
   // here where both are already resolved.
   const clientBook = useAgentClients(portal.agentProfile, portal.agentMode, portal.leads);
+  // The contact history. Mounted here for the same reason as the rest: an agent
+  // who logs a call, walks to the pipeline tab and back should still see it,
+  // and a second device logging one should push it in live.
+  const crm = useCrmInteractions(portal.agentProfile);
   const [activeView, setActiveView] = useState('portal');
   const [modals, setModals] = useState({
     leadRegistration: false,
@@ -45,6 +50,10 @@ export const SalesAgentProvider = ({ children }) => {
     prefillLead: null,
     scheduleFollowUp: false,
     prefillFollowUpLead: null,
+    // Logging a contact that already happened. Separate from scheduleFollowUp
+    // on purpose: that one books the future, this one records the past.
+    logInteraction: false,
+    prefillInteractionLead: null,
     assist: false,
     assistInbox: false,
     tickets: false,
@@ -85,6 +94,19 @@ export const SalesAgentProvider = ({ children }) => {
     tracksSubscriptions:   clientBook.tracksSubscriptions,
     clientBookEnabled:     clientBook.enabled,
     refetchClientBook:     clientBook.refetch,
+    // Namespaced for the same reason as the catalogue and client book: the CRM
+    // hook has its own loading/error/refetch, and spreading them would shadow
+    // the portal's.
+    interactions:          crm.interactions,
+    interactionsByLead:    crm.byLead,
+    crmStats:              crm.stats,
+    crmLoading:            crm.loading,
+    crmError:              crm.error,
+    crmSaving:             crm.saving,
+    logInteraction:        crm.logInteraction,
+    updateInteraction:     crm.updateInteraction,
+    deleteInteraction:     crm.deleteInteraction,
+    refetchInteractions:   crm.refetch,
     activeView,
     setActiveView,
     modals,

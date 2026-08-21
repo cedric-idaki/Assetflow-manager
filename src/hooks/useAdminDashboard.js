@@ -243,35 +243,82 @@ export const useAdminDashboard = () => {
     fetchContracts, fetchPayments, fetchAuditLogs, fetchSalesAnalytics,
   ]);
 
-  // ── Action: create sales agent (REST — no session hijack) ────────────────────
+  // ── Action: create sales agent ───────────────────────────────────────────────
+  //
+  // Goes through the create-staff-user Edge Function rather than /auth/v1/signup
+  // plus a client-side profile upsert. The old path produced agents whose
+  // `agents.admin_id` named this admin while their `user_profiles.admin_id` was
+  // NULL — a split that leaves the agent orphaned from the tenant that created
+  // them, because current_admin_id() reads the PROFILE and coalesces NULL to the
+  // user's own id, making them their own tenant of one.
+  //
+  // Why the old path failed, and failed SILENTLY:
+  //   1. /auth/v1/signup fires handle_new_user(), which inserts the profile with
+  //      no admin_id — it only copies id/email/full_name/avatar_url/role.
+  //   2. The follow-up upsert therefore hit an EXISTING row, so it became an
+  //      UPDATE.
+  //   3. That row's admin_id is NULL, so it is not in this admin's tenant and
+  //      RLS does not match it: 0 rows affected — and zero rows is not an error,
+  //      so nothing threw and nothing was logged.
+  // Chicken-and-egg: claiming a row into your tenant requires already being able
+  // to see it, and you cannot see it until it is in your tenant.
+  //
+  // The Edge Function writes the profile with the service role, so RLS cannot
+  // silently drop the tenant key, and it derives admin_id from the caller's own
+  // session server-side rather than trusting the body.
   const createSalesAgent = useCallback(async (agentData) => {
-    // Tag the agent with its creating admin so the agent's portal can resolve an
-    // admin when registering clients (prevents "Cannot determine admin").
-    const adminId         = await getAdminId();
-    const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
+    const adminId     = await getAdminId();
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-    const res  = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('Your session has expired — sign in again to create an agent.');
+
+    const res = await fetch(`${supabaseUrl}/functions/v1/create-staff-user`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'apikey': supabaseAnonKey,
+      },
       body: JSON.stringify({
-        email: agentData.email, password: agentData.password,
-        // must_change_password: the portal blocks access until the agent
-        // replaces this admin-issued password with their own.
-        data: { full_name: agentData.fullName, role: 'sales_agent', must_change_password: true },
+        email: agentData.email,
+        password: agentData.password,
+        full_name: agentData.fullName,
+        role: 'sales_agent',
+        phone: agentData.phone || '',
+        admin_id: adminId,
       }),
     });
     const json = await res.json();
-    if (!res.ok) throw new Error(json?.msg || json?.message || 'Failed to create agent auth account.');
+    if (!res.ok) throw new Error(json?.error || json?.message || 'Failed to create agent account.');
 
-    const userId = json?.id ?? json?.user?.id;
+    const userId = json?.id;
     if (!userId) throw new Error('Agent creation failed — no user ID returned.');
 
-    await supabase.from('user_profiles').upsert({
-      id: userId, email: agentData.email, full_name: agentData.fullName,
-      role: 'sales_agent', phone: agentData.phone || '', is_active: true,
-      admin_id: adminId,
-    });
+    // Verify the tenant key actually landed before creating the agents row.
+    // The old code assumed it had, which is exactly how the split shipped: the
+    // agents insert below succeeds against a different table with a different
+    // policy, so an unowned profile still produced a fully-formed agent.
+    // A MISSING row counts as failure, not as "nothing to check". The
+    // user_profiles_select policy admits `admin_id = auth.uid()`, so a correctly
+    // linked profile is always readable by the admin who just created it —
+    // therefore an empty read means the tenant key did not land and RLS is
+    // hiding the row, which is precisely the silent case being guarded against.
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('admin_id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!profile || profile.admin_id !== adminId) {
+      throw new Error(
+        'The agent login was created but could not be linked to your company, '
+        + 'so it would not see your data. Do not use it — contact support to '
+        + 'repair the ownership record.',
+      );
+    }
 
     const { data: agent, error: agentError } = await supabase
       .from('agents')
@@ -315,44 +362,85 @@ export const useAdminDashboard = () => {
     // nobody ever saw) so it can be emailed to the client.
     const tempPassword = generateTempPassword();
 
-    const res  = await fetch(`${supabaseUrl}/auth/v1/signup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-      body: JSON.stringify({
-        email: formData.email,
-        password: tempPassword,
-        data: { full_name: formData.fullName, role: 'client', must_change_password: true },
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json?.msg || json?.message || 'Failed to create client account.');
-
-    const userId = json?.id ?? json?.user?.id;
-    if (!userId) throw new Error('Client creation failed — no user ID returned.');
-
-    const { error: profileErr } = await supabase.from('user_profiles').upsert({
-      id: userId, email: formData.email, full_name: formData.fullName,
-      phone: formData.phone || '', role: 'client', admin_id: adminId, is_active: true,
-    });
-    if (profileErr) throw profileErr;
-
-    // account_number is UNIQUE NOT NULL — generate one, retrying on the (rare)
-    // chance the random sequence collides with an existing client.
+    // The clients row is created FIRST, then the login is provisioned against
+    // it. Two reasons for this order:
+    //   • create-staff-user links clients.client_auth_id when it is given a
+    //     client_id, and that link is what lets the portal resolve the right
+    //     client when several share an email. It could never be set when the
+    //     login was created before the row existed.
+    //   • if provisioning fails, a retry can still attach a login to the
+    //     existing client. The old order failed the other way round, leaving an
+    //     auth user with no client row AND the email address consumed.
     let accountNumber = generateAccountNumber();
+    let clientRow     = null;
     let clientErr     = null;
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const { error } = await supabase.from('clients').insert({
+      const { data, error } = await supabase.from('clients').insert({
         account_number: accountNumber,
         full_name: formData.fullName, email: formData.email, phone: formData.phone || '',
         admin_id: adminId, created_by: adminId,
         agent_id: formData.agentId || null,
         client_status: 'active', kyc_status: 'unverified',
-      });
+      }).select('id').maybeSingle();
+      clientRow = data;
       clientErr = error;
+      // account_number is UNIQUE NOT NULL — retry on the (rare) chance the
+      // random sequence collides with an existing client.
       if (!error || error.code !== '23505' || !`${error.message}`.includes('account_number')) break;
       accountNumber = generateAccountNumber();
     }
     if (clientErr) throw clientErr;
+
+    // Through create-staff-user rather than /auth/v1/signup + a client-side
+    // profile upsert. handle_new_user() creates that profile row with NO
+    // admin_id, so the upsert lands as an UPDATE on a row outside this admin's
+    // tenant — RLS matches zero rows and returns NO ERROR, so `if (profileErr)`
+    // could never catch it. The result was a client orphaned from the tenant
+    // that created them. The Edge Function writes the profile with the service
+    // role, where RLS cannot silently drop the tenant key.
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('Your session has expired — sign in again to invite a client.');
+
+    const res = await fetch(`${supabaseUrl}/functions/v1/create-staff-user`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'apikey': supabaseAnonKey,
+      },
+      body: JSON.stringify({
+        email: formData.email,
+        password: tempPassword,
+        full_name: formData.fullName,
+        role: 'client',
+        phone: formData.phone || '',
+        admin_id: adminId,
+        client_id: clientRow?.id || null,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error || json?.message || 'Failed to create client account.');
+
+    const userId = json?.id;
+    if (!userId) throw new Error('Client creation failed — no user ID returned.');
+
+    // Confirm the tenant key landed. A missing row counts as failure: the
+    // user_profiles_select policy admits `admin_id = auth.uid()`, so a
+    // correctly linked profile is always readable by the admin who made it.
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('admin_id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!profile || profile.admin_id !== adminId) {
+      throw new Error(
+        `The client record was saved (${accountNumber}) but their login could not `
+        + 'be linked to your company, so it would not see your data. Contact '
+        + 'support to repair the ownership record before sharing the credentials.',
+      );
+    }
 
     // Auto-email the temp credentials to the client (non-fatal).
     emailLoginCredentials({
@@ -425,6 +513,33 @@ export const useAdminDashboard = () => {
       admin_id: adminId, is_active: true,
     });
     if (error) throw error;
+
+    // `error` above CANNOT catch the failure this guards against. handle_new_user()
+    // has already inserted this profile without an admin_id, so the upsert lands
+    // as an UPDATE on a row outside this admin's tenant: RLS matches zero rows
+    // and reports success. The staff member would be created orphaned — able to
+    // sign in, but resolving their own id as their tenant and therefore seeing
+    // none of this company's data.
+    //
+    // Unlike the client and agent paths this one does NOT go through
+    // create-staff-user, because that function's CAN_CREATE matrix does not
+    // allow an `admin` to create the `hr` role that this form offers, so routing
+    // it there would start rejecting HR staff. Until the matrix gains 'hr' and
+    // the function is redeployed, the best available fix is to fail loudly
+    // rather than ship an orphan silently.
+    const { data: staffProfile } = await supabase
+      .from('user_profiles')
+      .select('admin_id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!staffProfile || staffProfile.admin_id !== adminId) {
+      throw new Error(
+        'The staff login was created but could not be linked to your company, so '
+        + 'it would not see any of your data. Do not share the credentials — '
+        + 'contact support to repair the ownership record.',
+      );
+    }
 
     // Auto-email the temp credentials to the new staff member (non-fatal).
     emailLoginCredentials({

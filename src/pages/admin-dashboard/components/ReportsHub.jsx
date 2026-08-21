@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { fetchEmployeePiiBatch } from '../../../services/employeePiiService';
 import Icon from '../../../components/AppIcon';
+import StaffActivityReport from '../../../components/crm/StaffActivityReport';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -874,6 +875,10 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
   const [customFrom,   setCustomFrom]   = useState('');
   const [customTo,     setCustomTo]     = useState('');
 
+  // Absolute bounds for reports that fetch their own rows and therefore cannot
+  // use filterByDate, which works on an in-memory array.
+  const activeDateRange = getDateRange(dateRange, customFrom, customTo);
+
   // Apply global date filter to shared datasets
   const filteredPayments = filterByDate(payments, 'payment_date', dateRange, customFrom, customTo);
   const filteredClients  = filterByDate(clients,  'created_at',   dateRange, customFrom, customTo);
@@ -890,6 +895,7 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
     { id: 'aging',       label: 'Aging Analysis',        icon: 'AlertCircle' },
     { id: 'payroll',     label: 'Payroll Summary',       icon: 'Receipt'     },
     { id: 'hr',          label: 'HR Report',             icon: 'UserCheck'   },
+    { id: 'staff-activity', label: 'Staff Activity',   icon: 'Activity'    },
   ];
 
   // Export current report data as CSV
@@ -1133,6 +1139,16 @@ Nothing has been exported.`,
         {activeReport === 'aging'       && <AgingAnalysisReport clients={filteredClients} payments={filteredPayments} />}
         {activeReport === 'payroll'     && <PayrollSummaryReport agents={agents} employees={employees} payrollRecords={payrollRecords} />}
         {activeReport === 'hr'          && <HRReport employees={employees} payrollRecords={payrollRecords} />}
+        {/* Self-fetching: staff activity comes from audit_logs, not from the
+            props this hub is handed, so it takes absolute date bounds instead
+            of one of the pre-filtered arrays. */}
+        {activeReport === 'staff-activity' && (
+          <StaffActivityReport
+            from={activeDateRange?.from || null}
+            to={activeDateRange?.to || null}
+            onExport={exportCSV}
+          />
+        )}
       </div>
     </div>
   );
