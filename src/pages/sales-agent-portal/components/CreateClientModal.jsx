@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { NOK_RELATIONSHIPS, nokRelationshipLabel, normalizeNokRelationship } from '../../../utils/nokRelationship';
 import { useAuth } from '../../../contexts/AuthContext';
 import Icon from '../../../components/AppIcon';
 
@@ -136,7 +137,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
     city:             '',
     nok_name:         prefillLead?.next_of_kin_name || '',
     nok_phone:        prefillLead?.next_of_kin_phone || '',
-    nok_relationship: prefillLead?.next_of_kin_relationship || '',
+    nok_relationship: normalizeNokRelationship(prefillLead?.next_of_kin_relationship) || '',
   });
   const [errors, setErrors] = useState({});
 
@@ -263,7 +264,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
         country:          'Kenya',
         nok_name:         form.nok_name.trim()         || null,
         nok_phone:        form.nok_phone.trim()        || null,
-        nok_relationship: form.nok_relationship.trim() || null,
+        nok_relationship: normalizeNokRelationship(form.nok_relationship),
         client_status:    'active',
         kyc_status:       'unverified',
         admin_id:         adminId,
@@ -488,8 +489,13 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-gray-600 mb-1.5">Relationship</label>
-                      <input type="text" value={form.nok_relationship} onChange={e => set('nok_relationship', e.target.value)}
-                        placeholder="e.g. Spouse" className={ic(false)} />
+                      <select value={form.nok_relationship} onChange={e => set('nok_relationship', e.target.value)}
+                        className={ic(false)}>
+                        <option value="">Select relationship...</option>
+                        {NOK_RELATIONSHIPS.map(r => (
+                          <option key={r.code} value={r.code}>{r.label}</option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                 </div>
@@ -510,7 +516,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
                   { label: 'KRA PIN',      value: form.kra_pin || '—' },
                   { label: 'Address',      value: form.physical_address || '—' },
                   { label: 'City',         value: form.city || '—' },
-                  { label: 'Next of Kin',  value: form.nok_name ? `${form.nok_name}${form.nok_relationship ? ` (${form.nok_relationship})` : ''}` : '—' },
+                  { label: 'Next of Kin',  value: form.nok_name ? `${form.nok_name}${form.nok_relationship ? ` (${nokRelationshipLabel(form.nok_relationship)})` : ''}` : '—' },
                 ].map(r => (
                   <div key={r.label} className="flex justify-between text-sm gap-4">
                     <span className="text-gray-500 flex-shrink-0">{r.label}</span>

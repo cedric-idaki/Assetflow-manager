@@ -38,6 +38,15 @@ import { outcomeMeta, daysSince, STALE_CONTACT_DAYS } from './useCrmInteractions
 
 const DAY = 86400000;
 
+// Module-level counter, not Date.now(): React StrictMode mounts an effect twice,
+// and both runs can land inside the same millisecond. supabase.channel(name)
+// RETURNS AN EXISTING channel for a name already in use, so the second run got
+// the first run's already-subscribed channel and .on() threw
+// "cannot add `postgres_changes` callbacks ... after `subscribe()`", which the
+// error boundary rendered as a blank "Something went wrong" page. Same fix and
+// same reasoning as AgentActivityTrail.
+let _crmOversightChannelSeq = 0;
+
 /** Roles the supervisor policies admit. Mirrors public.is_crm_supervisor(). */
 export const CRM_SUPERVISOR_ROLES = ['super_admin', 'admin', 'director', 'manager', 'sacco_admin'];
 
@@ -316,7 +325,7 @@ export const useCrmOversight = () => {
   useEffect(() => {
     if (!canView) return undefined;
     const channel = supabase
-      .channel(`crm_oversight_${Date.now()}`)
+      .channel(`crm_oversight_${++_crmOversightChannelSeq}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'crm_interactions' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' },            () => fetchAll())
       .subscribe();

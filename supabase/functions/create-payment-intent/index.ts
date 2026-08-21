@@ -1,6 +1,7 @@
 import Stripe from 'https://esm.sh/stripe@14.21.0';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authenticateCaller } from '../_shared/auth.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
@@ -9,15 +10,19 @@ declare const Deno: {
   };
 };
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const API_VERSIONS = ['2026-08-21'];
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  const api = await openRequest(req, {
+    fn: 'create-payment-intent',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Existing call sites spread `corsHeaders`; pointing it at the per-request
+  // headers keeps them working while the values become origin-checked.
+  const corsHeaders = api.headers;
 
   // Creates Stripe payment intents against your account — never anonymous.
   const auth = await authenticateCaller(req);
@@ -26,6 +31,18 @@ Deno.serve(async (req) => {
       status: auth.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  // Every call creates a real object in the Stripe account. A loop leaves
+  // thousands of abandoned intents behind, which is noise in the dashboard, a
+  // dent in the account's authorisation-rate metrics, and free API burn.
+  // Starting a checkout is one deliberate act.
+  const over = await api.enforceLimit({
+    action: 'create',
+    identity: callerIdentity(auth.caller),
+    limit: 10,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
@@ -119,10 +136,8 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error('Payment intent creation error:', error)
-    return new Response(
-      JSON.stringify({ error: error.message || 'Failed to create payment intent' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    // Stripe errors name the account, the API version and the failing
+    // parameter. Log them; hand the caller a request id.
+    return api.fail(error)
   }
 })

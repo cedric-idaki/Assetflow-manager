@@ -1,16 +1,21 @@
 import Stripe from 'https://esm.sh/stripe@14.21.0';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authenticateCaller } from '../_shared/auth.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const API_VERSIONS = ['2026-08-21'];
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  const api = await openRequest(req, {
+    fn: 'confirm-payment',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Existing call sites spread `corsHeaders`; pointing it at the per-request
+  // headers keeps them working while the values become origin-checked.
+  const corsHeaders = api.headers;
 
   // Writes payment records with the service role, so the caller must be a real
   // session rather than anyone holding the public anon key.
@@ -20,6 +25,17 @@ Deno.serve(async (req) => {
       status: auth.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  // Each call hits Stripe and then writes a payment record. Confirming is a
+  // single step at the end of a checkout, so a per-user ceiling well above one
+  // retry still leaves no room for a loop against our Stripe account.
+  const over = await api.enforceLimit({
+    action: 'confirm',
+    identity: callerIdentity(auth.caller),
+    limit: 20,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
@@ -83,10 +99,8 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error('Payment confirmation error:', error)
-    return new Response(
-      JSON.stringify({ error: error.message || 'Failed to confirm payment' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    // Stripe errors name the account, the API version and the exact parameter
+    // that failed. Those go to the log; the caller gets a request id.
+    return api.fail(error)
   }
 })

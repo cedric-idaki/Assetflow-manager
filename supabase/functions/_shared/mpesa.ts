@@ -65,17 +65,17 @@ export function stkRouting(creds: DarajaCreds): {
   };
 }
 
-export const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
-export function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
-}
+// The `corsHeaders` and `json()` helpers that lived here have been REMOVED, not
+// moved. They hard-coded Access-Control-Allow-Origin: '*', and because four
+// M-Pesa functions imported them, one wildcard was serving the whole payment
+// surface. Headers now depend on the request — its Origin, its negotiated API
+// version — so they cannot be a module constant.
+//
+// Use openRequest() from _shared/http.ts instead:
+//
+//     const api = await openRequest(req, { fn: 'mpesa-…', versions: API_VERSIONS });
+//     if (api.halt) return api.halt;
+//     const json = api.json;
 
 export function baseUrl(environment: string): string {
   return environment === 'production'

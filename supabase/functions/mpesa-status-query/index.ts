@@ -30,6 +30,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { credsForTransaction, stkQuery } from '../_shared/mpesa.ts';
 import { settleFailure, settleSuccess } from '../_shared/mpesa-settle.ts';
+import { hashedIp, openRequest } from '../_shared/http.ts';
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
@@ -58,17 +59,7 @@ const MAX_AGE_DAYS = 7;
 /** Bound the work (and the Daraja calls) a single run can do. */
 const BATCH_LIMIT = 50;
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
+const API_VERSIONS = ['2026-08-21'];
 
 // ─── Scheduler authentication ─────────────────────────────────────────────────
 // config.toml sets verify_jwt = false so the scheduler can invoke this without a
@@ -91,8 +82,31 @@ const isScheduler = (req: Request): boolean => {
 };
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (!isScheduler(req)) return json({ error: 'Unauthorized' }, 401);
+  const api = await openRequest(req, {
+    fn: 'mpesa-status-query',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the module-level helper this file used to define.
+  const json = api.json;
+
+  if (!isScheduler(req)) {
+    // verify_jwt = false means the platform lets anybody reach this handler, so
+    // an attacker can hammer it to grind at the two shared secrets above. The
+    // comparison is constant-time, but nothing stopped the attempts themselves.
+    // Rejected callers are limited by hashed IP; the real scheduler presents a
+    // valid key on its first try and never reaches this branch.
+    const over = await api.enforceLimit({
+      action: 'unauthorized',
+      identity: `ip:${await hashedIp(req, 'mpesa-status-query')}`,
+      limit: 10,
+      windowSeconds: 300,
+    });
+    if (over) return over;
+    return json({ error: 'Unauthorized' }, 401);
+  }
 
   try {
     const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
@@ -178,7 +192,6 @@ Deno.serve(async (req) => {
       more: pending.length === BATCH_LIMIT,
     });
   } catch (err) {
-    console.error('mpesa-status-query error:', err);
-    return json({ error: (err as Error).message }, 500);
+    return api.fail(err);
   }
 });

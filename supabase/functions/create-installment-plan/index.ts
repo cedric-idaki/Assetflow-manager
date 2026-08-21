@@ -1,15 +1,13 @@
 import Stripe from 'https://esm.sh/stripe@14.21.0';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
+
+const API_VERSIONS = ['2026-08-21'];
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
   env: { get: (key: string) => string | undefined };
-};
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
 function addInterval(date: Date, frequency: string): Date {
@@ -25,9 +23,16 @@ function addInterval(date: Date, frequency: string): Date {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'create-installment-plan',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Existing call sites spread `corsHeaders`; pointing it at the per-request
+  // headers keeps them working while the values become origin-checked.
+  const corsHeaders = api.headers;
 
   // Raises a recurring-billing plan against a client. Admin operation, reached
   // only from the Recurring Billing panel in the payment collections hub.
@@ -43,6 +48,17 @@ Deno.serve(async (req) => {
       status: denied.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  // A plan commits a client to a schedule of future charges, so duplicates are
+  // not a cosmetic problem — they bill someone twice. Raising one is a single
+  // deliberate act from the recurring-billing panel.
+  const over = await api.enforceLimit({
+    action: 'create',
+    identity: callerIdentity(auth.caller),
+    limit: 10,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
@@ -179,10 +195,6 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error) {
-    console.error('Create installment plan error:', error);
-    return new Response(
-      JSON.stringify({ error: error.message || 'Failed to create installment plan' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return api.fail(error);
   }
 });

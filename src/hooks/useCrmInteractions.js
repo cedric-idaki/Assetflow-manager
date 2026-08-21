@@ -21,6 +21,10 @@ import { logger } from '../utils/logger';
 
 const DAY = 86400000;
 
+// See useCrmOversight: a Date.now() suffix is not unique enough under
+// StrictMode's double mount, and reusing a subscribed channel name throws.
+let _crmInteractionsChannelSeq = 0;
+
 /** A contact this old means the relationship has gone quiet. */
 export const STALE_CONTACT_DAYS = 14;
 
@@ -173,7 +177,7 @@ export const useCrmInteractions = (agentProfile) => {
   useEffect(() => {
     if (!agentId) return undefined;
     const channel = supabase
-      .channel(`crm_interactions_${agentId}_${Date.now()}`)
+      .channel(`crm_interactions_${agentId}_${++_crmInteractionsChannelSeq}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'crm_interactions', filter: `agent_id=eq.${agentId}` },

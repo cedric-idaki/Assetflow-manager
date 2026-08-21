@@ -17,18 +17,9 @@
 // never claims a deletion that did not happen.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { openRequest } from '../_shared/http.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
-
-const json = (payload: unknown, status = 200) =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
+const API_VERSIONS = ['2026-08-21'];
 
 // Only account-holder admins (and super admins, who oversee everything) may
 // permanently delete staff. This keeps the destructive action confined to the
@@ -40,10 +31,16 @@ const CAN_DELETE = ['admin', 'super_admin'];
 const PROTECTED_ROLES = ['admin', 'super_admin', 'client'];
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'delete-staff-user',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the old module-level helper so every `json(...)` below picks up the
+  // origin-checked headers unchanged.
+  const json = api.json;
 
   if (req.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405);
@@ -69,6 +66,18 @@ Deno.serve(async (req) => {
     if (callerErr || !caller) {
       return json({ error: 'Unauthorized: invalid or expired session' }, 401);
     }
+
+    // Permanent deletion, one account per call. A script looping this could
+    // empty a tenant's staff list in seconds, and the audit trail would record
+    // every step faithfully while being powerless to stop it. Ten employees a
+    // minute is already well past deliberate human work.
+    const over = await api.enforceLimit({
+      action: 'delete',
+      identity: `user:${caller.id}`,
+      limit: 10,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     // ── 2. Resolve the caller's role from user_profiles ───────────────────
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
@@ -164,15 +173,23 @@ Deno.serve(async (req) => {
       // Roll back the snapshot so the log doesn't claim a deletion that failed.
       await adminClient.from('audit_logs').delete().eq('id', auditRow.id);
       // The most common cause is a dependent record (e.g. a sales-agent wallet)
-      // protected by a foreign key. Surface it clearly instead of silently
-      // destroying linked data.
-      return json({ error: `Could not delete employee: ${delErr.message}` }, 409);
+      // protected by a foreign key. The caller needs to know that happened and
+      // that nothing was destroyed — but delErr.message carries the constraint
+      // and table names, which is a map of the schema. Name the cause, log the
+      // specifics.
+      console.error('delete-staff-user: delete blocked', {
+        requestId: api.requestId, message: delErr.message,
+      });
+      return json({
+        error: 'Could not delete this employee because other records still reference them. '
+             + 'Nothing was deleted. Please contact support with the reference below.',
+        requestId: api.requestId,
+      }, 409);
     }
 
     return json({ success: true, id: target.id, full_name: target.full_name }, 200);
 
   } catch (err) {
-    console.error('delete-staff-user error:', err);
-    return json({ error: (err as Error).message || 'Internal server error' }, 500);
+    return api.fail(err);
   }
 });

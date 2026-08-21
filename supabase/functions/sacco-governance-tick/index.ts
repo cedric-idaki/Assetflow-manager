@@ -18,6 +18,7 @@
 
 // @ts-ignore: Deno global is available in the Deno runtime
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
+import { hashedIp, openRequest } from "../_shared/http.ts";
 
 declare const Deno: any;
 
@@ -28,11 +29,7 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const PORTAL_URL = Deno.env.get("PORTAL_URL") || "";
 const loginUrl = PORTAL_URL ? `${PORTAL_URL.replace(/\/$/, "")}/login` : "";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+const API_VERSIONS = ["2026-08-21"];
 
 // ─── Scheduler authentication ─────────────────────────────────────────────────
 // config.toml sets verify_jwt = false so pg_cron can invoke this without a user
@@ -131,16 +128,32 @@ const emailDataFor = (ev: any, saccoName: string) => {
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: "sacco-governance-tick",
+    methods: "POST, OPTIONS",
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
 
-  // verify_jwt = false leaves this endpoint open to the internet, so the caller
-  // has to prove it is the scheduler.
+  // Keeps the existing spreads below working while the values behind them
+  // become origin-checked instead of "*".
+  const corsHeaders = api.headers;
+
   if (!isScheduler(req)) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // verify_jwt = false means the platform lets anybody reach this handler, so
+    // an attacker can hammer it to grind at the two shared secrets. The compare
+    // is constant-time, but nothing bounded the attempts themselves. Rejected
+    // callers are budgeted by hashed IP; the real scheduler presents a valid key
+    // on its first try and never reaches this branch.
+    const over = await api.enforceLimit({
+      action: "unauthorized",
+      identity: `ip:${await hashedIp(req, "sacco-governance-tick")}`,
+      limit: 10,
+      windowSeconds: 300,
     });
+    if (over) return over;
+
+    return api.json({ error: "Unauthorized" }, 401);
   }
 
   try {
@@ -200,9 +213,6 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {
-    return new Response(JSON.stringify({ error: (error as Error).message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return api.fail(error);
   }
 });

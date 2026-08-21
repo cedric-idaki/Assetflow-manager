@@ -1,15 +1,13 @@
 /// <reference lib="deno.ns" />
 
 import { authenticateCaller } from '../_shared/auth.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
 
 const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID');
 const TWILIO_AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN');
 const TWILIO_PHONE_NUMBER = Deno.env.get('TWILIO_PHONE_NUMBER');
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': '*'
-};
+const API_VERSIONS = ['2026-08-21'];
 
 const buildPaymentReminderMessage = (data: any): string => {
   const { client, payment, asset, daysUntilDue, isOverdue } = data;
@@ -46,9 +44,17 @@ const buildPaymentConfirmationMessage = (data: any): string => {
 };
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'send-sms',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Existing call sites spread `corsHeaders` into their own header objects;
+  // pointing it at the per-request headers keeps every one of them working
+  // while the values behind it become origin-checked instead of "*".
+  const corsHeaders = api.headers;
 
   // Twilio sends cost real money and the caller controls the destination
   // number, so this must never be reachable with the public anon key. Any
@@ -61,6 +67,19 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  // Charged per user, after authentication, so the budget follows the account
+  // rather than an address a whole office shares. A human sending reminders
+  // from the portal sends them one at a time; the bulk paths (payment-alerts,
+  // esign-reminders) come in with the service-role key and are exempt, so this
+  // ceiling never touches a legitimate batch.
+  const over = await api.enforceLimit({
+    action: 'send',
+    identity: callerIdentity(auth.caller),
+    limit: 20,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE_NUMBER) {
@@ -116,11 +135,14 @@ Deno.serve(async (req) => {
     const result = await response.json();
 
     if (!response.ok) {
-      console.error('Twilio API error:', result);
-      return new Response(JSON.stringify({ error: 'Failed to send SMS', details: result }), {
-        status: response.status,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+      // `result` is Twilio's raw error payload — it carries the account SID,
+      // internal error codes and a moreInfo URL. That belongs in the log, not
+      // in a response the caller reads.
+      console.error('Twilio API error:', { requestId: api.requestId, result });
+      return new Response(
+        JSON.stringify({ error: 'Failed to send SMS.', requestId: api.requestId }),
+        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
     }
 
     console.log('SMS sent successfully:', result.sid);
@@ -130,10 +152,6 @@ Deno.serve(async (req) => {
     });
 
   } catch (error) {
-    console.error('Error sending SMS:', error);
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+    return api.fail(error);
   }
 });

@@ -1,5 +1,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
+
+const API_VERSIONS = ['2026-08-21'];
 
 // Declare Deno global for type safety
 declare const Deno: {
@@ -8,15 +11,17 @@ declare const Deno: {
   };
 };
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'maker-checker-notify',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Existing call sites spread `corsHeaders`; pointing it at the per-request
+  // headers keeps them working while the values become origin-checked.
+  const corsHeaders = api.headers;
 
   // initiator_email / initiator_phone / title / description / checker_comment are
   // all caller-supplied and go straight into the outgoing mail and SMS body, so
@@ -34,6 +39,17 @@ serve(async (req) => {
       status: denied.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  // One approval sends both an email and an SMS with caller-supplied text in
+  // the body, so an unmetered loop here is a spam relay that also spends money.
+  // Approvals are individual human decisions; 20 a minute is generous.
+  const over = await api.enforceLimit({
+    action: 'notify',
+    identity: callerIdentity(auth.caller),
+    limit: 20,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     const { action_id, action_type, title, description, initiator_name, initiator_email, initiator_phone, checker_name, status, checker_comment, affected_entity } = await req.json();
@@ -136,9 +152,6 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    return new Response(JSON.stringify({ success: false, error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return api.fail(error);
   }
 });

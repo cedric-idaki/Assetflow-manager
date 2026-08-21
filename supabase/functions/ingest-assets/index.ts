@@ -31,17 +31,9 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-api-key',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+import { hashedIp, openRequest } from '../_shared/http.ts';
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
+const API_VERSIONS = ['2026-08-21'];
 
 // asset_type / asset_status enum-safe sets. Kept in sync with the DB enums
 // (base + 20260721100500_extend_asset_type_enum). Unknown values are clamped to
@@ -109,7 +101,16 @@ function resolveType(raw: unknown, fallback: string): string {
 }
 
 serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const api = await openRequest(req, {
+    fn: 'ingest-assets',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the module-level helper this file used to define.
+  const json = api.json;
+
   if (req.method !== 'POST') return json({ error: 'Use POST.' }, 405);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -135,7 +136,30 @@ serve(async (req: Request) => {
       .eq('key_hash', keyHash)
       .maybeSingle();
 
-    if (!keyRow || !keyRow.is_active) return json({ error: 'Invalid or revoked API key.' }, 401);
+    if (!keyRow || !keyRow.is_active) {
+      // verify_jwt = false, so anyone can reach this and guess keys. Limit the
+      // REJECTED path by address: a real dealer site presents a working key and
+      // never lands here, so this only ever bites a guesser.
+      const guessing = await api.enforceLimit({
+        action: 'bad-key',
+        identity: `ip:${await hashedIp(req, 'ingest-assets')}`,
+        limit: 10,
+        windowSeconds: 300,
+      });
+      if (guessing) return guessing;
+
+      return json({ error: 'Invalid or revoked API key.' }, 401);
+    }
+
+    // Keyed on the key hash, never the raw key — the bucket string is stored.
+    // A dealer site syncing inventory pushes batches, not a request per car.
+    const over = await api.enforceLimit({
+      action: 'ingest',
+      identity: `key:${keyHash.slice(0, 32)}`,
+      limit: 60,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     adminId = keyRow.admin_id;
     defaultType = ASSET_TYPES.includes(keyRow.default_asset_type) ? keyRow.default_asset_type : 'other';
@@ -148,6 +172,16 @@ serve(async (req: Request) => {
 
     const { data: { user }, error: uErr } = await admin.auth.getUser(token);
     if (uErr || !user) return json({ error: 'Invalid or expired session.' }, 401);
+
+    // The dashboard CSV importer. One upload is one call carrying many rows,
+    // so a person importing does not approach this.
+    const over = await api.enforceLimit({
+      action: 'import',
+      identity: `user:${user.id}`,
+      limit: 30,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     const { data: profile } = await admin
       .from('user_profiles')
@@ -300,7 +334,15 @@ serve(async (req: Request) => {
         created++;
       }
     } catch (err) {
-      errors.push({ ref: externalRef, reason: (err as { message?: string })?.message || 'insert/update failed' });
+      // The raw message is a Postgres error naming tables, columns and
+      // constraints, and this array goes back to the caller. Log the detail,
+      // return only which row failed.
+      console.error('ingest-assets: row failed', {
+        requestId: api.requestId,
+        ref: externalRef,
+        message: (err as { message?: string })?.message,
+      });
+      errors.push({ ref: externalRef, reason: 'insert/update failed' });
     }
   }
 

@@ -1,6 +1,9 @@
 // @ts-ignore: Deno global is available in Deno runtime
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { authenticateCaller } from "../_shared/auth.ts";
+import { ApiError, callerIdentity, openRequest } from "../_shared/http.ts";
+
+const API_VERSIONS = ["2026-08-21"];
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 // Set EMAIL_FROM to a verified-domain sender (e.g. "Ararat <noreply@yourco.com>")
@@ -1301,15 +1304,12 @@ const buildListingEnquiryEmail = (data: any) => {
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "*",
-      },
-    });
-  }
+  const api = await openRequest(req, {
+    fn: "send-email",
+    methods: "POST, OPTIONS",
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
 
   // `to`, `portalUrl` and the template payload are all caller-controlled, and
   // this sends from a verified Resend domain — unauthenticated, it is a
@@ -1318,19 +1318,30 @@ serve(async (req) => {
   // (clients email their own statements from the portal); sibling Edge
   // Functions call in with the service-role key.
   const auth = await authenticateCaller(req);
-  if (!auth.ok) {
-    return new Response(JSON.stringify({ error: auth.error }), {
-      status: auth.status,
-      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
-    });
-  }
+  if (!auth.ok) return api.json({ error: auth.error }, auth.status);
+
+  // Every send costs money and leaves our verified domain, so a loop here is
+  // both a bill and a reputation risk — a domain that blasts mail gets its
+  // deliverability shredded. A person emailing statements from the portal
+  // sends them one at a time; the fan-out paths (payment-alerts,
+  // esign-reminders, kyc-renewal-reminders) arrive with the service-role key
+  // and are exempt, so a nightly batch is never throttled.
+  const over = await api.enforceLimit({
+    action: "send",
+    identity: callerIdentity(auth.caller),
+    limit: 30,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     const body = await req.json();
     const { type, to, data } = body;
 
-    if (!to) throw new Error("Recipient email (to) is required");
-    if (!type) throw new Error("Email type is required");
+    // ApiError, not Error: these messages are written FOR the caller and must
+    // survive api.fail(), which replaces anything else with a generic sentence.
+    if (!to) throw new ApiError("Recipient email (to) is required.", 400, "missing_recipient");
+    if (!type) throw new ApiError("Email type is required.", 400, "missing_type");
 
     let subject = "";
     let html = "";
@@ -1462,7 +1473,7 @@ serve(async (req) => {
         html = buildListingEnquiryEmail(data);
         break;
       default:
-        throw new Error(`Unknown email type: ${type}`);
+        throw new ApiError(`Unknown email type: ${String(type).slice(0, 40)}`, 400, "unknown_type");
     }
 
     const response = await fetch("https://api.resend.com/emails", {
@@ -1482,22 +1493,16 @@ serve(async (req) => {
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result?.message || "Failed to send email via Resend");
+      // Resend's message names the sending domain and its own error codes.
+      // Log it; tell the caller only that delivery failed.
+      console.error("send-email: Resend rejected the send", {
+        requestId: api.requestId, status: response.status, result,
+      });
+      throw new ApiError("Failed to send the email. Please try again.", 502, "delivery_failed");
     }
 
-    return new Response(JSON.stringify({ success: true, id: result?.id, type }), {
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
+    return api.json({ success: true, id: result?.id, type });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
+    return api.fail(error);
   }
 });

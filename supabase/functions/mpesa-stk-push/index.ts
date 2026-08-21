@@ -32,8 +32,6 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
-  corsHeaders,
-  json,
   baseUrl,
   getDarajaToken,
   darajaTimestamp,
@@ -45,6 +43,9 @@ import {
   type DarajaCreds,
 } from '../_shared/mpesa.ts';
 import { expectedSubscriptionPrice } from '../_shared/plans.ts';
+import { openRequest } from '../_shared/http.ts';
+
+const API_VERSIONS = ['2026-08-21'];
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
@@ -52,7 +53,16 @@ declare const Deno: {
 };
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const api = await openRequest(req, {
+    fn: 'mpesa-stk-push',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the json() previously imported from _shared/mpesa.ts, so every
+  // existing return below gains origin-checked CORS and the version header.
+  const json = api.json;
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
@@ -75,6 +85,23 @@ Deno.serve(async (req) => {
       .eq('id', user.id)
       .maybeSingle();
     let adminId: string = profile?.admin_id ?? user.id;
+
+    // ── Budget ───────────────────────────────────────────────────────────────
+    // Every accepted call makes a real phone ring with a real payment prompt,
+    // and the payer's number is chosen by the caller. Unmetered, one signed-in
+    // account can use Safaricom to harass an arbitrary number, and can burn the
+    // Daraja request quota that every tenant's collections depend on.
+    //
+    // A person paying is a single deliberate act; the retry path is
+    // mpesa-status-query polling, not another push. Five a minute leaves ample
+    // room for a mistyped number and a genuine retry.
+    const over = await api.enforceLimit({
+      action: 'push',
+      identity: `user:${user.id}`,
+      limit: 5,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     // ── Validate input ───────────────────────────────────────────────────────
     const body = await req.json().catch(() => ({}));
@@ -303,8 +330,7 @@ Deno.serve(async (req) => {
       message: 'STK push sent. Waiting for the customer to confirm on their phone.',
     });
   } catch (err) {
-    console.error('STK push error:', err);
-    return json({ error: (err as Error).message || 'Internal server error' }, 500);
+    return api.fail(err);
   }
 });
 

@@ -27,19 +27,24 @@
 // @ts-nocheck — Deno runtime globals are not known to the app's TS config.
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { hashedIp, openRequest } from "../_shared/http.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SERVICE_ROLE_KEY");
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-api-key",
-  "Content-Type": "application/json",
-};
+const API_VERSIONS = ["2026-08-21"];
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: CORS });
+/**
+ * The action handlers below take `json` as a PARAMETER rather than closing over
+ * a module-level helper.
+ *
+ * The headers now depend on the request (its Origin, its negotiated version),
+ * and a module-level value set per request would be a real bug: a Deno isolate
+ * serves concurrent requests, so one caller's headers could be written while
+ * another's response is being built. Passing it down keeps each response tied
+ * to the request that produced it.
+ */
+type Json = (body: unknown, status?: number) => Response;
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -209,7 +214,7 @@ async function inviteSigner(row: any, docName: string, message: string | null, b
 }
 
 // ── create-document ────────────────────────────────────────────────────────────
-async function createDocument(key: any, body: any) {
+async function createDocument(key: any, body: any, json: Json) {
   const name = String(body.name || "").trim();
   if (!name) return json({ error: "name is required" }, 400);
 
@@ -257,14 +262,15 @@ async function createDocument(key: any, body: any) {
     expires_at: expires, api_key_id: key.id,
     external_ref: body.external_ref ? String(body.external_ref) : null,
   }).select("id").single();
-  if (docErr) return json({ error: docErr.message }, 500);
+  if (docErr) { console.error("esign-api: document insert failed", docErr.message); return json({ error: "Could not create the document." }, 500); }
 
   const path = `${key.admin_id}/api_${docRow.id}.pdf`;
   const { error: upErr } = await admin.storage.from("esign-documents")
     .upload(path, bytes, { upsert: true, contentType: "application/pdf" });
   if (upErr) {
     await admin.from("esign_documents").delete().eq("id", docRow.id).then(() => {}, () => {});
-    return json({ error: `Upload failed: ${upErr.message}` }, 500);
+    console.error("esign-api: storage upload failed", upErr.message);
+    return json({ error: "Could not store the document file." }, 500);
   }
   const { data: pub } = admin.storage.from("esign-documents").getPublicUrl(path);
   await admin.from("esign_documents").update({ file_url: pub?.publicUrl }).eq("id", docRow.id);
@@ -288,7 +294,8 @@ async function createDocument(key: any, body: any) {
   ).select("id, name, email, phone, role, signing_order, token, token_expires_at");
   if (sErr) {
     await admin.from("esign_documents").delete().eq("id", docRow.id).then(() => {}, () => {});
-    return json({ error: sErr.message }, 500);
+    console.error("esign-api: signer insert failed", sErr.message);
+    return json({ error: "Could not create the signers." }, 500);
   }
 
   // Field placements (optional — signers without fields tap-and-sign anywhere).
@@ -322,7 +329,7 @@ async function createDocument(key: any, body: any) {
   });
   if (fieldRows.length) {
     const { error: fErr } = await admin.from("esign_fields").insert(fieldRows);
-    if (fErr) return json({ error: `Fields failed: ${fErr.message}` }, 500);
+    if (fErr) { console.error("esign-api: field insert failed", fErr.message); return json({ error: "Could not create the document fields." }, 500); }
   }
 
   await recordAudit(key.admin_id, docRow.id, name, "created",
@@ -353,7 +360,7 @@ async function createDocument(key: any, body: any) {
 }
 
 // ── get-document ───────────────────────────────────────────────────────────────
-async function getDocument(key: any, body: any) {
+async function getDocument(key: any, body: any, json: Json) {
   let q = admin.from("esign_documents")
     .select("id, name, status, file_url, final_pdf_hash, external_ref, signing_order, expires_at, created_at, updated_at")
     .eq("admin_id", key.admin_id);
@@ -380,7 +387,7 @@ async function getDocument(key: any, body: any) {
 }
 
 // ── list-documents ─────────────────────────────────────────────────────────────
-async function listDocuments(key: any, body: any) {
+async function listDocuments(key: any, body: any, json: Json) {
   const limit = Math.min(100, Math.max(1, Number(body.limit) || 25));
   const offset = Math.max(0, Number(body.offset) || 0);
   let q = admin.from("esign_documents")
@@ -389,7 +396,7 @@ async function listDocuments(key: any, body: any) {
     .order("created_at", { ascending: false }).range(offset, offset + limit - 1);
   if (body.status) q = q.eq("status", String(body.status));
   const { data, error } = await q;
-  if (error) return json({ error: error.message }, 500);
+  if (error) { console.error("esign-api: list failed", error.message); return json({ error: "Could not list documents." }, 500); }
   const documents = await Promise.all(
     (data || []).map(async (d: any) => ({ ...d, file_url: await signStoredUrl(d.file_url) }))
   );
@@ -397,7 +404,7 @@ async function listDocuments(key: any, body: any) {
 }
 
 // ── refresh-link: re-issue an expired/spent link for an unsigned signer ────────
-async function refreshLink(key: any, body: any) {
+async function refreshLink(key: any, body: any, json: Json) {
   if (!body.document_id || !isEmail(body.email)) return json({ error: "document_id and email are required" }, 400);
   const { data: signer } = await admin.from("esign_signers")
     .select("id, status, name, email")
@@ -418,7 +425,7 @@ async function refreshLink(key: any, body: any) {
 }
 
 // ── send-invite: (re)deliver invites by email/SMS ──────────────────────────────
-async function sendInvite(key: any, body: any) {
+async function sendInvite(key: any, body: any, json: Json) {
   if (!body.document_id) return json({ error: "document_id is required" }, 400);
   const { data: doc } = await admin.from("esign_documents")
     .select("id, name, message, signing_order")
@@ -443,25 +450,56 @@ async function sendInvite(key: any, body: any) {
 }
 
 serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+  const api = await openRequest(req, {
+    fn: "esign-api",
+    methods: "POST, OPTIONS",
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  const json = api.json;
   if (req.method !== "POST") return json({ error: "Use POST." }, 405);
 
   try {
     const key = await resolveKey(req);
-    if (!key) return json({ error: "Invalid or missing x-api-key" }, 401);
+    if (!key) {
+      // verify_jwt = false, so the x-api-key header is the only credential and
+      // anybody can reach here to guess at it. Budget the REJECTED path by
+      // address: a client's server presents a working key and never lands here.
+      const guessing = await api.enforceLimit({
+        action: "bad-key",
+        identity: `ip:${await hashedIp(req, "esign-api")}`,
+        limit: 10,
+        windowSeconds: 300,
+      });
+      if (guessing) return guessing;
+
+      return json({ error: "Invalid or missing x-api-key" }, 401);
+    }
+
+    // Keyed on the tenant's key id, so one client team's integration cannot
+    // spend another's budget. create-document uploads a PDF, writes several
+    // tables and emails every signer, so this is not a cheap call to loop.
+    const over = await api.enforceLimit({
+      action: "call",
+      identity: `key:${key.id}`,
+      limit: 120,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || "");
 
     switch (action) {
-      case "create-document": return await createDocument(key, body);
-      case "get-document":    return await getDocument(key, body);
-      case "list-documents":  return await listDocuments(key, body);
-      case "refresh-link":    return await refreshLink(key, body);
-      case "send-invite":     return await sendInvite(key, body);
-      default: return json({ error: `Unknown action: ${action || "(none)"}` }, 400);
+      case "create-document": return await createDocument(key, body, json);
+      case "get-document":    return await getDocument(key, body, json);
+      case "list-documents":  return await listDocuments(key, body, json);
+      case "refresh-link":    return await refreshLink(key, body, json);
+      case "send-invite":     return await sendInvite(key, body, json);
+      default: return json({ error: `Unknown action: ${String(action).slice(0, 40) || "(none)"}` }, 400);
     }
   } catch (error) {
-    return json({ error: error.message || "Unexpected error" }, 500);
+    return api.fail(error);
   }
 });

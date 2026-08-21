@@ -33,6 +33,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { credsForTransaction, stkQuery } from '../_shared/mpesa.ts';
+import { consumeRateLimit, hashedIp } from '../_shared/http.ts';
 import { settleFailure, settleSuccess } from '../_shared/mpesa-settle.ts';
 
 declare const Deno: {
@@ -70,6 +71,25 @@ Deno.serve(async (req) => {
 
     const checkoutRequestId: string = stk.CheckoutRequestID;
 
+    // ── Budget, keyed on the transaction rather than the caller ──────────────
+    // This endpoint is deliberately unauthenticated: Safaricom POSTs here with
+    // no credential of any kind. That rules out limiting by IP the way every
+    // other function does — EVERY genuine callback in the system arrives from
+    // the same handful of Safaricom addresses, so an IP budget would throttle
+    // real payments under exactly the load that matters most.
+    //
+    // The transaction id is the honest key. Legitimate traffic sends each id a
+    // small number of times (the first callback plus Safaricom's retries); a
+    // replay storm sends one id endlessly. Limiting per id catches the storm
+    // and cannot touch distinct real callbacks, however many arrive at once.
+    const perTxn = await consumeRateLimit(
+      `mpesa-callback:txn:${checkoutRequestId.slice(0, 64)}`, 20, 300,
+    );
+    if (!perTxn.allowed) {
+      console.warn('Callback rate limit hit for CheckoutRequestID:', checkoutRequestId);
+      return ack('Ignored');
+    }
+
     const { data: txn } = await supabase
       .from('mpesa_transactions')
       .select('*')
@@ -79,6 +99,15 @@ Deno.serve(async (req) => {
     // Not a payment we initiated — nothing to ask Safaricom about.
     if (!txn) {
       console.warn('Callback for unknown CheckoutRequestID:', checkoutRequestId);
+      // Safaricom does not send us ids we never issued, so a caller producing
+      // unknown ids is fuzzing, and here an IP budget is safe precisely because
+      // real traffic never reaches this branch.
+      const unknown = await consumeRateLimit(
+        `mpesa-callback:unknown:${await hashedIp(req, 'mpesa-callback')}`, 20, 300,
+      );
+      if (!unknown.allowed) {
+        console.warn('Sustained unknown-callback traffic; ignoring without lookup.');
+      }
       return ack('Ignored');
     }
 

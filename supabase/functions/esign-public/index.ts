@@ -23,19 +23,12 @@
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
+import { hashedIp, openRequest } from "../_shared/http.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "*",
-  "Content-Type": "application/json",
-};
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: CORS });
+const API_VERSIONS = ["2026-08-21"];
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -300,17 +293,55 @@ async function burnFieldsIntoPdf(fileUrl: string, fields: any[], meta: any): Pro
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+  const api = await openRequest(req, {
+    fn: "esign-public",
+    methods: "POST, OPTIONS",
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the module-level helper, so every json(...) below emits
+  // origin-checked headers instead of the "*" this file used to send.
+  const json = api.json;
+
+  // The signer has no account — the token in the link is the whole credential —
+  // so hashed IP is the only identity available.
+  const visitor = `ip:${await hashedIp(req, "esign-public")}`;
 
   try {
     const { action, token, code, signature, fields, fields_adhoc, device, channel: requestedChannel, consent, reason } = await req.json();
     if (!action || !token) return json({ error: "action and token are required" }, 400);
 
+    // Overall ceiling for one visitor across every action. Signing is a handful
+    // of calls — look up, request a code, submit — so this only ever catches a
+    // script.
+    const busy = await api.enforceLimit({
+      action: "call",
+      identity: visitor,
+      limit: 60,
+      windowSeconds: 60,
+    });
+    if (busy) return busy;
+
     // Derive the signer's IP from the request for the audit trail.
     const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
 
     const found = await getSigner(token);
-    if (!found) return json({ error: "This signing link is invalid." }, 404);
+    if (!found) {
+      // A real signer follows a link they were emailed and hits a token that
+      // resolves. Repeated misses are a search of the token space, and this
+      // endpoint gates the ability to SIGN A DOCUMENT, so the miss path gets a
+      // tight budget of its own.
+      const probing = await api.enforceLimit({
+        action: "miss",
+        identity: visitor,
+        limit: 20,
+        windowSeconds: 300,
+      });
+      if (probing) return probing;
+
+      return json({ error: "This signing link is invalid." }, 404);
+    }
     if (found.signed) return json({ error: "This document has already been signed." }, 410);
     if (found.expired) return json({ error: "This signing link has expired." }, 410);
 
@@ -394,6 +425,18 @@ serve(async (req) => {
 
     // ── send-otp ────────────────────────────────────────────────────────────
     if (action === "send-otp") {
+      // Each call sends an SMS AND an email to the signer. otp_attempts already
+      // bounds GUESSING a code; nothing bounded REQUESTING one, so this was a
+      // way to bury a real signer in texts on our bill — and a resend also
+      // resets their attempt budget, which is worth rate limiting on its own.
+      const resending = await api.enforceLimit({
+        action: "send-otp",
+        identity: visitor,
+        limit: 5,
+        windowSeconds: 600,
+      });
+      if (resending) return resending;
+
       // Cap total codes per link. Without this an attacker could keep the
       // per-code guess budget topped up by cycling resends (and burn the
       // tenant's SMS credit doing it).
@@ -709,8 +752,8 @@ serve(async (req) => {
       return json({ ok: true, completed: allSigned });
     }
 
-    return json({ error: `Unknown action: ${action}` }, 400);
+    return json({ error: `Unknown action: ${String(action).slice(0, 40)}` }, 400);
   } catch (error) {
-    return json({ error: error.message || "Unexpected error" }, 500);
+    return api.fail(error);
   }
 });

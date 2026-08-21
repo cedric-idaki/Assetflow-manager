@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
+import { NOK_RELATIONSHIPS, normalizeNokRelationship } from '../../../utils/nokRelationship';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const ic = (err) =>
@@ -146,7 +147,7 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
     // Next of Kin (BRS 3.1 — mandatory)
     nok_name:         editData?.nok_name         || '',
     nok_phone:        editData?.nok_phone        || '',
-    nok_relationship: editData?.nok_relationship || '',
+    nok_relationship: normalizeNokRelationship(editData?.nok_relationship) || '',
     // Company fields (BRS 3.2)
     company_name:          editData?.company_name          || '',
     company_reg_number:    editData?.company_reg_number    || '',
@@ -456,7 +457,7 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
         // Next of Kin
         nok_name:         form.nok_name.trim(),
         nok_phone:        form.nok_phone.trim(),
-        nok_relationship: form.nok_relationship,
+        nok_relationship: normalizeNokRelationship(form.nok_relationship),
         // Meta
         account_number:   accountNumber,
         client_status:    'pending',
@@ -729,11 +730,9 @@ const ClientRegistrationForm = ({ onClose, onSubmit, editData }) => {
                   <select value={form.nok_relationship} onChange={e => { set('nok_relationship', e.target.value); }}
                     className={ic(errors.nok_relationship)}>
                     <option value="">Select relationship...</option>
-                    <option value="parent">Parent</option>
-                    <option value="spouse">Spouse</option>
-                    <option value="sibling">Sibling</option>
-                    <option value="child">Child</option>
-                    <option value="other">Other</option>
+                    {NOK_RELATIONSHIPS.map(r => (
+                      <option key={r.code} value={r.code}>{r.label}</option>
+                    ))}
                   </select>
                   <FieldError msg={errors.nok_relationship} />
                 </div>

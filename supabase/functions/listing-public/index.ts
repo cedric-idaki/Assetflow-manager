@@ -21,20 +21,13 @@
 // @ts-nocheck — Deno runtime globals are not known to the app's TS config.
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { hashedIp, openRequest } from "../_shared/http.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SERVICE_ROLE =
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SERVICE_ROLE_KEY") || "";
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "*",
-  "Content-Type": "application/json",
-};
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: CORS });
+const API_VERSIONS = ["2026-08-21"];
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -190,9 +183,20 @@ async function notifyAgent(payload: {
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: CORS });
-  }
+  const api = await openRequest(req, {
+    fn: "listing-public",
+    methods: "POST, OPTIONS",
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the module-level helper, so every json(...) below emits
+  // origin-checked headers instead of the "*" this file used to send.
+  const json = api.json;
+
+  // The buyer has no account, so hashed IP is the only identity available.
+  // Salted and truncated — the same treatment hashIp() already gives view logs.
+  const visitor = `ip:${await hashedIp(req, "listing-public")}`;
 
   if (!SUPABASE_URL || !SERVICE_ROLE) {
     console.error("listing-public: service credentials not configured");
@@ -227,11 +231,35 @@ serve(async (req) => {
   }
 
   if (!link || !link.is_active || (link.expires_at && new Date(link.expires_at) < new Date())) {
+    // Answering every bad token identically stops the token space being MAPPED,
+    // but on its own it does nothing to stop it being SEARCHED. A real buyer
+    // follows a link they were sent and lands on a token that resolves; a
+    // caller producing misses over and over is guessing, so the miss path gets
+    // a tight budget of its own.
+    const probing = await api.enforceLimit({
+      action: "miss",
+      identity: visitor,
+      limit: 20,
+      windowSeconds: 300,
+    });
+    if (probing) return probing;
+
     return json({ error: "This link has expired or been withdrawn." }, 404);
   }
 
   // ── view ──────────────────────────────────────────────────────────────────
   if (action === "view") {
+    // Each view writes a row through the view-logging RPC, so a refresh loop
+    // inflates the agent's stats and grows a table. Generous enough that a
+    // buyer flicking between photos never notices.
+    const over = await api.enforceLimit({
+      action: "view",
+      identity: visitor,
+      limit: 60,
+      windowSeconds: 60,
+    });
+    if (over) return over;
+
     const { data: asset } = await admin
       .from("assets")
       .select(
@@ -305,6 +333,18 @@ serve(async (req) => {
     if ((link.enquiry_count ?? 0) >= MAX_ENQUIRIES_PER_LINK) {
       return json({ error: "This link is no longer accepting enquiries." }, 429);
     }
+
+    // MAX_ENQUIRIES_PER_LINK caps one link for all time; this caps one VISITOR
+    // across every link. Without it a single sender can still spend an agent's
+    // whole per-link allowance in seconds, and each enquiry fires an email and
+    // an SMS to that agent — so the spam lands on a real person and on our bill.
+    const over = await api.enforceLimit({
+      action: "enquire",
+      identity: visitor,
+      limit: 3,
+      windowSeconds: 300,
+    });
+    if (over) return over;
 
     const fullName = clean(body?.full_name, 120);
     const phone = clean(body?.phone, 30);

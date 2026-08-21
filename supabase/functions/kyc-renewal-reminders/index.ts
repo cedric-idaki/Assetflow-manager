@@ -2,6 +2,8 @@
 
 declare const Deno: any;
 
+import { hashedIp, openRequest } from '../_shared/http.ts';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -11,10 +13,7 @@ const TWILIO_PHONE_NUMBER = Deno.env.get('TWILIO_PHONE_NUMBER')!;
 
 const REMINDER_DAYS = [30, 14, 7];
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': '*',
-};
+const API_VERSIONS = ['2026-08-21'];
 
 const formatDate = (d: string) =>
   d ? new Date(d).toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
@@ -168,10 +167,17 @@ const sendEmail = async (to: string, clientName: string, documentType: string, e
       }),
     });
     const result = await res.json();
-    if (!res.ok) return { success: false, error: result?.message || 'Resend API error' };
+    if (!res.ok) {
+      // result.message names the sending domain and Resend's own error codes,
+      // and this string ends up in results.errors, which goes back to the
+      // caller. Log the detail; report only that the send failed.
+      console.error('kyc-renewal-reminders: Resend rejected the send', result);
+      return { success: false, error: 'email delivery failed' };
+    }
     return { success: true };
   } catch (err: any) {
-    return { success: false, error: err.message };
+    console.error('kyc-renewal-reminders: email send threw', err?.message);
+    return { success: false, error: 'email delivery failed' };
   }
 };
 
@@ -193,19 +199,47 @@ const sendSMS = async (to: string, clientName: string, documentType: string, exp
       body: formData,
     });
     const result = await res.json();
-    if (!res.ok) return { success: false, error: result?.message || 'Twilio API error' };
+    if (!res.ok) {
+      // Twilio's payload carries the account SID and internal error codes.
+      console.error('kyc-renewal-reminders: Twilio rejected the send', result);
+      return { success: false, error: 'sms delivery failed' };
+    }
     return { success: true };
   } catch (err: any) {
-    return { success: false, error: err.message };
+    console.error('kyc-renewal-reminders: sms send threw', err?.message);
+    return { success: false, error: 'sms delivery failed' };
   }
 };
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'kyc-renewal-reminders',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Keeps the existing spreads below working while the values behind them
+  // become origin-checked instead of '*'.
+  const corsHeaders = api.headers;
+
+  // NOTE: unlike the other four scheduled functions, this one has NO in-code
+  // caller check -- no isScheduler(), no authenticateCaller(). It leans entirely
+  // on verify_jwt, which _shared/auth.ts explains is not authentication: the
+  // anon key is a valid project JWT and it ships inside the public JS bundle.
+  // Every run of this function sends email and SMS, so until a caller check is
+  // added this budget is the ONLY thing standing between a stranger and a
+  // metered mail/SMS run. It is deliberately tight for that reason: the real
+  // scheduler needs a handful of calls a day, not a handful a minute.
+  const over = await api.enforceLimit({
+    action: 'run',
+    identity: `ip:${await hashedIp(req, 'kyc-renewal-reminders')}`,
+    limit: 5,
+    windowSeconds: 3600,
+  });
+  if (over) return over;
 
   const results = {
     processed: 0,
@@ -295,10 +329,7 @@ Deno.serve(async (req) => {
     });
 
   } catch (error: any) {
-    console.error('KYC reminder function error:', error);
-    return new Response(JSON.stringify({ success: false, error: error.message, ...results }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    console.error('KYC reminder function error:', { requestId: api.requestId, results });
+    return api.fail(error);
   }
 });

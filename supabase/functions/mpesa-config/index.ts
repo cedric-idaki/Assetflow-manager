@@ -10,7 +10,10 @@
 // confirms they configured the right till.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { corsHeaders, json, getDarajaToken, platformCreds } from '../_shared/mpesa.ts';
+import { getDarajaToken, platformCreds } from '../_shared/mpesa.ts';
+import { openRequest } from '../_shared/http.ts';
+
+const API_VERSIONS = ['2026-08-21'];
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
@@ -18,7 +21,15 @@ declare const Deno: {
 };
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const api = await openRequest(req, {
+    fn: 'mpesa-config',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the json() previously imported from _shared/mpesa.ts.
+  const json = api.json;
 
   try {
     const supabase = createClient(
@@ -32,6 +43,18 @@ Deno.serve(async (req) => {
     const { data: userData } = await supabase.auth.getUser(jwt);
     const user = userData?.user;
     if (!user) return json({ error: 'Not authenticated' }, 401);
+
+    // Each call reaches out to Safaricom for a Daraja token to prove the
+    // platform credentials still work. That is a slow external round trip on
+    // someone else's quota, so it must not be loopable. This backs one
+    // super-admin settings screen; 20 a minute covers any amount of refreshing.
+    const over = await api.enforceLimit({
+      action: 'check',
+      identity: `user:${user.id}`,
+      limit: 20,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     const { data: profile } = await supabase
       .from('user_profiles')
@@ -93,7 +116,6 @@ Deno.serve(async (req) => {
       credentialError,
     });
   } catch (err) {
-    console.error('mpesa-config error:', err);
-    return json({ error: (err as Error).message || 'Internal server error' }, 500);
+    return api.fail(err);
   }
 });

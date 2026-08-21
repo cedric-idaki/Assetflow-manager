@@ -6,18 +6,9 @@
 // handled manually below by checking the caller's role against CAN_CREATE.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { openRequest } from '../_shared/http.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
-
-const json = (payload: unknown, status = 200) =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
+const API_VERSIONS = ['2026-08-21'];
 
 // Which roles each caller role is allowed to create.
 // NOTE: sales agents may now create client, admin (company) AND sacco_admin
@@ -58,10 +49,17 @@ const PLAN_DEFAULTS: Record<string, { price: number; maxUsers: number | null }> 
 };
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'create-staff-user',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the old module-level helper, so every existing `json(...)` call
+  // below now emits origin-checked CORS headers and the version header without
+  // any of them changing.
+  const json = api.json;
 
   if (req.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405);
@@ -88,6 +86,19 @@ Deno.serve(async (req) => {
     if (callerErr || !caller) {
       return json({ error: 'Unauthorized: invalid or expired session' }, 401);
     }
+
+    // Account creation is expensive downstream (a GoTrue user, a profile, a
+    // subscription row) and a loop here would fill the tenant with junk logins
+    // and burn the auth provider's quota. Staffing up a company is deliberate,
+    // human-paced work, so 10 a minute is far above real use and far below
+    // what a script wants.
+    const over = await api.enforceLimit({
+      action: 'create',
+      identity: `user:${caller.id}`,
+      limit: 10,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     // ── 2. Resolve the caller's role from user_profiles ───────────────────
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
@@ -469,7 +480,6 @@ Deno.serve(async (req) => {
     }, 200);
 
   } catch (err) {
-    console.error('create-staff-user error:', err);
-    return json({ error: (err as Error).message || 'Internal server error' }, 500);
+    return api.fail(err);
   }
 });

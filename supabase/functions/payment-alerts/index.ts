@@ -2,13 +2,11 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
 
 declare const Deno: { env: { get(key: string): string | undefined } };
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const API_VERSIONS = ['2026-08-21'];
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID');
@@ -224,7 +222,16 @@ const sendSMS = async (to: string, body: string) => {
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const api = await openRequest(req, {
+    fn: 'payment-alerts',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Keeps the existing spreads below working while the values behind them
+  // become origin-checked instead of '*'.
+  const corsHeaders = api.headers;
 
   // Drives email + SMS to a caller-supplied recipient. Only reached from the
   // admin/super-admin Payment Reminders panels, so staff-only.
@@ -240,6 +247,19 @@ serve(async (req) => {
       status: denied.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  // recipient_email and recipient_phone come straight from the caller, and each
+  // accepted call sends both an email and an SMS -- so unmetered this is a spam
+  // relay that bills us per message. A person clicking "send reminder" in the
+  // Payment Reminders panel does it one client at a time; the scheduled fan-out
+  // arrives with the service-role key and is exempt.
+  const over = await api.enforceLimit({
+    action: 'alert',
+    identity: callerIdentity(auth.caller),
+    limit: 20,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     const body = await req.json();
@@ -331,9 +351,6 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err: any) {
-    console.error('payment-alerts error:', err);
-    return new Response(JSON.stringify({ success: false, error: err.message }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return api.fail(err);
   }
 });

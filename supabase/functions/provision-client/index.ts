@@ -9,16 +9,21 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { openRequest } from '../_shared/http.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const API_VERSIONS = ['2026-08-21'];
 
 serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'provision-client',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Existing call sites spread `corsHeaders`; pointing it at the per-request
+  // headers keeps them working while the values become origin-checked.
+  const corsHeaders = api.headers;
 
   try {
     const { clientId, email, fullName, phone, accountNumber } = await req.json();
@@ -56,6 +61,18 @@ serve(async (req: Request) => {
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    // Provisioning creates a login and emails an invitation to an address the
+    // caller supplies. Looped, that is both a junk-account generator and a way
+    // to send mail from our verified domain to anyone. Provisioning a client is
+    // deliberate, one-at-a-time work.
+    const over = await api.enforceLimit({
+      action: 'provision',
+      identity: `user:${callerUser.id}`,
+      limit: 10,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     // Fetch role using verified user ID
     const { data: callerProfile, error: profileErr } = await adminClient
@@ -168,10 +185,6 @@ serve(async (req: Request) => {
     );
 
   } catch (err: any) {
-    console.error('provision-client error:', err?.message);
-    return new Response(
-      JSON.stringify({ error: 'Internal server error.' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return api.fail(err);
   }
 });

@@ -28,13 +28,14 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
-  corsHeaders,
-  json,
   encryptSecret,
   decryptSecret,
   getDarajaToken,
   type DarajaCreds,
 } from '../_shared/mpesa.ts';
+import { openRequest } from '../_shared/http.ts';
+
+const API_VERSIONS = ['2026-08-21'];
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
@@ -85,7 +86,15 @@ const publicView = (row: Row | null, callbackUrl: string) => ({
 });
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const api = await openRequest(req, {
+    fn: 'mpesa-credentials',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the json() previously imported from _shared/mpesa.ts.
+  const json = api.json;
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
@@ -99,6 +108,19 @@ Deno.serve(async (req) => {
     const { data: userData } = await admin.auth.getUser(jwt);
     const user = userData?.user;
     if (!user) return json({ error: 'Not authenticated' }, 401);
+
+    // Saving credentials verifies them against Safaricom, so each call is an
+    // external round trip — and this is the one endpoint where an attacker who
+    // reached a tenant-owner session could brute-force consumer key/secret
+    // pairs against Daraja using our server as the caller. Connecting a paybill
+    // happens a handful of times in a tenant's life.
+    const over = await api.enforceLimit({
+      action: 'save',
+      identity: `user:${user.id}`,
+      limit: 10,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     const { data: profile } = await admin
       .from('user_profiles')
@@ -254,7 +276,6 @@ Deno.serve(async (req) => {
         : 'Saved, but Safaricom rejected these credentials, so collection stays off.',
     });
   } catch (err) {
-    console.error('mpesa-credentials error:', err);
-    return json({ error: (err as Error).message || 'Internal server error' }, 500);
+    return api.fail(err);
   }
 });

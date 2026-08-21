@@ -1,16 +1,15 @@
 import Stripe from 'https://esm.sh/stripe@14.21.0';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
+
+const API_VERSIONS = ['2026-08-21'];
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response>) => void;
   env: { get: (key: string) => string | undefined };
 };
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
 
 function addDays(date: Date, days: number): Date {
   const d = new Date(date);
@@ -31,9 +30,16 @@ function addInterval(date: Date, frequency: string): Date {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  const api = await openRequest(req, {
+    fn: 'process-installment-charge',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Existing call sites spread `corsHeaders`; pointing it at the per-request
+  // headers keeps them working while the values become origin-checked.
+  const corsHeaders = api.headers;
 
   // Actually charges a stored card. Staff-only, or the service role when a
   // scheduler drives the recurring run.
@@ -49,6 +55,18 @@ Deno.serve(async (req) => {
       status: denied.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  // This one takes money off a stored card. The scheduled recurring run comes
+  // in with the service-role key and is exempt; what this bounds is a STAFF
+  // session driving manual charges, where a loop is either a runaway retry or
+  // someone charging a customer repeatedly.
+  const over = await api.enforceLimit({
+    action: 'charge',
+    identity: callerIdentity(auth.caller),
+    limit: 20,
+    windowSeconds: 60,
+  });
+  if (over) return over;
 
   try {
     const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
@@ -85,8 +103,14 @@ Deno.serve(async (req) => {
 
     const { data: charges, error: fetchError } = await chargeQuery;
     if (fetchError || !charges || charges.length === 0) {
+      // fetchError.message is a Postgres error naming the table and columns.
+      if (fetchError) {
+        console.error('process-installment-charge: charge lookup failed', {
+          requestId: api.requestId, message: fetchError.message,
+        });
+      }
       return new Response(
-        JSON.stringify({ error: 'No eligible charge found', details: fetchError?.message }),
+        JSON.stringify({ error: 'No eligible charge found', requestId: api.requestId }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -321,10 +345,6 @@ Deno.serve(async (req) => {
       );
     }
   } catch (error) {
-    console.error('Process installment charge error:', error);
-    return new Response(
-      JSON.stringify({ error: error.message || 'Failed to process installment charge' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return api.fail(error);
   }
 });

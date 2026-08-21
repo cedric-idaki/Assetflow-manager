@@ -37,17 +37,9 @@ import {
   encryptSecret,
   keyConfigured,
 } from '../_shared/crypto.ts';
+import { callerIdentity, openRequest } from '../_shared/http.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
-const json = (body: unknown, status = 200): Response =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
+const API_VERSIONS = ['2026-08-21'];
 
 /**
  * Mirrors the HR page's RoleGuard. Kept as a literal rather than derived from
@@ -133,7 +125,16 @@ async function authorisedEmployees(
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const api = await openRequest(req, {
+    fn: 'employee-pii',
+    methods: 'POST, OPTIONS',
+    versions: API_VERSIONS,
+  });
+  if (api.halt) return api.halt;
+
+  // Shadows the module-level helper this file used to define, so every
+  // json(...) below emits origin-checked headers.
+  const json = api.json;
 
   try {
     if (!keyConfigured('pii')) {
@@ -153,6 +154,19 @@ Deno.serve(async (req) => {
 
     const denied = requireRole(caller, PII_ROLES);
     if (denied) return json({ error: denied.error }, denied.status);
+
+    // This is the only path to decrypted bank details, NSSF numbers and
+    // next-of-kin IDs. A `read` takes a LIST of user ids, so an authorised but
+    // curious — or compromised — HR session could walk the whole tenant a batch
+    // at a time and never trip anything. Legitimate use is an HR screen opening
+    // one employee, or one page of them.
+    const over = await api.enforceLimit({
+      action: 'access',
+      identity: callerIdentity(caller),
+      limit: 30,
+      windowSeconds: 60,
+    });
+    if (over) return over;
 
     const db: Db = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -382,10 +396,11 @@ Deno.serve(async (req) => {
 
     return json({ error: `Unknown action "${action}".` }, 400);
   } catch (err) {
+    // MissingKeyError is deliberate operator-facing text ("set PII_ENC_KEY"),
+    // not an internal detail, so it survives unchanged.
     if (err instanceof MissingKeyError) {
       return json({ error: err.message, code: 'ENC_KEY_MISSING' }, 503);
     }
-    console.error('employee-pii:', err);
-    return json({ error: err instanceof Error ? err.message : 'Unexpected error.' }, 500);
+    return api.fail(err);
   }
 });
