@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import Icon from '../AppIcon';
 import { useAuth } from '../../contexts/AuthContext';
+import { useModules } from '../../contexts/TenantModulesContext';
 import { supabase } from '../../lib/supabase';
 import { formatKEPhone } from '../../utils/phoneUtils';
 
@@ -42,6 +43,8 @@ var Sidebar = function(props) {
   var user        = authContext.user;
   var userProfile = authContext.userProfile;
   var signOut     = authContext.signOut;
+  // Which modules this tenant switched on — a frozen module leaves the rail.
+  var isModuleEnabled = useModules().isEnabled;
 
   var [pendingCount, setPendingCount] = useState(0);
 
@@ -66,7 +69,12 @@ var Sidebar = function(props) {
 
   var role = userProfile ? userProfile.role : '';
 
-  /* ── Navigation items per role ──────────────────────────────────────── */
+  /* ── Navigation items per role ──────────────────────────────────────────
+     `modules` lists the module keys an item belongs to (see
+     src/config/modules.js). An item shows while ANY of them is enabled; an
+     item with no `modules` is never gateable. Dashboards and Staff & System
+     deliberately carry none — Staff & System is where modules are switched
+     back on, so freezing your way out of it must be impossible. */
   var superAdminItems = [
     { label: 'SA Dashboard',   path: '/super-admin-dashboard',         icon: 'Crown' },
     { label: 'Finance Hub',    path: '/finance-hub',                   icon: 'Landmark' },
@@ -81,44 +89,44 @@ var Sidebar = function(props) {
 
   var adminItems = [
     { label: 'Dashboard',        path: '/admin-dashboard',               icon: 'LayoutDashboard' },
-    { label: 'Assets & Clients', path: '/asset-client-management',       icon: 'Briefcase' },
-    { label: 'POS / New Sale',   path: '/pos',                           icon: 'ShoppingCart' },
-    { label: 'E-Signature',       path: '/e-signature',                   icon: 'PenTool' },
-    { label: 'Payments',         path: '/payment-collections-hub',       icon: 'CreditCard' },
-    { label: 'KYC Management',   path: '/kyc-management-screen',         icon: 'ShieldCheck' },
-    { label: 'Reports',          path: '/reports-analytics-center',      icon: 'BarChart3' },
-    { label: 'HR Management',     path: '/hr-management',                 icon: 'Users' },
+    { label: 'Assets & Clients', path: '/asset-client-management',       icon: 'Briefcase',   modules: ['assets', 'clients'] },
+    { label: 'POS / New Sale',   path: '/pos',                           icon: 'ShoppingCart',modules: ['pos'] },
+    { label: 'E-Signature',       path: '/e-signature',                   icon: 'PenTool',     modules: ['esign'] },
+    { label: 'Payments',         path: '/payment-collections-hub',       icon: 'CreditCard',  modules: ['payments'] },
+    { label: 'KYC Management',   path: '/kyc-management-screen',         icon: 'ShieldCheck', modules: ['kyc'] },
+    { label: 'Reports',          path: '/reports-analytics-center',      icon: 'BarChart3',   modules: ['reports'] },
+    { label: 'HR Management',     path: '/hr-management',                 icon: 'Users',       modules: ['hr'] },
     { label: 'Staff & System',   path: '/system-administration',         icon: 'Settings', badge: pendingCount || null },
   ];
 
   var staffItems = [
     { label: 'Dashboard',        path: '/role-based-dashboard',    icon: 'LayoutDashboard' },
-    { label: 'Assets & Clients', path: '/asset-client-management', icon: 'Briefcase' },
-    { label: 'Payments',         path: '/payment-collections-hub', icon: 'CreditCard' },
-    { label: 'KYC Management',   path: '/kyc-management-screen',   icon: 'ShieldCheck' },
-    { label: 'Reports',          path: '/reports-analytics-center',icon: 'BarChart3' },
+    { label: 'Assets & Clients', path: '/asset-client-management', icon: 'Briefcase',   modules: ['assets', 'clients'] },
+    { label: 'Payments',         path: '/payment-collections-hub', icon: 'CreditCard',  modules: ['payments'] },
+    { label: 'KYC Management',   path: '/kyc-management-screen',   icon: 'ShieldCheck', modules: ['kyc'] },
+    { label: 'Reports',          path: '/reports-analytics-center',icon: 'BarChart3',   modules: ['reports'] },
   ];
 
   // HR role: access is limited to the HR segment only.
   var hrItems = [
-    { label: 'HR Management', path: '/hr-management', icon: 'Users' },
+    { label: 'HR Management', path: '/hr-management', icon: 'Users', modules: ['hr'] },
   ];
 
   var clientItems     = [
     { label: 'Overview',         path: '/client-portal',  icon: 'LayoutDashboard', tab: 'overview'   },
     { label: 'My Assets',        path: '/client-portal',  icon: 'Package',         tab: 'myassets'   },
-    { label: 'Browse Assets',    path: '/client-portal',  icon: 'ShoppingBag',     tab: 'browse'     },
-    { label: 'Payments',         path: '/client-portal',  icon: 'CreditCard',      tab: 'payments'   },
-    { label: 'KYC Documents',    path: '/client-portal',  icon: 'Shield',          tab: 'kyc'        },
-    { label: 'Document Centre',  path: '/client-portal',  icon: 'FolderOpen',      tab: 'documents'  },
-    { label: 'Payment Schedule', path: '/client-portal',  icon: 'Calendar',        tab: 'schedule'   },
-    { label: 'Settlement Quote', path: '/client-portal',  icon: 'Calculator',      tab: 'settlement' },
-    { label: 'My Statement',     path: '/client-portal',  icon: 'FileText',        tab: 'statement'  },
-    { label: 'Item Enquiry',     path: '/client-portal',  icon: 'Search',          tab: 'enquiry'    },
+    { label: 'Browse Assets',    path: '/client-portal',  icon: 'ShoppingBag',     tab: 'browse',     modules: ['assets'] },
+    { label: 'Payments',         path: '/client-portal',  icon: 'CreditCard',      tab: 'payments',   modules: ['payments'] },
+    { label: 'KYC Documents',    path: '/client-portal',  icon: 'Shield',          tab: 'kyc',        modules: ['kyc'] },
+    { label: 'Document Centre',  path: '/client-portal',  icon: 'FolderOpen',      tab: 'documents',  modules: ['esign', 'contracts'] },
+    { label: 'Payment Schedule', path: '/client-portal',  icon: 'Calendar',        tab: 'schedule',   modules: ['hire_purchase'] },
+    { label: 'Settlement Quote', path: '/client-portal',  icon: 'Calculator',      tab: 'settlement', modules: ['hire_purchase'] },
+    { label: 'My Statement',     path: '/client-portal',  icon: 'FileText',        tab: 'statement',  modules: ['payments'] },
+    { label: 'Item Enquiry',     path: '/client-portal',  icon: 'Search',          tab: 'enquiry',    modules: ['assets'] },
   ];
   var salesAgentItems = [
     { label: 'Sales Portal', path: '/sales-agent-portal', icon: 'TrendingUp' },
-    { label: 'POS / New Sale', path: '/pos', icon: 'ShoppingCart' },
+    { label: 'POS / New Sale', path: '/pos', icon: 'ShoppingCart', modules: ['pos'] },
   ];
 
   // Sacco / Chama admin — the dashboard page carries its own tab bar
@@ -127,12 +135,12 @@ var Sidebar = function(props) {
   // that tab bar into the sidebar as its own module.
   var saccoAdminItems = [
     { label: 'Dashboard',     path: '/sacco-dashboard', icon: 'LayoutDashboard', tab: 'overview' },
-    { label: 'Shares',        path: '/sacco-dashboard', icon: 'PieChart',        tab: 'shares'   },
+    { label: 'Shares',        path: '/sacco-dashboard', icon: 'PieChart',        tab: 'shares', modules: ['shares'] },
     // Shared back-office modules (same pages as a company admin; data stays
     // tenant-isolated). Sales agents are created under Staff & System.
-    { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool' },
-    { label: 'Finance Hub',   path: '/finance-hub',           icon: 'Landmark' },
-    { label: 'HR Management', path: '/hr-management',         icon: 'UserCog' },
+    { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool',  modules: ['esign'] },
+    { label: 'Finance Hub',   path: '/finance-hub',           icon: 'Landmark', modules: ['accounting'] },
+    { label: 'HR Management', path: '/hr-management',         icon: 'UserCog',  modules: ['hr'] },
     { label: 'Staff & System', path: '/system-administration', icon: 'Settings', badge: pendingCount || null },
   ];
 
@@ -153,6 +161,15 @@ var Sidebar = function(props) {
     (role === 'director' || role === 'accountant' || role === 'collections_officer' ||
      role === 'manager'  || role === 'finance'    || role === 'operations')
                                  ? staffItems : adminItems;
+
+  // Drop items whose modules this tenant has frozen. The super admin is the
+  // platform operator rather than a tenant, so their rail is never filtered.
+  if (role !== 'super_admin') {
+    navItems = navItems.filter(function(item) {
+      if (!item.modules || item.modules.length === 0) return true;
+      return item.modules.some(function(key) { return isModuleEnabled(key); });
+    });
+  }
 
   var isActive = function(path, tab) {
     if (!tab) return location.pathname === path;

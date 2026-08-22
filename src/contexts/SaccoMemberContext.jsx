@@ -17,6 +17,15 @@ import { useAuth } from './AuthContext';
 
 const SaccoMemberContext = createContext(null);
 
+// Module-level counter, not Date.now(): React StrictMode mounts an effect twice,
+// and both runs can land inside the same millisecond. supabase.channel(name)
+// RETURNS AN EXISTING channel for a name already in use, so the second run got
+// the first run's already-subscribed channel and .on() threw
+// "cannot add `postgres_changes` callbacks ... after `subscribe()`", which the
+// error boundary rendered as a blank "Something went wrong" page.
+// Same fix and same reasoning as useCrmOversight.
+let _saccoMemberChannelSeq = 0;
+
 export const SaccoMemberProvider = ({ children }) => {
   const { user, userProfile } = useAuth();
   const isMember = userProfile?.role === 'sacco_member';
@@ -485,12 +494,19 @@ export const SaccoMemberProvider = ({ children }) => {
     await fetchMotions();
   }, [me, fetchMotions]);
 
+  // One member, one ballot — a vote is final once confirmed. Plain INSERT (not
+  // an upsert) so a second attempt trips UNIQUE (motion_id, member_id) instead
+  // of quietly rewriting the recorded choice; RLS drops the UPDATE path too
+  // (20260822160000_sacco_vote_is_final.sql).
   const castVote = useCallback(async (motion, choice) => {
-    const { error } = await supabase.from('sacco_votes').upsert({
+    const { error } = await supabase.from('sacco_votes').insert({
       admin_id: me?.admin_id, motion_id: motion.id, member_id: me?.id,
       choice, is_secret: motion.ballot_type === 'secret',
-    }, { onConflict: 'motion_id,member_id' });
-    if (error) throw error;
+    });
+    if (error) {
+      if (error.code === '23505') throw new Error('You have already voted on this motion — votes are final.');
+      throw error;
+    }
     await fetchVotes();
   }, [me, fetchVotes]);
 
@@ -626,7 +642,7 @@ export const SaccoMemberProvider = ({ children }) => {
   // ── Realtime ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isMember) return undefined;
-    const t = Date.now();
+    const t = ++_saccoMemberChannelSeq;
     const mk = (name, table, cb) => supabase
       .channel(`sacco_member_${name}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table }, cb)

@@ -20,8 +20,29 @@ import { tierForMembers, calculateMonthlyBill } from '../config/saccoTiers';
 
 const SaccoDashboardContext = createContext(null);
 
+// Module-level counter, not Date.now(): React StrictMode mounts an effect twice,
+// and both runs can land inside the same millisecond. supabase.channel(name)
+// RETURNS AN EXISTING channel for a name already in use, so the second run got
+// the first run's already-subscribed channel and .on() threw
+// "cannot add `postgres_changes` callbacks ... after `subscribe()`", which the
+// error boundary rendered as a blank "Something went wrong" page. This provider
+// opens 17 channels per mount, so it was the most exposed caller of the bug.
+// Same fix and same reasoning as useCrmOversight.
+let _saccoDashboardChannelSeq = 0;
+
 // Sentinel buyer id meaning "the house buys" (treasury buy-back via a listing).
 export const TREASURY_BUYER = '__treasury__';
+
+// How many rows a list tab renders before it needs paging. These fetches feed
+// TABLES, not totals: every headline figure now comes from sacco_dashboard_stats()
+// which aggregates over the whole book in Postgres, so capping the lists changes
+// what is displayed, never what is counted. Without a cap the cost of opening the
+// dashboard grew with the size of the tenant's entire history — and every realtime
+// event paid that cost again.
+const LIST_CAP = 500;
+// The amortization tables run to one row per period per loan, so they need more
+// headroom than a plain list before paging becomes necessary.
+const SCHEDULE_CAP = 2000;
 
 const getAdminId = async () => {
   const { data: { user } } = await supabase.auth.getUser();
@@ -58,6 +79,7 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [electionAudit,      setElectionAudit]      = useState([]);
   const [documents,     setDocuments]     = useState([]);
   const [invoices,      setInvoices]      = useState([]);
+  const [statsRow,      setStatsRow]      = useState(null);
   const [loading,       setLoading]       = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
 
@@ -82,7 +104,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     try {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_members').select('*')
-        .eq('admin_id', adminId).order('created_at', { ascending: false });
+        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
       setMembers(data || []);
     } catch (_) {}
   }, []);
@@ -92,7 +114,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_contributions')
         .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false }).limit(LIST_CAP);
       setContributions(data || []);
     } catch (_) {}
   }, []);
@@ -132,7 +154,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_loans')
         .select(`*, ${MEMBER_JOIN}, product:sacco_loan_products(name)`)
-        .eq('admin_id', adminId).order('created_at', { ascending: false });
+        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
       setLoans(data || []);
     } catch (_) {}
   }, []);
@@ -141,7 +163,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     try {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_loan_schedule').select('*')
-        .eq('admin_id', adminId).order('period_no', { ascending: true });
+        .eq('admin_id', adminId).order('period_no', { ascending: true }).limit(SCHEDULE_CAP);
       setSchedules(data || []);
     } catch (_) {}
   }, []);
@@ -150,7 +172,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     try {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_shares')
-        .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId);
+        .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId).limit(LIST_CAP);
       setShares(data || []);
     } catch (_) {}
   }, []);
@@ -160,7 +182,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_share_listings')
         .select('*, seller:sacco_members!seller_member_id(id, full_name, member_no)')
-        .eq('admin_id', adminId).order('created_at', { ascending: false });
+        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
       setListings(data || []);
     } catch (_) {}
   }, []);
@@ -169,7 +191,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     try {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_share_transfers').select('*')
-        .eq('admin_id', adminId).order('created_at', { ascending: false });
+        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
       setTransfers(data || []);
     } catch (_) {}
   }, []);
@@ -250,7 +272,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     try {
       const adminId = await getAdminId();
       const { data } = await supabase.from('sacco_share_prices').select('*')
-        .eq('admin_id', adminId).order('effective_date', { ascending: false });
+        .eq('admin_id', adminId).order('effective_date', { ascending: false }).limit(LIST_CAP);
       setSharePrices(data || []);
     } catch (_) {}
   }, []);
@@ -339,9 +361,25 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  // The headline numbers, aggregated over the WHOLE book by Postgres in one
+  // round trip. This is what makes LIST_CAP safe: the tables below are a
+  // display window, this is the count. SECURITY INVOKER on the function means
+  // RLS supplies the tenant scope, so there is no admin_id to pass here.
+  // A null result leaves statsRow null and the stats block falls back to the
+  // old client-side reduction, which keeps a frontend deploy working if it
+  // lands before the migration does.
+  const fetchStatsRow = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.rpc('sacco_dashboard_stats');
+      if (error) throw error;
+      setStatsRow(Array.isArray(data) ? data[0] || null : data || null);
+    } catch (_) { setStatsRow(null); }
+  }, []);
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     await Promise.all([
+      fetchStatsRow(),
       fetchSacco(), fetchMembers(), fetchContributions(), fetchContributionTypes(), fetchContributionAudit(),
       fetchLoanProducts(), fetchLoans(), fetchSchedules(), fetchShares(), fetchListings(),
       fetchTransfers(), fetchTreasury(), fetchSharePrices(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
@@ -353,6 +391,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     hasLoaded.current = true;
     setLoading(false);
   }, [
+    fetchStatsRow,
     fetchSacco, fetchMembers, fetchContributions, fetchContributionTypes, fetchContributionAudit,
     fetchLoanProducts, fetchLoans, fetchSchedules, fetchShares, fetchListings,
     fetchTransfers, fetchTreasury, fetchSharePrices, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
@@ -368,8 +407,9 @@ export const SaccoDashboardProvider = ({ children }) => {
     await Promise.all([
       fetchShares(), fetchListings(), fetchTransfers(), fetchTreasury(),
       fetchShareSettings(), fetchShareTxns(), fetchCertificates(), fetchShareAudit(),
+      fetchStatsRow(),
     ]);
-  }, [fetchShares, fetchListings, fetchTransfers, fetchTreasury,
+  }, [fetchStatsRow, fetchShares, fetchListings, fetchTransfers, fetchTreasury,
       fetchShareSettings, fetchShareTxns, fetchCertificates, fetchShareAudit]);
 
   const refreshDividends = useCallback(async () => {
@@ -377,16 +417,30 @@ export const SaccoDashboardProvider = ({ children }) => {
   }, [fetchDividends, fetchDividendAllocations, fetchShares, fetchShareTxns]);
 
   // ── Derived stats ───────────────────────────────────────────────────────────
-  const activeMembers = members.filter((m) => m.status === 'active').length;
+  // Every count and sum below is computed by sacco_dashboard_stats() across the
+  // WHOLE book. The arrays are capped at LIST_CAP for display, so reducing over
+  // them would silently under-report on any sacco bigger than the cap — that is
+  // exactly the bug this pair of changes exists to avoid. The client-side
+  // reductions are kept only as the fallback path described in fetchStatsRow,
+  // for the window where this bundle has shipped but the RPC has not.
+  //
+  // Number(): the RPC returns bigint and numeric, which PostgREST serialises as
+  // strings. Left uncast they would concatenate instead of add.
+  const srv = statsRow || {};
+  const agg = (key, fallback) => (srv[key] == null ? fallback() : Number(srv[key]));
+
+  const totalMembers  = agg('total_members',  () => members.length);
+  const activeMembers = agg('active_members', () => members.filter((m) => m.status === 'active').length);
   // 'paid' is the pre-20260801 spelling of 'completed'; both count as settled.
-  const totalSavings = contributions
+  const totalSavings  = agg('total_savings',  () => contributions
     .filter((c) => ['completed', 'paid'].includes(c.status))
-    .reduce((s, c) => s + parseFloat(c.amount || 0), 0);
-  const activeLoans = loans.filter((l) => l.status === 'active').length;
-  const totalShareValue = shares.reduce(
-    (s, r) => s + (parseInt(r.shares_held, 10) || 0) * parseFloat(r.par_value || 0), 0);
+    .reduce((s, c) => s + parseFloat(c.amount || 0), 0));
+  const activeLoans     = agg('active_loans', () => loans.filter((l) => l.status === 'active').length);
+  const totalShareValue = agg('total_share_value', () => shares.reduce(
+    (s, r) => s + (parseInt(r.shares_held, 10) || 0) * parseFloat(r.par_value || 0), 0));
   // Market value the admin publishes: latest price × all shares in issue.
-  const totalSharesHeld = shares.reduce((s, r) => s + (parseInt(r.shares_held, 10) || 0), 0);
+  const totalSharesHeld = agg('total_shares_held', () => shares.reduce(
+    (s, r) => s + (parseInt(r.shares_held, 10) || 0), 0));
   const currentMarketValue = parseFloat(sharePrices[0]?.market_value || 0);
   // Capitalisation is the whole issue — member-held plus the treasury pool —
   // not just the member slice, so it does not jump when the house sells.
@@ -395,18 +449,21 @@ export const SaccoDashboardProvider = ({ children }) => {
   const marketCap = totalSharesIssued * currentMarketValue;
 
   const stats = {
-    totalMembers: members.length,
+    totalMembers,
     activeMembers,
     totalSavings,
     activeLoans,
     totalShareValue,
     tier: tierForMembers(activeMembers),
     billing: calculateMonthlyBill({ members: activeMembers, storageGb: sacco?.storage_used_gb || 0, tier: sacco?.tier }),
-    openMotions: motions.filter((m) => m.status === 'open').length,
-    activeElections: elections.filter((e) => ['nominations_open', 'voting_open'].includes(e.status)).length,
-    pendingCandidates: electionCandidates.filter((c) => c.status === 'pending').length,
+    openMotions: agg('open_motions', () => motions.filter((m) => m.status === 'open').length),
+    activeElections: agg('active_elections',
+      () => elections.filter((e) => ['nominations_open', 'voting_open'].includes(e.status)).length),
+    pendingCandidates: agg('pending_candidates',
+      () => electionCandidates.filter((c) => c.status === 'pending').length),
     // Members declaring cash/bank/card payments wait here for the treasurer.
-    pendingContributions: contributions.filter((c) => c.status === 'pending').length,
+    pendingContributions: agg('pending_contributions',
+      () => contributions.filter((c) => c.status === 'pending').length),
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -1340,17 +1397,17 @@ export const SaccoDashboardProvider = ({ children }) => {
   // ── Realtime (core tables) ────────────────────────────────────────────────────
   useEffect(() => {
     if (!userId) return undefined;
-    const t = Date.now();
+    const t = ++_saccoDashboardChannelSeq;
     const mk = (name, table, cb) => supabase
       .channel(`sacco_${name}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table }, cb)
       .subscribe();
 
     const chs = [
-      mk('members', 'sacco_members', fetchMembers),
-      mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionAudit(); }),
-      mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); }),
-      mk('shares', 'sacco_shares', fetchShares),
+      mk('members', 'sacco_members', () => { fetchMembers(); fetchStatsRow(); }),
+      mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionAudit(); fetchStatsRow(); }),
+      mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); fetchStatsRow(); }),
+      mk('shares', 'sacco_shares', () => { fetchShares(); fetchStatsRow(); }),
       mk('share_prices', 'sacco_share_prices', fetchSharePrices),
       // The order book has to move under the admin's feet as members trade.
       mk('share_listings', 'sacco_share_listings', fetchListings),
@@ -1359,11 +1416,11 @@ export const SaccoDashboardProvider = ({ children }) => {
       mk('share_certs', 'sacco_share_certificates', fetchCertificates),
       mk('dividends', 'sacco_dividend_declarations', fetchDividends),
       mk('dividend_allocs', 'sacco_dividend_allocations', fetchDividendAllocations),
-      mk('motions', 'sacco_motions', fetchMotions),
+      mk('motions', 'sacco_motions', () => { fetchMotions(); fetchStatsRow(); }),
       mk('votes', 'sacco_votes', fetchVotes),
-      mk('elections', 'sacco_elections', fetchElections),
+      mk('elections', 'sacco_elections', () => { fetchElections(); fetchStatsRow(); }),
       mk('elect_pos', 'sacco_election_positions', fetchElectionPositions),
-      mk('elect_cands', 'sacco_election_candidates', () => { fetchElectionCandidates(); fetchElectionAudit(); }),
+      mk('elect_cands', 'sacco_election_candidates', () => { fetchElectionCandidates(); fetchElectionAudit(); fetchStatsRow(); }),
       mk('elect_voters', 'sacco_election_voters', fetchElectionVoters),  // live turnout
     ];
     channelsRef.current = chs;

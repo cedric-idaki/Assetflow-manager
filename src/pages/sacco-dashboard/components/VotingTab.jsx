@@ -27,6 +27,7 @@ const VotingTab = ({ ctx }) => {
   const [voter, setVoter] = useState('');
 
   const memberName = (id) => members.find((m) => m.id === id)?.full_name || '—';
+  const hasVoted = (motionId, memberId) => votes.some((v) => v.motion_id === motionId && v.member_id === memberId);
   const tally = (motionId) => {
     const mv = votes.filter((v) => v.motion_id === motionId);
     return {
@@ -81,6 +82,7 @@ const VotingTab = ({ ctx }) => {
   };
   const submitVote = async (choice) => {
     if (!voter) { toast.error('Choose the voting member.'); return; }
+    if (hasVoted(voteMotion.id, voter)) { toast.error('That member has already voted — votes are final.'); return; }
     setSaving(true);
     try { await castVote(voteMotion, voter, choice); toast.success('Vote recorded.'); setVoter(''); }
     catch (e) { toast.error(e.message || 'Could not vote.'); } finally { setSaving(false); }
@@ -176,7 +178,11 @@ const VotingTab = ({ ctx }) => {
             <Field label="Voting member *">
               <Select value={voter} onChange={(e) => setVoter(e.target.value)}>
                 <option value="">Select member</option>
-                {members.filter((m) => m.status === 'active').map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}
+                {members.filter((m) => m.status === 'active').map((m) => (
+                  <option key={m.id} value={m.id} disabled={hasVoted(voteMotion.id, m.id)}>
+                    {m.full_name}{hasVoted(voteMotion.id, m.id) ? ' · already voted' : ''}
+                  </option>
+                ))}
               </Select>
             </Field>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
@@ -185,6 +191,9 @@ const VotingTab = ({ ctx }) => {
               <button onClick={() => submitVote('abstain')} disabled={saving} className="py-2 rounded-lg text-sm font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-60">Abstain</button>
             </div>
             <p className="text-xs text-muted-foreground mt-3">
+              A member votes once and the ballot is final — members who have already voted cannot be selected here.
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
               {voteMotion.ballot_type === 'secret'
                 ? 'Secret ballot — individual choices are never displayed, only totals.'
                 : 'Visible ballot — the breakdown is shown to members after the vote closes.'}

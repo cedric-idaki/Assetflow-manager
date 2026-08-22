@@ -8,6 +8,7 @@ import { formatKEPhone } from '../../utils/phoneUtils';
 import { COMPANY_PLANS as PLANS, planForUsers, INSTALLATION_FEE } from '../../config/companyPlans';
 import { tierForMembers, SACCO_TIERS, INSTALLATION_FEE as SACCO_INSTALLATION_FEE } from '../../config/saccoTiers';
 import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../config/kenyaCounties';
+import { PRESETS, PRESET_LABELS, modulesForScope, dependenciesOf } from '../../config/modules';
 import { getPasswordError } from '../../utils/validation';
 import { sendAdminRegistrationConfirmation } from '../../services/emailService';
 
@@ -173,6 +174,61 @@ const AdminRegistration = () => {
     }
   };
 
+  // ── Modules the new tenant wants ──────────────────────────────────────────
+  // This is what replaces guessing from `business_type` — a field most
+  // registrants filled in as "Other", which nothing downstream ever read. The
+  // preset pre-ticks a sensible set; anything not ticked is still provisioned,
+  // just frozen, so it can be switched on later from Staff & System → Modules
+  // without anyone having to be asked. See src/config/modules.js.
+  const [modulePreset, setModulePreset] = useState(
+    location.state?.orgType === 'sacco' ? 'sacco' : 'company'
+  );
+  const [selectedModules, setSelectedModules] = useState(
+    PRESETS[location.state?.orgType === 'sacco' ? 'sacco' : 'company']
+  );
+
+  // 'custom' is the answer to "none of these describe us": show the whole
+  // catalogue and let them build their own portal.
+  const visibleModules = modulePreset === 'custom'
+    ? modulesForScope('custom')
+    : modulesForScope(isSacco ? 'sacco' : 'company');
+
+  const coreModuleKeys = visibleModules.filter(m => m.core).map(m => m.key);
+  const withCore = (keys) => Array.from(new Set([...keys, ...coreModuleKeys]));
+
+  const presetOptions = isSacco ? ['sacco', 'chama', 'custom'] : ['company', 'custom'];
+
+  const applyPreset = (preset) => {
+    setModulePreset(preset);
+    setSelectedModules(Array.from(new Set([
+      ...(PRESETS[preset] || []),
+      // A preset switch changes which modules are visible, so re-derive core
+      // from the preset rather than from the list we are leaving.
+      ...(preset === 'custom' ? modulesForScope('custom') : modulesForScope(isSacco ? 'sacco' : 'company'))
+        .filter(m => m.core).map(m => m.key),
+    ])));
+  };
+
+  // Ticking a module ticks what it needs; unticking one unticks whatever needed
+  // it. The same rules are enforced in set_tenant_module() server-side, so a
+  // registrant can never land on a combination the portal cannot run.
+  //
+  // Deliberately does NOT change modulePreset: the preset chooses which modules
+  // are on OFFER, and swapping that list out from under someone mid-edit both
+  // moves the rows they are clicking and drops in core modules they never saw.
+  const toggleModule = (key) => {
+    if (coreModuleKeys.includes(key)) return; // core: always on
+    setSelectedModules(prev => {
+      if (prev.includes(key)) {
+        const dependents = visibleModules
+          .filter(m => m.requires.includes(key))
+          .map(m => m.key);
+        return withCore(prev.filter(k => k !== key && !dependents.includes(k)));
+      }
+      return withCore([...prev, key, ...dependenciesOf(key)]);
+    });
+  };
+
   // ── Validate each step ──────────────────────────────────────────────────────
   const validateStep = () => {
     setError('');
@@ -198,6 +254,7 @@ const AdminRegistration = () => {
       if (!company.city) return setError('Please select your county.') || false;
       if (!company.location) return setError('Please select your location.') || false;
       if (!isSacco && company.assetTypes.length === 0) return setError('Select at least one asset type.') || false;
+      if (selectedModules.length === 0) return setError('Select at least one module for your portal.') || false;
     }
     if (currentStep === 2) {
       if (!userCount || userCount < 1) return setError(isSacco
@@ -282,6 +339,28 @@ const AdminRegistration = () => {
           city: company.city,
           kyc_status: 'pending',
         });
+      }
+
+      // 3b. Module entitlements — one row per module in the catalogue: the ones
+      //     picked as `enabled`, the rest frozen with reason 'not_selected'.
+      //     Seeding everything (not just the picks) is what makes switching a
+      //     module on later a status flip rather than a provisioning job.
+      //
+      //     Best-effort: a registration must not fail because the switchboard
+      //     did not seed. module_enabled() treats a tenant with no rows as
+      //     having everything on, so the fallback is the pre-modules portal —
+      //     more than they picked, never less.
+      try {
+        const { error: modulesError } = await supabase.rpc('seed_tenant_modules', {
+          p_enabled: withCore(
+            selectedModules.flatMap(k => [k, ...dependenciesOf(k)])
+          ),
+        });
+        if (modulesError) {
+          console.error('seed_tenant_modules failed during registration:', modulesError);
+        }
+      } catch (modulesErr) {
+        console.error('seed_tenant_modules threw during registration:', modulesErr?.message);
       }
 
       // 4. Create pending subscription
@@ -510,7 +589,15 @@ const AdminRegistration = () => {
                       <button
                         key={opt.id}
                         type="button"
-                        onClick={() => setCo('organizationType', opt.id)}
+                        onClick={() => {
+                          setCo('organizationType', opt.id);
+                          // Switching company ↔ sacco changes which modules are
+                          // even on offer, so re-derive the tick list from that
+                          // type's preset rather than carrying the old one over.
+                          const preset = opt.id === 'sacco' ? 'sacco' : 'company';
+                          setModulePreset(preset);
+                          setSelectedModules(PRESETS[preset]);
+                        }}
                         className="flex items-center justify-center gap-2 px-3 py-3 rounded-lg text-sm border transition-all"
                         style={{
                           background: active ? 'rgba(52,193,221,0.1)' : C.inputBg,
@@ -821,6 +908,90 @@ const AdminRegistration = () => {
                   )}
                 </div>
               )}
+
+              {/* ── Modules ──────────────────────────────────────────────────
+                  Everything not ticked here is still created for this account,
+                  just switched off. That is what makes it a one-click decision
+                  to reverse later instead of a support ticket. */}
+              <div className="pt-4 border-t" style={{ borderColor: C.border }}>
+                <label className="block text-xs font-semibold mb-2" style={{ color: C.navy }}>
+                  What do you want in your portal? *
+                </label>
+
+                <p className="text-xs mb-2" style={{ color: C.textMuted }}>
+                  Start from a ready-made set, then tick or untick anything.
+                </p>
+
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {presetOptions.map(preset => {
+                    const active = modulePreset === preset;
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => applyPreset(preset)}
+                        className="px-3 py-1.5 rounded-full text-xs border transition-all"
+                        style={{
+                          background: active ? 'rgba(52,193,221,0.1)' : C.inputBg,
+                          border: `1px solid ${active ? C.primary : C.border}`,
+                          color: active ? C.accentDeep : C.text,
+                          fontWeight: active ? '600' : '400',
+                        }}
+                      >
+                        {PRESET_LABELS[preset]}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {visibleModules.map(mod => {
+                    const on = selectedModules.includes(mod.key);
+                    const locked = mod.core;
+                    return (
+                      <button
+                        key={mod.key}
+                        type="button"
+                        onClick={() => toggleModule(mod.key)}
+                        disabled={locked}
+                        title={locked ? 'Always included' : mod.desc}
+                        className="flex items-start gap-2 px-3 py-2 rounded-lg text-sm border transition-all text-left"
+                        style={{
+                          background: on ? 'rgba(52,193,221,0.1)' : C.inputBg,
+                          border: `1px solid ${on ? C.primary : C.border}`,
+                          color: on ? C.primary : C.text,
+                          fontWeight: on ? '500' : '400',
+                          cursor: locked ? 'default' : 'pointer',
+                          opacity: locked ? 0.85 : 1,
+                        }}
+                      >
+                        <div
+                          className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0 mt-0.5"
+                          style={{
+                            background: on ? C.primary : 'transparent',
+                            border: on ? 'none' : `1px solid ${C.border}`,
+                          }}
+                        >
+                          {on && <Icon name="Check" size={10} color="white" />}
+                        </div>
+                        <span className="flex-1 min-w-0">
+                          <span className="block">{mod.label}{locked ? ' (always on)' : ''}</span>
+                          <span className="block text-xs mt-0.5" style={{ color: C.textMuted, fontWeight: 400 }}>
+                            {mod.desc}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <p className="text-xs mt-2" style={{ color: C.textMuted }}>
+                  Not sure yet? Leave it unticked. Every module you skip is still set
+                  up on your account and switched off — you can turn it on any time
+                  from Staff &amp; System → Modules, and turn it back off again just
+                  as easily. Nothing you enter is ever lost when a module is off.
+                </p>
+              </div>
             </div>
           )}
 
