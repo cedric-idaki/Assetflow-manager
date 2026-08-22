@@ -321,3 +321,74 @@
     color: #34c1dd;
   }
 }
+
+/* ── iOS zoom guard ─────────────────────────────────────────────────────
+   Mobile Safari zooms the whole page in whenever a text field under 16px
+   takes focus, and it does not zoom back out afterwards. Our fields run at
+   14px (`text-sm`) and the landing page subscribe box at 15px, so every tap
+   on an input from an iPhone or iPad left the layout stranded mid-zoom.
+
+   16px is the platform threshold, not a design preference — anything below
+   it triggers the zoom. `!important` is deliberate: the rule has to win over
+   `text-sm`/`text-xs` wherever they are hardcoded across the ~380 raw inputs
+   in the app, and over `.arr .sub-field input` on the landing page. Scoped
+   to below the desktop breakpoint or to touch pointers, so the mouse-driven
+   desktop layout keeps its 14px density. Checkboxes and radios are excluded
+   — they take no text entry, so they never trigger the zoom, and leaving
+   them alone avoids disturbing any em-based sizing.                       */
+@media (max-width: 1023px), (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* ── Touch targets ──────────────────────────────────────────────────────
+   Apple HIG asks for 44px, Material for 48dp; our controls were landing at
+   28–42px (Button `xs` is 28, `sm` 32, the default `md` 36, `icon` 36x36),
+   which is fiddly on a phone and the usual cause of mis-taps on destructive
+   row actions.
+
+   `min-height`/`min-width` rather than `height`/`width` on purpose: they only
+   ever grow a control, never shrink one, so anything already large enough
+   does not move. Being separate properties they also clamp Tailwind's
+   `h-9`/`w-9` during box sizing, so no `!important` is needed to win.
+
+   The `:where()` wrappers keep the whole selector at element specificity
+   (0,0,1) even though they contain `:not()`. That is deliberate: any explicit
+   Tailwind sizing class outranks it, so `min-w-0` (the flex-truncation idiom,
+   ~134 uses) and the `min-w-[18px]` count badges keep their intent rather
+   than being forced out to 44px. Without `:where()` the `:not()` would push
+   this to (0,2,1) and silently override all of them.
+
+   Two exclusions:
+     .h-auto — what the Button `link` variant carries. Those are inline text
+       links meant to sit in the flow of a sentence, not 44px blocks.
+     :empty  — a button with no child nodes at all is a decorative indicator,
+       not something you aim at; the login carousel's 20x4 dots are the case
+       in point, and stretching them to 44x44 turns six slim bars into six
+       cyan blocks. Icon buttons hold an <svg> child, so they are not :empty
+       and are still covered.                                                */
+@media (max-width: 1023px), (pointer: coarse) {
+  button:where(:not(.h-auto)):where(:not(:empty)),
+  [role='button']:where(:not(.h-auto)):where(:not(:empty)),
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  button:where(:not(.h-auto)):where(:not(:empty)),
+  [role='button']:where(:not(.h-auto)):where(:not(:empty)) {
+    min-width: 44px;
+  }
+
+  /* A checkbox or radio keeps its natural 16px — blowing the box itself up to
+     44px just looks broken. They sit inside a clickable <label>, so grow the
+     label and the whole row becomes the tap target instead.                  */
+  label:has(> input[type='checkbox']),
+  label:has(> input[type='radio']) {
+    min-height: 44px;
+  }
+}

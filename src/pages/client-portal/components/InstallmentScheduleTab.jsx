@@ -87,7 +87,7 @@ const ScheduleModal = ({ plan, onClose }) => {
         </div>
 
         {/* Summary strip */}
-        <div className="grid grid-cols-3 gap-4 px-6 py-4 border-b border-border bg-muted/20">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 px-6 py-4 border-b border-border bg-muted/20">
           <div>
             <p className="text-xs text-muted-foreground">Total Amount</p>
             <p className="text-2xl font-bold text-foreground">{fmt(totalOwed)}</p>
@@ -114,7 +114,7 @@ const ScheduleModal = ({ plan, onClose }) => {
         </div>
 
         {/* Schedule table */}
-        <div className="overflow-y-auto flex-1">
+        <div className="overflow-auto flex-1">
           <table className="w-full">
             <thead className="sticky top-0 bg-muted/40">
               <tr>

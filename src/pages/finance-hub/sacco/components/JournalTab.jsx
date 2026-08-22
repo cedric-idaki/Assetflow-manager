@@ -206,51 +206,53 @@ const ManualModal = ({ open, onClose, fin, members, onDone }) => {
         </Field>
 
         <div className="border border-border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr className="text-left text-xs text-muted-foreground">
-                <th className="py-2 px-3 font-medium">Account</th>
-                <th className="py-2 px-3 font-medium w-32 text-right">Debit</th>
-                <th className="py-2 px-3 font-medium w-32 text-right">Credit</th>
-                <th className="w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l, i) => (
-                <tr key={i} className="border-t border-border">
-                  <td className="p-2">
-                    <Select value={l.account_code} onChange={(e) => setLine(i, { account_code: e.target.value })}>
-                      <option value="">Choose account…</option>
-                      {active.map((a) => <option key={a.id} value={a.account_code}>{a.account_code} — {a.account_name}</option>)}
-                    </Select>
-                  </td>
-                  <td className="p-2">
-                    <NumberInput step="0.01" value={l.debit}
-                      onChange={(e) => setLine(i, { debit: e.target.value, credit: e.target.value ? '' : l.credit })} />
-                  </td>
-                  <td className="p-2">
-                    <NumberInput step="0.01" value={l.credit}
-                      onChange={(e) => setLine(i, { credit: e.target.value, debit: e.target.value ? '' : l.debit })} />
-                  </td>
-                  <td className="p-2 text-center">
-                    {lines.length > 2 && (
-                      <button onClick={() => setLines((ls) => ls.filter((_, ix) => ix !== i))} className="text-muted-foreground hover:text-red-600">
-                        <Icon name="X" size={14} color="currentColor" />
-                      </button>
-                    )}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr className="text-left text-xs text-muted-foreground">
+                  <th className="py-2 px-3 font-medium">Account</th>
+                  <th className="py-2 px-3 font-medium w-32 text-right">Debit</th>
+                  <th className="py-2 px-3 font-medium w-32 text-right">Credit</th>
+                  <th className="w-10" />
                 </tr>
-              ))}
-            </tbody>
-            <tfoot className="bg-muted/50">
-              <tr className="border-t border-border text-sm font-semibold">
-                <td className="py-2 px-3 text-muted-foreground">Totals</td>
-                <td className="py-2 px-3 text-right font-mono">{fmtPlain(totalDr)}</td>
-                <td className="py-2 px-3 text-right font-mono">{fmtPlain(totalCr)}</td>
-                <td />
-              </tr>
-            </tfoot>
-          </table>
+              </thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={i} className="border-t border-border">
+                    <td className="p-2">
+                      <Select value={l.account_code} onChange={(e) => setLine(i, { account_code: e.target.value })}>
+                        <option value="">Choose account…</option>
+                        {active.map((a) => <option key={a.id} value={a.account_code}>{a.account_code} — {a.account_name}</option>)}
+                      </Select>
+                    </td>
+                    <td className="p-2">
+                      <NumberInput step="0.01" value={l.debit}
+                        onChange={(e) => setLine(i, { debit: e.target.value, credit: e.target.value ? '' : l.credit })} />
+                    </td>
+                    <td className="p-2">
+                      <NumberInput step="0.01" value={l.credit}
+                        onChange={(e) => setLine(i, { credit: e.target.value, debit: e.target.value ? '' : l.debit })} />
+                    </td>
+                    <td className="p-2 text-center">
+                      {lines.length > 2 && (
+                        <button onClick={() => setLines((ls) => ls.filter((_, ix) => ix !== i))} className="text-muted-foreground hover:text-red-600">
+                          <Icon name="X" size={14} color="currentColor" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-muted/50">
+                <tr className="border-t border-border text-sm font-semibold">
+                  <td className="py-2 px-3 text-muted-foreground">Totals</td>
+                  <td className="py-2 px-3 text-right font-mono">{fmtPlain(totalDr)}</td>
+                  <td className="py-2 px-3 text-right font-mono">{fmtPlain(totalCr)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
 
         <div className="flex items-center justify-between">
@@ -489,7 +491,7 @@ const JournalTab = ({ fin, ops, onLedgerChange }) => {
                   </button>
 
                   {open && (
-                    <div className="px-3 pb-3">
+                    <div className="px-3 pb-3 overflow-x-auto">
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="text-left text-muted-foreground border-y border-border">

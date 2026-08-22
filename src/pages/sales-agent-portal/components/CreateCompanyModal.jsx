@@ -634,7 +634,7 @@ const CreateCompanyModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucc
 
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-2">Subscription Plan *</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {PLANS.map(plan => {
                     const active = form.plan === plan.id;
                     return (

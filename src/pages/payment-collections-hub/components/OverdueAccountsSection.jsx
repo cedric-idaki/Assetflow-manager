@@ -147,7 +147,7 @@ const OverdueAccountsSection = () => {
       )}
 
       {/* Summary Buckets */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
         {[
           { label: '1–30 Days', cat: '30', bg: 'bg-yellow-50 border-yellow-200', text: 'text-yellow-700' },
           { label: '31–60 Days', cat: '60', bg: 'bg-orange-50 border-orange-200', text: 'text-orange-700' },

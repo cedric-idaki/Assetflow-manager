@@ -87,7 +87,7 @@ const CollectModal = ({ cycle, onClose, fin, members, statement, onDone }) => {
     <Modal open={!!cycle} onClose={onClose} title={`Collect — ${cycle.label || `Cycle ${cycle.cycle_no}`}`} wide
       footer={<GhostButton onClick={onClose}>Done</GhostButton>}>
       <div className="space-y-3">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[['Expected', row?.expected], ['Collected', row?.collected], ['Outstanding', row?.outstanding]].map(([l, v]) => (
             <div key={l} className="p-3 rounded-lg border border-border">
               <p className="text-xs text-muted-foreground">{l}</p>
