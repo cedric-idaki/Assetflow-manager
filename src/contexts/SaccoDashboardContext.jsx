@@ -33,13 +33,24 @@ let _saccoDashboardChannelSeq = 0;
 // Sentinel buyer id meaning "the house buys" (treasury buy-back via a listing).
 export const TREASURY_BUYER = '__treasury__';
 
-// How many rows a list tab renders before it needs paging. These fetches feed
+// How many rows a LEDGER list holds before it needs paging. These fetches feed
 // TABLES, not totals: every headline figure now comes from sacco_dashboard_stats()
 // which aggregates over the whole book in Postgres, so capping the lists changes
 // what is displayed, never what is counted. Without a cap the cost of opening the
 // dashboard grew with the size of the tenant's entire history — and every realtime
 // event paid that cost again.
+//
+// This cap must NEVER be applied to a table the rest of the app treats as a
+// lookup. See fetchMembers for what that costs.
 const LIST_CAP = 500;
+
+/**
+ * Ceiling on the member roster — a backstop against a pathological tenant, not
+ * a page size. It is deliberately far above any real sacco so that hitting it
+ * is a signal rather than a routine truncation, and `membersTruncated` says so
+ * out loud instead of quietly dropping members the way LIST_CAP used to.
+ */
+export const ROSTER_CEILING = 10000;
 // The amortization tables run to one row per period per loan, so they need more
 // headroom than a plain list before paging becomes necessary.
 const SCHEDULE_CAP = 2000;
@@ -52,6 +63,9 @@ const getAdminId = async () => {
 export const SaccoDashboardProvider = ({ children }) => {
   const [sacco,         setSacco]         = useState(null);
   const [members,       setMembers]       = useState([]);
+  // True only if a tenant somehow exceeds ROSTER_CEILING, so the UI can say so
+  // rather than silently showing a partial roster.
+  const [membersTruncated, setMembersTruncated] = useState(false);
   const [contributions, setContributions] = useState([]);
   const [contributionTypes, setContributionTypes] = useState([]);
   const [contributionAudit, setContributionAudit] = useState([]);
@@ -100,12 +114,34 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) { setConnectionStatus('disconnected'); }
   }, []);
 
+  /**
+   * The member roster, in full.
+   *
+   * This list is NOT just the Members tab's table. Twenty-odd places treat it
+   * as the tenant's lookup table — every shares panel resolves a member_id to
+   * a name out of it, every "pick a member" dropdown is built from it, and
+   * notifyElection/notifyMotion iterate it to decide who gets emailed.
+   *
+   * It used to be capped at LIST_CAP, newest first, which broke all three
+   * quietly. Past 500 members the oldest members vanished from dropdowns,
+   * resolved to "—" in the shares tables, and — worst — were skipped by the
+   * election and motion notifications, so the longest-standing members were
+   * precisely the ones never told a vote had opened.
+   *
+   * Members are bounded by the size of the tenant, not by its history, so
+   * fetching the whole roster is proportionate: it is the smallest of the
+   * sacco tables and the one everything else joins to. The ledger tables
+   * below are the ones that grow without limit, and those stay capped.
+   */
   const fetchMembers = useCallback(async () => {
     try {
       const adminId = await getAdminId();
-      const { data } = await supabase.from('sacco_members').select('*')
-        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
+      const { data, count } = await supabase.from('sacco_members')
+        .select('*', { count: 'exact' })
+        .eq('admin_id', adminId).order('created_at', { ascending: false })
+        .limit(ROSTER_CEILING);
       setMembers(data || []);
+      setMembersTruncated((count || 0) > ROSTER_CEILING);
     } catch (_) {}
   }, []);
 
@@ -1361,6 +1397,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     hasLoaded.current = false;
     setSacco(null);
     setMembers([]);
+    setMembersTruncated(false);
     setContributions([]);
     setContributionTypes([]);
     setContributionAudit([]);
@@ -1431,7 +1468,7 @@ export const SaccoDashboardProvider = ({ children }) => {
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
-    sacco, members, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,
+    sacco, members, membersTruncated, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,
     shares, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
     currentMarketValue, marketCap, totalSharesHeld, totalSharesIssued, treasuryShares,
     shareSettings, shareTxns, certificates, dividends, dividendAllocations, shareAudit,

@@ -1,9 +1,15 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useToast } from '../../../components/Toast';
 import { useAuth } from '../../../contexts/AuthContext';
 import { supabase } from '../../../lib/supabase';
 import Icon from '../../../components/AppIcon';
 import { Card, Table, Badge, PrimaryButton, GhostButton, Modal, Field, TextInput, NumberInput, Select, EmptyState, KES, fmtDate } from './_shared';
+import Pagination from '../../../components/ui/Pagination';
+import { useClientPager } from '../../../hooks/useClientPager';
+import { ROSTER_CEILING } from '../../../contexts/SaccoDashboardContext';
+
+/** Rows per page in the members table. */
+const PAGE_SIZE = 25;
 
 const MEMBER_ROLES = ['member', 'treasurer', 'chairman', 'secretary', 'auditor'];
 const STATUSES = ['active', 'inactive', 'suspended'];
@@ -29,7 +35,7 @@ const generatePassword = () => {
 };
 
 const MembersTab = ({ ctx }) => {
-  const { members, addMember, updateMember, exportCSV, refreshMembers, sacco } = ctx;
+  const { members, membersTruncated, addMember, updateMember, exportCSV, refreshMembers, sacco } = ctx;
   const { user } = useAuth();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -257,13 +263,24 @@ const MembersTab = ({ ctx }) => {
     }
   };
 
-  const filtered = members.filter((m) =>
-    !q || (m.full_name || '').toLowerCase().includes(q.toLowerCase()) || (m.member_no || '').toLowerCase().includes(q.toLowerCase()));
+  // Searches the WHOLE roster, not a page of it: `members` is the full list,
+  // so a match on page 40 is found from an empty search box.
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return members;
+    return members.filter((m) =>
+      (m.full_name || '').toLowerCase().includes(needle) ||
+      (m.member_no || '').toLowerCase().includes(needle));
+  }, [members, q]);
+
+  // The search term is the reset key: a new search starts at page one, while a
+  // member being added or removed leaves the user where they were.
+  const pager = useClientPager(filtered, PAGE_SIZE, q.trim().toLowerCase());
 
   return (
     <Card
       title="Members"
-      subtitle={`${members.length} registered · ${members.filter((m) => m.status === 'active').length} active`}
+      subtitle={`${members.length.toLocaleString('en-KE')} registered · ${members.filter((m) => m.status === 'active').length.toLocaleString('en-KE')} active`}
       actions={
         <div className="flex items-center gap-2">
           <GhostButton icon="Download" onClick={() => exportCSV(members, 'sacco_members')}>Export</GhostButton>
@@ -276,11 +293,29 @@ const MembersTab = ({ ctx }) => {
         className="w-full sm:w-72 mb-4 px-3 py-2 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:border-primary"
       />
 
+      {membersTruncated && (
+        <div className="mb-4 flex items-start gap-2 p-3 rounded-lg border border-warning/30 bg-warning/10">
+          <Icon name="AlertTriangle" size={15} color="#ca8a04" className="mt-0.5 shrink-0" />
+          <p className="text-xs text-foreground">
+            This roster is unusually large and only the most recent {ROSTER_CEILING.toLocaleString('en-KE')} members
+            are loaded. Contact support so the members tab can be moved to server-side paging for your sacco.
+          </p>
+        </div>
+      )}
+
       {filtered.length === 0 ? (
-        <EmptyState icon="Users" title="No members yet" hint="Add your first member to start tracking contributions, loans and shares." />
+        // Two different situations that used to share one misleading message:
+        // a sacco with no members at all, and a search that matched nothing.
+        // Telling a treasurer with 800 members "No members yet" reads as data loss.
+        q.trim() ? (
+          <EmptyState icon="SearchX" title="No members match that search" hint={`Nothing found for “${q.trim()}”. Check the spelling, or clear the search to see all ${members.length.toLocaleString('en-KE')} members.`} />
+        ) : (
+          <EmptyState icon="Users" title="No members yet" hint="Add your first member to start tracking contributions, loans and shares." />
+        )
       ) : (
+        <>
         <Table columns={['Member', 'Role', 'Phone', 'Monthly', 'Status', 'KYC', 'Portal', 'Joined', '']}>
-          {filtered.map((m) => (
+          {pager.rows.map((m) => (
             <tr key={m.id} className="border-b border-border/60">
               <td className="py-2.5 pr-4">
                 <p className="font-medium text-foreground">{m.full_name}</p>
@@ -319,6 +354,16 @@ const MembersTab = ({ ctx }) => {
             </tr>
           ))}
         </Table>
+        <Pagination
+          page={pager.page}
+          pageCount={pager.pageCount}
+          from={pager.from}
+          to={pager.to}
+          total={pager.total}
+          onPageChange={pager.setPage}
+          noun={q.trim() ? 'matching members' : 'members'}
+        />
+        </>
       )}
 
       <Modal
