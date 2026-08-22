@@ -5,6 +5,10 @@ import ScrollToTop from "components/ScrollToTop";
 import ErrorBoundary from "components/ErrorBoundary";
 import ProtectedRoute from "components/ProtectedRoute";
 import RoleGuard from "components/RoleGuard";
+// Module entitlements. RoleGuard answers "is this person allowed here";
+// ModuleGuard answers "did this organisation switch this module on". See
+// src/config/modules.js for the catalogue and which routes each module owns.
+import ModuleGuard from "components/ModuleGuard";
 import NotFound from "pages/NotFound";
 import LoginPage from "./pages/login";
 import LandingPage from "./pages/landing";
@@ -180,38 +184,49 @@ const Routes = () => {
           } />
 
           {/* ── Admin + staff operational pages ───────────────────────── */}
+          {/* Serves two modules — it still opens if only one of them is on. */}
           <Route path="/asset-client-management" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={STAFF_ROLES}>
-                <AssetClientManagement />
+                <ModuleGuard anyOf={['assets', 'clients']}>
+                  <AssetClientManagement />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
           <Route path="/payment-collections-hub" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={STAFF_ROLES}>
-                <PaymentCollectionsHub />
+                <ModuleGuard module="payments">
+                  <PaymentCollectionsHub />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
           <Route path="/payment-confirmation-screen" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={STAFF_ROLES}>
-                <PaymentConfirmationScreen />
+                <ModuleGuard module="payments">
+                  <PaymentConfirmationScreen />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
           <Route path="/kyc-management-screen" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={STAFF_ROLES}>
-                <KYCManagementScreen />
+                <ModuleGuard module="kyc">
+                  <KYCManagementScreen />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
           <Route path="/kyc-renewal-management-screen" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={KYC_RENEWAL_ROLES}>
-                <KYCRenewalManagementScreen />
+                <ModuleGuard module="kyc">
+                  <KYCRenewalManagementScreen />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
@@ -220,7 +235,9 @@ const Routes = () => {
           <Route path="/reports-analytics-center" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={[...ADMIN_ROLES, 'super_admin']}>
-                <ReportsAnalyticsCenter />
+                <ModuleGuard module="reports">
+                  <ReportsAnalyticsCenter />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
@@ -238,7 +255,9 @@ const Routes = () => {
           <Route path="/pos" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={['super_admin', 'admin', 'manager', 'sales_agent', 'sales', 'director', 'operations']}>
-                <POSModule />
+                <ModuleGuard module="pos">
+                  <POSModule />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
@@ -247,7 +266,9 @@ const Routes = () => {
           <Route path="/e-signature" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={ALL_INTERNAL}>
-                <ESignaturePage />
+                <ModuleGuard module="esign">
+                  <ESignaturePage />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
@@ -256,7 +277,9 @@ const Routes = () => {
           <Route path="/finance-hub" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={FINANCE_ROLES}>
-                <FinanceHub />
+                <ModuleGuard module="accounting">
+                  <FinanceHub />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />
@@ -265,7 +288,9 @@ const Routes = () => {
           <Route path="/hr-management" element={
             <ProtectedRoute>
               <RoleGuard allowedRoles={['hr', 'admin', 'super_admin', 'sacco_admin']}>
-                <HRPage />
+                <ModuleGuard module="hr">
+                  <HRPage />
+                </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>
           } />

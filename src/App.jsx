@@ -13,6 +13,7 @@ import { CollectionsDashboardProvider } from './contexts/CollectionsDashboardCon
 import { StaffDashboardProvider } from './contexts/StaffDashboardContext';
 import { SaccoDashboardProvider } from './contexts/SaccoDashboardContext';
 import { SaccoMemberProvider } from './contexts/SaccoMemberContext';
+import { TenantModulesProvider } from './contexts/TenantModulesContext';
 
 function App() {
   return (
@@ -22,7 +23,12 @@ function App() {
           All data providers live here — above the router — so they mount once
           and never unmount on navigation. This keeps fetched data, open modals,
           and realtime subscriptions alive when the user switches pages or tabs.
+
+          TenantModulesProvider sits outermost of them: the sidebar, ModuleGuard
+          and the Modules tab all ask it which modules this tenant switched on,
+          so it has to be resolved before anything renders navigation.
         */}
+        <TenantModulesProvider>
         <AdminDashboardProvider>
           <SalesAgentProvider>
             <FinanceHubProvider>
@@ -46,6 +52,7 @@ function App() {
             </FinanceHubProvider>
           </SalesAgentProvider>
         </AdminDashboardProvider>
+        </TenantModulesProvider>
       </AuthProvider>
     </ToastProvider>
   );

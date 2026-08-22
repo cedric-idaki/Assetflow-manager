@@ -5,6 +5,7 @@ import RolesPermissionsTab from './components/RolesPermissionsTab';
 import MakerCheckerTab from './components/MakerCheckerTab';
 import AuditTrailTab from './components/AuditTrailTab';
 import UserDevicesTab from './components/UserDevicesTab';
+import ModulesTab from './components/ModulesTab';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { useAuth } from '../../contexts/AuthContext';
@@ -23,6 +24,8 @@ const SystemAdministration = () => {
     { id: 'roles',        label: 'Roles & Permissions', icon: 'Shield',         count: null,               superOnly: true  },
     { id: 'maker-checker',label: 'Approval Queue',      icon: 'GitPullRequest', count: makerCheckerCount,  superOnly: false },
     { id: 'devices',      label: 'Devices',             icon: 'MonitorSmartphone', count: null,            superOnly: false },
+    // Never superOnly: this is where a tenant switches its own modules back on.
+    { id: 'modules',      label: 'Modules',             icon: 'ToggleLeft',     count: null,               superOnly: false },
     { id: 'audit',        label: 'Audit Trail',         icon: 'FileText',       count: null,               superOnly: false },
   ];
 
@@ -38,6 +41,7 @@ const SystemAdministration = () => {
       case 'roles':         return isSuperAdmin ? <RolesPermissionsTab /> : null;
       case 'maker-checker': return <MakerCheckerTab onBadgeCountChange={setMakerCheckerCount} />;
       case 'devices':       return <UserDevicesTab />;
+      case 'modules':       return <ModulesTab />;
       case 'audit':         return <AuditTrailTab />;
       default:              return <UserManagementTab />;
     }
