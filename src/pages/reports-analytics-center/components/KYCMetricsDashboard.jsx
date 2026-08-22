@@ -288,7 +288,7 @@ const KYCMetricsDashboard = () => {
               <Bar dataKey="days90" name="90+ Days" stackId="a" fill={COLORS?.critical} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-          <div className="grid grid-cols-3 gap-2 mt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
             {agingBySegmentData?.map(seg => (
               <div key={seg?.segment} className="bg-muted rounded-xl p-3 text-center">
                 <p className="text-xs text-muted-foreground">{seg?.segment}</p>
@@ -364,7 +364,7 @@ const KYCMetricsDashboard = () => {
             <SectionHeader title="Compliance Score by Segment" subtitle="KYC compliance health per client category" />
             <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Compliance Scores')} />
           </div>
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             {complianceBySegmentData?.map(seg => (
               <div key={seg?.segment} className="text-center p-3 bg-muted rounded-xl">
                 <div className="relative inline-flex items-center justify-center w-16 h-16 mb-2">

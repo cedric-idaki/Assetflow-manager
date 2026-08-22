@@ -179,7 +179,7 @@ const VotingTab = ({ ctx }) => {
                 {members.filter((m) => m.status === 'active').map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}
               </Select>
             </Field>
-            <div className="grid grid-cols-3 gap-2 mt-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
               <button onClick={() => submitVote('yes')} disabled={saving} className="py-2 rounded-lg text-sm font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 disabled:opacity-60">Yes</button>
               <button onClick={() => submitVote('no')} disabled={saving} className="py-2 rounded-lg text-sm font-semibold bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-60">No</button>
               <button onClick={() => submitVote('abstain')} disabled={saving} className="py-2 rounded-lg text-sm font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-60">Abstain</button>

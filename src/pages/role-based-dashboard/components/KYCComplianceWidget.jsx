@@ -259,7 +259,7 @@ const KYCComplianceWidget = () => {
       {!loading && !error && total > 0 && (
         <>
           {/* Summary row */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {[
               { level: 'critical', count: critical.length, label: '≤30d' },
               { level: 'warning',  count: warning.length,  label: '31–60d' },
