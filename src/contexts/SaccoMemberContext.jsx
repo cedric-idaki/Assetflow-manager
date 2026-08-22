@@ -17,6 +17,15 @@ import { useAuth } from './AuthContext';
 
 const SaccoMemberContext = createContext(null);
 
+// Module-level counter, not Date.now(): React StrictMode mounts an effect twice,
+// and both runs can land inside the same millisecond. supabase.channel(name)
+// RETURNS AN EXISTING channel for a name already in use, so the second run got
+// the first run's already-subscribed channel and .on() threw
+// "cannot add `postgres_changes` callbacks ... after `subscribe()`", which the
+// error boundary rendered as a blank "Something went wrong" page.
+// Same fix and same reasoning as useCrmOversight.
+let _saccoMemberChannelSeq = 0;
+
 export const SaccoMemberProvider = ({ children }) => {
   const { user, userProfile } = useAuth();
   const isMember = userProfile?.role === 'sacco_member';
@@ -626,7 +635,7 @@ export const SaccoMemberProvider = ({ children }) => {
   // ── Realtime ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isMember) return undefined;
-    const t = Date.now();
+    const t = ++_saccoMemberChannelSeq;
     const mk = (name, table, cb) => supabase
       .channel(`sacco_member_${name}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table }, cb)

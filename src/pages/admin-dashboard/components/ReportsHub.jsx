@@ -146,7 +146,7 @@ const CashFlowReport = ({ payments }) => {
         <p className="text-xs text-muted-foreground">6-month cash inflows and outflows summary</p>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <KpiCard label="Total Inflows"  value={fmt(totalInflows)}  icon="ArrowDownLeft" color="text-emerald-600" bg="bg-emerald-100 dark:bg-emerald-900/30" />
         <KpiCard label="Total Outflows" value={fmt(totalOutflows)} icon="ArrowUpRight"  color="text-red-600"    bg="bg-red-100 dark:bg-red-900/30" />
         <KpiCard label="Net Cash Flow"  value={fmt(netCashflow)}   icon="TrendingUp"    color="text-primary"    bg="bg-primary/10" />
@@ -324,7 +324,7 @@ const CommissionReport = ({ agents, payments, assets }) => {
           className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <KpiCard label="Total Agents"      value={agents.length}       icon="Users"      color="text-foreground" bg="bg-muted" />
         <KpiCard label="Total Sales Value" value={fmt(totalSales)}     icon="TrendingUp" color="text-blue-600"   bg="bg-blue-100 dark:bg-blue-900/30" />
         <KpiCard label="Total Commission"  value={fmt(totalCommission)} icon="Award"     color="text-primary"    bg="bg-primary/10" />
@@ -379,7 +379,7 @@ const DailyCollectionsReport = ({ payments }) => {
           className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <KpiCard label="Total Collected"   value={fmt(total)}         icon="DollarSign"  color="text-emerald-600" bg="bg-emerald-100 dark:bg-emerald-900/30" />
         <KpiCard label="Transactions"      value={completed.length}   icon="CreditCard"  color="text-primary"     bg="bg-primary/10" />
         <KpiCard label="Pending"           value={pending.length}     icon="Clock"       color="text-amber-600"   bg="bg-amber-100 dark:bg-amber-900/30" />

@@ -206,39 +206,41 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
 
           {/* Transaction preview */}
           <div className="border border-border rounded-lg overflow-hidden">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-muted/40">
-                  <th className="text-left px-3 py-2 text-xs font-semibold text-muted-foreground">Date</th>
-                  <th className="text-left px-3 py-2 text-xs font-semibold text-muted-foreground">Method</th>
-                  <th className="text-right px-3 py-2 text-xs font-semibold text-muted-foreground">Amount</th>
-                  <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPayments.length === 0 ? (
-                  <tr><td colSpan={4} className="text-center py-8 text-sm text-muted-foreground">No transactions in selected period</td></tr>
-                ) : filteredPayments.slice(0, 8).map(p => (
-                  <tr key={p.id} className="border-t border-border hover:bg-muted/20 transition-colors">
-                    <td className="px-3 py-2 text-xs text-muted-foreground">{fmtDate(p.payment_date || p.created_at)}</td>
-                    <td className="px-3 py-2 text-xs text-foreground capitalize">{(p.payment_method || '—').replace(/_/g, ' ')}</td>
-                    <td className={`px-3 py-2 text-xs font-mono font-semibold text-right ${p.payment_status === 'completed' ? 'text-emerald-600' : 'text-amber-600'}`}>{fmt(p.amount)}</td>
-                    <td className="px-3 py-2 text-center">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${p.payment_status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {p.payment_status}
-                      </span>
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-muted/40">
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-muted-foreground">Date</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-muted-foreground">Method</th>
+                    <th className="text-right px-3 py-2 text-xs font-semibold text-muted-foreground">Amount</th>
+                    <th className="text-center px-3 py-2 text-xs font-semibold text-muted-foreground">Status</th>
                   </tr>
-                ))}
-                {filteredPayments.length > 8 && (
-                  <tr className="border-t border-border">
-                    <td colSpan={4} className="px-3 py-2 text-xs text-center text-muted-foreground">
-                      +{filteredPayments.length - 8} more transactions in the full PDF
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filteredPayments.length === 0 ? (
+                    <tr><td colSpan={4} className="text-center py-8 text-sm text-muted-foreground">No transactions in selected period</td></tr>
+                  ) : filteredPayments.slice(0, 8).map(p => (
+                    <tr key={p.id} className="border-t border-border hover:bg-muted/20 transition-colors">
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{fmtDate(p.payment_date || p.created_at)}</td>
+                      <td className="px-3 py-2 text-xs text-foreground capitalize">{(p.payment_method || '—').replace(/_/g, ' ')}</td>
+                      <td className={`px-3 py-2 text-xs font-mono font-semibold text-right ${p.payment_status === 'completed' ? 'text-emerald-600' : 'text-amber-600'}`}>{fmt(p.amount)}</td>
+                      <td className="px-3 py-2 text-center">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${p.payment_status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {p.payment_status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredPayments.length > 8 && (
+                    <tr className="border-t border-border">
+                      <td colSpan={4} className="px-3 py-2 text-xs text-center text-muted-foreground">
+                        +{filteredPayments.length - 8} more transactions in the full PDF
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>

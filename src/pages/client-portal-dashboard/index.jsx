@@ -48,7 +48,7 @@ const LoadingSkeleton = () => (
       <div className="flex gap-4 mb-5">
         {[...Array(4)]?.map((_, i) => <div key={i} className="h-10 bg-muted rounded-lg w-28" />)}
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[...Array(3)]?.map((_, i) => (
           <div key={i} className="bg-muted rounded-xl h-48" />
         ))}

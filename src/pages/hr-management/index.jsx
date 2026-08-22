@@ -795,7 +795,7 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
 
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-5">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-3">Compensation</p>
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
               {[
                 { label: 'Basic Salary', value: fmt(employee.basic_salary) },
                 { label: 'Housing',      value: fmt(employee.housing_allowance) },

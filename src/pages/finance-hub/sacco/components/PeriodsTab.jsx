@@ -87,7 +87,7 @@ const AssetModal = ({ open, onClose, fin, onDone }) => {
           <Field label="Acquisition date"><TextInput type="date" value={f.acquisition_date} onChange={(e) => setF({ ...f, acquisition_date: e.target.value })} /></Field>
           <Field label="Cost"><NumberInput step="0.01" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} /></Field>
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Residual value"><NumberInput step="0.01" value={f.residual_value} onChange={(e) => setF({ ...f, residual_value: e.target.value })} /></Field>
           <Field label="Useful life (years)"><NumberInput step="0.5" value={f.useful_life_years} onChange={(e) => setF({ ...f, useful_life_years: e.target.value })} /></Field>
           <Field label="Method">

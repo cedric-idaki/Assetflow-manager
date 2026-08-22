@@ -283,7 +283,7 @@ const PaymentsTab = ({ payments, installmentPlans, clientProfile, onPay, onExpor
                       {plan.plan_status}
                     </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-3 mb-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
                     <div>
                       <p className="text-xs text-muted-foreground">Total Amount</p>
                       <p className="text-sm font-bold text-foreground">{fmt(plan.total_amount)}</p>

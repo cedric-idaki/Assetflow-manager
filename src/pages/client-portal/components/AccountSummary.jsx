@@ -107,7 +107,7 @@ const AccountSummary = ({ clientProfile, payments, installmentPlans }) => {
       </div>
 
       {/* Stats Row */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
           {
             label: 'My Assets',

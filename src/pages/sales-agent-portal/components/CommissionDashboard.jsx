@@ -53,7 +53,7 @@ const CommissionDashboard = ({ kpis, walletTransactions, agentProfile, onRequest
       <div className="bg-card border border-border rounded-xl p-5 animate-pulse space-y-4">
         <div className="h-5 bg-muted rounded w-40" />
         <div className="h-12 bg-muted rounded w-48" />
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[1,2,3].map(i => <div key={i} className="h-14 bg-muted rounded-xl" />)}
         </div>
       </div>
@@ -78,7 +78,7 @@ const CommissionDashboard = ({ kpis, walletTransactions, agentProfile, onRequest
         <div className="text-2xl font-bold mb-1">{fmt(balance)}</div>
         <div className="text-xs opacity-70">Available balance · Updated live</div>
 
-        <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-white/20">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t border-white/20">
           <div>
             <div className="text-xs opacity-60 mb-0.5">Earned Total</div>
             <div className="text-sm font-bold">{fmt(totalEarned)}</div>

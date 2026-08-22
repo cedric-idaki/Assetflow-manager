@@ -4,6 +4,15 @@ import { getTenantAdminId } from '../lib/tenant';
 import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { emailLoginCredentials, generateTempPassword } from '../services/credentialsEmailService';
 
+// Module-level counter, not Date.now(): React StrictMode mounts an effect twice,
+// and both runs can land inside the same millisecond. supabase.channel(name)
+// RETURNS AN EXISTING channel for a name already in use, so the second run got
+// the first run's already-subscribed channel and .on() threw
+// "cannot add `postgres_changes` callbacks ... after `subscribe()`", which the
+// error boundary rendered as a blank "Something went wrong" page.
+// Same fix and same reasoning as useCrmOversight.
+let _adminDashboardChannelSeq = 0;
+
 // Account number (BRS 3.4 format, same as the client registration form):
 // AF-YYYY-000001. The column is UNIQUE NOT NULL so it must always be supplied.
 const generateAccountNumber = () => {
@@ -638,7 +647,7 @@ const uploadContract = useCallback(async (formData, file, onProgress) => {
   // ── Realtime ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!userId) return undefined;
-    const t = Date.now();
+    const t = ++_adminDashboardChannelSeq;
 
     const clientsCh = supabase
       .channel(`admin_clients_${t}`)
