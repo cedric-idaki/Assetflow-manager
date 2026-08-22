@@ -494,12 +494,19 @@ export const SaccoMemberProvider = ({ children }) => {
     await fetchMotions();
   }, [me, fetchMotions]);
 
+  // One member, one ballot — a vote is final once confirmed. Plain INSERT (not
+  // an upsert) so a second attempt trips UNIQUE (motion_id, member_id) instead
+  // of quietly rewriting the recorded choice; RLS drops the UPDATE path too
+  // (20260822160000_sacco_vote_is_final.sql).
   const castVote = useCallback(async (motion, choice) => {
-    const { error } = await supabase.from('sacco_votes').upsert({
+    const { error } = await supabase.from('sacco_votes').insert({
       admin_id: me?.admin_id, motion_id: motion.id, member_id: me?.id,
       choice, is_secret: motion.ballot_type === 'secret',
-    }, { onConflict: 'motion_id,member_id' });
-    if (error) throw error;
+    });
+    if (error) {
+      if (error.code === '23505') throw new Error('You have already voted on this motion — votes are final.');
+      throw error;
+    }
     await fetchVotes();
   }, [me, fetchVotes]);
 

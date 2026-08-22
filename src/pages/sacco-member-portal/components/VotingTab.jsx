@@ -9,10 +9,12 @@ import {
 const emptyMotion = { title: '', description: '', ballot_type: 'visible' };
 
 const CHOICES = [
-  { value: 'yes',     label: 'Yes',     icon: 'ThumbsUp',   cls: 'border-emerald-300 text-emerald-700 hover:bg-emerald-50' },
-  { value: 'no',      label: 'No',      icon: 'ThumbsDown', cls: 'border-red-300 text-red-700 hover:bg-red-50' },
-  { value: 'abstain', label: 'Abstain', icon: 'Minus',      cls: 'border-slate-300 text-slate-600 hover:bg-slate-50' },
+  { value: 'yes',     label: 'Yes',     icon: 'ThumbsUp',   cls: 'border-emerald-300 text-emerald-700 hover:bg-emerald-50', pill: 'border-emerald-300 bg-emerald-50 text-emerald-700' },
+  { value: 'no',      label: 'No',      icon: 'ThumbsDown', cls: 'border-red-300 text-red-700 hover:bg-red-50',             pill: 'border-red-300 bg-red-50 text-red-700' },
+  { value: 'abstain', label: 'Abstain', icon: 'Minus',      cls: 'border-slate-300 text-slate-600 hover:bg-slate-50',       pill: 'border-slate-300 bg-slate-50 text-slate-600' },
 ];
+
+const choiceOf = (value) => CHOICES.find((c) => c.value === value);
 
 // Result bars for a closed/published motion.
 const Results = ({ motion, votes, getMotionResults }) => {
@@ -66,6 +68,8 @@ const VotingTab = ({ ctx }) => {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyMotion);
   const [saving, setSaving] = useState(false);
+  const [confirming, setConfirming] = useState(null);   // { motion, choice } awaiting confirmation
+  const [casting, setCasting] = useState(false);
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
@@ -93,12 +97,21 @@ const VotingTab = ({ ctx }) => {
     }
   };
 
-  const vote = async (motion, choice) => {
+  // A vote is final, so a click only stages the choice — nothing reaches the
+  // database until the member confirms it in the modal below.
+  const confirmChoice = confirming ? choiceOf(confirming.choice) : null;
+
+  const doCast = async () => {
+    if (!confirming) return;
+    setCasting(true);
     try {
-      await castVote(motion, choice);
-      toast.success(`Vote recorded: ${choice}.`);
+      await castVote(confirming.motion, confirming.choice);
+      toast.success(`Vote recorded: ${confirmChoice?.label || confirming.choice}. It is final.`);
+      setConfirming(null);
     } catch (e) {
       toast.error(e.message || 'Could not record your vote.');
+    } finally {
+      setCasting(false);
     }
   };
 
@@ -146,19 +159,27 @@ const VotingTab = ({ ctx }) => {
                   <GhostButton icon="UserCheck" onClick={() => second(m)}>Second this motion</GhostButton>
                 )}
 
-                {canVote && (
+                {mine ? (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${choiceOf(mine)?.pill || ''}`}>
+                      <Icon name="Lock" size={12} color="currentColor" />
+                      You voted {choiceOf(mine)?.label || mine}
+                    </span>
+                    <span className="text-xs text-muted-foreground">Recorded and final — a vote cannot be changed or withdrawn.</span>
+                  </div>
+                ) : canVote && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     {CHOICES.map((c) => (
                       <button
                         key={c.value}
-                        onClick={() => vote(m, c.value)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${c.cls} ${mine === c.value ? 'ring-2 ring-primary/40' : ''}`}
+                        onClick={() => setConfirming({ motion: m, choice: c.value })}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${c.cls}`}
                       >
                         <Icon name={c.icon} size={13} color="currentColor" />
-                        {c.label}{mine === c.value ? ' ✓' : ''}
+                        {c.label}
                       </button>
                     ))}
-                    {mine && <span className="text-xs text-muted-foreground">You voted “{mine}” — you can change it while voting is open.</span>}
+                    <span className="text-xs text-muted-foreground">You confirm your choice before it is sent — you only vote once.</span>
                   </div>
                 )}
 
@@ -168,6 +189,49 @@ const VotingTab = ({ ctx }) => {
           })}
         </div>
       )}
+
+      {/* Confirm vote — the last chance to change the choice, because the ballot is final */}
+      <Modal
+        open={!!confirming}
+        onClose={() => { if (!casting) setConfirming(null); }}
+        title={confirming ? `Confirm your vote · ${confirming.motion.title}` : ''}
+        footer={<>
+          <GhostButton onClick={() => setConfirming(null)} disabled={casting}>Go back</GhostButton>
+          <PrimaryButton icon="Vote" onClick={doCast} disabled={casting}>
+            {casting ? 'Recording…' : `Confirm my “${confirmChoice?.label || ''}” vote`}
+          </PrimaryButton>
+        </>}
+      >
+        {confirming && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200">
+              <Icon name="AlertTriangle" size={15} color="#dc2626" />
+              <p className="text-xs text-red-700 leading-relaxed">
+                <strong>Votes are final.</strong> Once you confirm, your vote is locked in — it cannot be
+                changed or withdrawn, and you cannot vote on this motion again.
+              </p>
+            </div>
+            <div className="p-4 rounded-xl border border-border text-center space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground">You are voting on</p>
+                <p className="text-sm font-semibold text-foreground mt-0.5">{confirming.motion.title}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">Your choice</p>
+                <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${confirmChoice?.pill || ''}`}>
+                  <Icon name={confirmChoice?.icon} size={16} color="currentColor" />
+                  {confirmChoice?.label}
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {confirming.motion.ballot_type === 'secret'
+                ? 'Secret ballot — only the totals are published, never your individual choice.'
+                : 'Open ballot — the breakdown, including your choice, is shown to members once voting closes.'}
+            </p>
+          </div>
+        )}
+      </Modal>
 
       {/* Propose modal */}
       <Modal
