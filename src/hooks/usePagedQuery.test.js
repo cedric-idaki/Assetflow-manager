@@ -184,6 +184,29 @@ describe('usePagedQuery — search', () => {
     await waitFor(() => expect(result.current.page).toBe(0));
   });
 
+  // applyFilters lives in a ref, so its identity cannot drive the refetch. If
+  // `deps` does not reach the fetch, changing a filter while already on page
+  // one leaves the table showing rows the filter excludes.
+  it('refetches when a filter changes without moving the page', async () => {
+    respond = () => Promise.resolve({ data: rowsOf(5), count: 5, error: null });
+
+    const { rerender } = renderHook(
+      ({ status }) => usePagedQuery({
+        table: 'sacco_contributions',
+        applyFilters: (q) => (status ? q.eq('status', status) : q),
+        deps: [status],
+      }),
+      { initialProps: { status: '' } }
+    );
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].filters).toEqual([]);
+
+    act(() => rerender({ status: 'pending' }));
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1].filters).toEqual([['status', 'pending']]);
+  });
+
   it('debounces so typing does not fire a query per keystroke', async () => {
     const { rerender } = renderHook(
       ({ search }) => usePagedQuery({ table: 't', searchColumns: ['full_name'], search }),

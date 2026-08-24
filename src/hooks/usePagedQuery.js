@@ -109,10 +109,20 @@ export const usePagedQuery = ({
     return () => clearTimeout(t);
   }, [search]);
 
+  /**
+   * Serialised filter values. `applyFilters` is held in a ref so callers need
+   * no memoisation, which means its identity can NOT drive the refetch — this
+   * key does. It has to reach fetchPage's dependency list as well as the page
+   * reset below: a filter changed while already on page one moves no page
+   * number, so without it the query would never re-run and the table would go
+   * on showing rows the filter excludes.
+   */
+  const depsKey = JSON.stringify(deps);
+
   // A new search or filter changes which rows exist, so the current page number
   // is meaningless against the new result set. Without this, searching while on
   // page 7 lands on page 7 of 2 — an empty table that looks like "no results".
-  const searchKey = `${debouncedSearch}|${JSON.stringify(deps)}`;
+  const searchKey = `${debouncedSearch}|${depsKey}`;
   const firstKeyRef = useRef(searchKey);
   useEffect(() => {
     if (firstKeyRef.current === searchKey) return;
@@ -174,7 +184,7 @@ export const usePagedQuery = ({
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
-  }, [enabled, table, columns, debouncedSearch, pageSize]);
+  }, [enabled, table, columns, debouncedSearch, pageSize, depsKey]);
 
   useEffect(() => { fetchPage(page); }, [fetchPage, page]);
 

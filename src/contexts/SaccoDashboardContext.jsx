@@ -55,6 +55,24 @@ export const ROSTER_CEILING = 10000;
 // headroom than a plain list before paging becomes necessary.
 const SCHEDULE_CAP = 2000;
 
+/**
+ * 'paid' is the pre-20260801 spelling of 'completed'. Both count as settled,
+ * matching sacco_dashboard_stats() and the shared vocabulary in _shared.jsx.
+ */
+const isSettledStatus = (c) => ['completed', 'paid'].includes(c?.status);
+
+/**
+ * Whether a contribution's period falls in the current month, in the sacco's
+ * own timezone. Only used as the fallback for contributions_this_month when
+ * the server aggregate is absent; the SQL side does the same in Africa/Nairobi.
+ */
+const sameMonthAsToday = (value) => {
+  if (!value) return false;
+  const key = String(value).slice(0, 7);
+  const now = new Date();
+  return key === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
+
 const getAdminId = async () => {
   const { data: { user } } = await supabase.auth.getUser();
   return user?.id;
@@ -73,6 +91,9 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
   const [shares,        setShares]        = useState([]);
+  // Same meaning as membersTruncated: only true if a tenant exceeds
+  // ROSTER_CEILING holdings, so the UI can say so instead of quietly cutting.
+  const [sharesTruncated, setSharesTruncated] = useState(false);
   const [sharePrices,   setSharePrices]   = useState([]);
   const [listings,      setListings]      = useState([]);
   const [transfers,     setTransfers]     = useState([]);
@@ -204,12 +225,36 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  /**
+   * The share register, in full.
+   *
+   * Like the member roster this is a DIMENSION table — one row per member, so
+   * bounded by the size of the sacco rather than by its trading history — and
+   * the whole module treats it as a lookup: `shares.find(s => s.member_id ===
+   * x)` resolves a holding in a dozen places.
+   *
+   * Capping it did not merely hide rows, it corrupted the register:
+   *
+   *   • saveShares() looked up the member's existing holding here. Past the cap
+   *     it found none and INSERTED a second sacco_shares row for a member who
+   *     already had one, after which every find() picked one of the two
+   *     arbitrarily and every total double-counted them.
+   *   • approveTransfer() resolved both sides of a trade here. A seller past
+   *     the cap resolved to undefined, so the debit was skipped while the buyer
+   *     was still credited — shares created out of nothing.
+   *   • The single-member ownership cap in CompliancePanel simply never saw
+   *     those members, so a breach could not be flagged.
+   *
+   * None of that surfaced an error, which is why it has to be the whole table.
+   */
   const fetchShares = useCallback(async () => {
     try {
       const adminId = await getAdminId();
-      const { data } = await supabase.from('sacco_shares')
-        .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId).limit(LIST_CAP);
+      const { data, count } = await supabase.from('sacco_shares')
+        .select(`*, ${MEMBER_JOIN}`, { count: 'exact' })
+        .eq('admin_id', adminId).limit(ROSTER_CEILING);
       setShares(data || []);
+      setSharesTruncated((count || 0) > ROSTER_CEILING);
     } catch (_) {}
   }, []);
 
@@ -467,9 +512,8 @@ export const SaccoDashboardProvider = ({ children }) => {
 
   const totalMembers  = agg('total_members',  () => members.length);
   const activeMembers = agg('active_members', () => members.filter((m) => m.status === 'active').length);
-  // 'paid' is the pre-20260801 spelling of 'completed'; both count as settled.
   const totalSavings  = agg('total_savings',  () => contributions
-    .filter((c) => ['completed', 'paid'].includes(c.status))
+    .filter(isSettledStatus)
     .reduce((s, c) => s + parseFloat(c.amount || 0), 0));
   const activeLoans     = agg('active_loans', () => loans.filter((l) => l.status === 'active').length);
   const totalShareValue = agg('total_share_value', () => shares.reduce(
@@ -500,6 +544,29 @@ export const SaccoDashboardProvider = ({ children }) => {
     // Members declaring cash/bank/card payments wait here for the treasurer.
     pendingContributions: agg('pending_contributions',
       () => contributions.filter((c) => c.status === 'pending').length),
+
+    /**
+     * Figures the Contributions and Loans tabs used to compute for themselves
+     * by reducing over the capped arrays — so a sacco past LIST_CAP was shown
+     * understated money. Same agg() contract as everything above: the server
+     * aggregate when it is there, the old array reduction when it is not, so
+     * this stays correct on a database where 20260823120000 has not yet run.
+     */
+    totalContributions:   agg('total_contributions',   () => contributions.length),
+    settledContributions: agg('settled_contributions', () => contributions.filter(isSettledStatus).length),
+    contributionsThisMonth: agg('contributions_this_month', () => contributions
+      .filter((c) => isSettledStatus(c) && sameMonthAsToday(c.period_month || c.paid_date))
+      .reduce((s, c) => s + parseFloat(c.amount || 0), 0)),
+    pendingContribAmount: agg('pending_contrib_amount', () => contributions
+      .filter((c) => c.status === 'pending')
+      .reduce((s, c) => s + parseFloat(c.amount || 0), 0)),
+    totalPenalties: agg('total_penalties', () => contributions
+      .reduce((s, c) => s + parseFloat(c.penalty_amount || 0), 0)),
+    totalLoans:   agg('total_loans',   () => loans.length),
+    pendingLoans: agg('pending_loans', () => loans.filter((l) => l.status === 'pending').length),
+    activeLoanPrincipal: agg('active_loan_principal', () => loans
+      .filter((l) => l.status === 'active')
+      .reduce((s, l) => s + parseFloat(l.principal || 0), 0)),
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -1405,6 +1472,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     setLoans([]);
     setSchedules([]);
     setShares([]);
+    setSharesTruncated(false);
     setSharePrices([]);
     setListings([]);
     setTransfers([]);
@@ -1469,7 +1537,7 @@ export const SaccoDashboardProvider = ({ children }) => {
 
   const value = {
     sacco, members, membersTruncated, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,
-    shares, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
+    shares, sharesTruncated, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
     currentMarketValue, marketCap, totalSharesHeld, totalSharesIssued, treasuryShares,
     shareSettings, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
     elections, electionPositions, electionCandidates, electionVoters, electionAudit,

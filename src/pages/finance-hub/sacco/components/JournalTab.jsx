@@ -270,6 +270,14 @@ const ManualModal = ({ open, onClose, fin, members, onDone }) => {
 };
 
 // ── Operations sync modal ───────────────────────────────────────────────────
+/**
+ * `ops` here is the FULL operational history, loaded by the finance hub — not
+ * the sacco dashboard's display-capped arrays it used to receive.
+ * previewOperations only proposes postings for rows it can see, so under the
+ * cap anything older simply never got proposed, could never be posted, and the
+ * ledger stayed permanently short of the sacco's real history — with no error,
+ * because the sync "succeeded" every time.
+ */
 const SyncModal = ({ open, onClose, fin, ops, onDone }) => {
   const toast = useToast();
   const [sources, setSources] = useState({ contributions: true, loans: true, repayments: true, shares: false });
@@ -277,7 +285,7 @@ const SyncModal = ({ open, onClose, fin, ops, onDone }) => {
 
   const proposals = useMemo(
     () => (open ? fin.previewOperations({ ...ops, sources }) : []),
-    [open, fin, ops, sources]);
+    [open, ops, fin, sources]);
 
   const byGroup = useMemo(() => {
     const g = {};

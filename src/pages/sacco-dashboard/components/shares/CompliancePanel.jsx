@@ -1,7 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useToast } from '../../../../components/Toast';
 import Icon from '../../../../components/AppIcon';
+import { supabase } from '../../../../lib/supabase';
+import { fetchAllRows } from '../../../../lib/fetchAllRows';
+import Pagination from '../../../../components/ui/Pagination';
+import { usePagedQuery } from '../../../../hooks/usePagedQuery';
 import { Card, StatCard, Table, GhostButton, Select, EmptyState, KES, fmtDate } from '../_shared';
+
+/** Audit lines per page. */
+const AUDIT_PAGE_SIZE = 25;
 import { int, num, pct, withDefaults } from './_util';
 
 const SEVERITY = {
@@ -25,7 +32,7 @@ const ACTION_LABELS = {
  * every share action — who, when, old value, new value, reason.
  */
 const CompliancePanel = ({ ctx, ov }) => {
-  const { shareAudit = [], shares = [], members = [], shareSettings, getShareAlerts, exportCSV } = ctx;
+  const { shares = [], members = [], shareSettings, getShareAlerts, exportCSV } = ctx;
   const toast = useToast();
   const s = withDefaults(shareSettings);
 
@@ -53,7 +60,46 @@ const CompliancePanel = ({ ctx, ov }) => {
     ? shares.filter((r) => int(r.shares_held) >= capShares * 0.9)
     : [];
 
-  const audit = shareAudit.filter((a) => entity === 'all' || a.entity === entity);
+  /**
+   * The audit trail, paged from Postgres.
+   *
+   * It used to come from the dashboard's array — the newest 400 rows — then get
+   * sliced to 120 for rendering, while the "Audit entries" figure above showed
+   * that array's length. So a sacco with 5,000 share actions was told it had
+   * 400, and the entity filter searched only those. An audit trail that
+   * silently stops is the one list where being short defeats the purpose.
+   */
+  const auditPage = usePagedQuery({
+    table: 'sacco_share_audit',
+    order: { column: 'created_at', ascending: false },
+    pageSize: AUDIT_PAGE_SIZE,
+    applyFilters: (q) => (entity === 'all' ? q : q.eq('entity', entity)),
+    deps: [entity],
+  });
+  const audit = auditPage.rows;
+
+  const [exportingAudit, setExportingAudit] = useState(false);
+  const exportAudit = async () => {
+    setExportingAudit(true);
+    try {
+      const all = await fetchAllRows(() => {
+        const q = supabase.from('sacco_share_audit').select('*');
+        return (entity === 'all' ? q : q.eq('entity', entity))
+          .order('created_at', { ascending: false });
+      });
+      exportCSV(all.map((a) => ({
+        at: a.created_at, entity: a.entity, action: a.action,
+        actor: a.actor_name, role: a.actor_role,
+        member: memberName(a.member_id),
+        changed: (a.changed_fields || []).join(' '),
+        old_values: JSON.stringify(a.old_values || {}),
+        new_values: JSON.stringify(a.new_values || {}),
+        reason: a.reason || '',
+      })), 'share_audit_trail');
+    } catch (e) {
+      toast.error(e.message || 'Could not build the export.');
+    } finally { setExportingAudit(false); }
+  };
   const bySeverity = (sev) => alerts.filter((a) => a.severity === sev).length;
 
   return (
@@ -64,8 +110,8 @@ const CompliancePanel = ({ ctx, ov }) => {
         <StatCard label="Ownership ceiling" value={capShares > 0 ? capShares.toLocaleString() : 'None'}
           icon="Crown" tone="muted"
           hint={num(s.max_holding_percent) > 0 ? `${s.max_holding_percent}% of the issue` : (capShares > 0 ? 'shares per member' : 'No limit set')} />
-        <StatCard label="Audit entries" value={shareAudit.length} icon="ScrollText" tone="muted"
-          hint="Most recent 400" />
+        <StatCard label="Audit entries" value={auditPage.total.toLocaleString('en-KE')} icon="ScrollText" tone="muted"
+          hint={entity === 'all' ? 'Across the whole register' : `Matching “${entity}”`} />
       </div>
 
       {/* Alerts */}
@@ -160,26 +206,24 @@ const CompliancePanel = ({ ctx, ov }) => {
                 <option value="settings">Settings</option>
               </Select>
             </div>
-            {audit.length > 0 && (
-              <GhostButton icon="Download" onClick={() => exportCSV(audit.map((a) => ({
-                at: a.created_at, entity: a.entity, action: a.action,
-                actor: a.actor_name, role: a.actor_role,
-                member: memberName(a.member_id),
-                changed: (a.changed_fields || []).join(' '),
-                old_values: JSON.stringify(a.old_values || {}),
-                new_values: JSON.stringify(a.new_values || {}),
-                reason: a.reason || '',
-              })), 'share_audit_trail')}>Export</GhostButton>
+            {auditPage.total > 0 && (
+              <GhostButton icon="Download" onClick={exportAudit} disabled={exportingAudit}>
+                {exportingAudit ? 'Preparing…' : 'Export'}
+              </GhostButton>
             )}
           </div>
         )}
       >
-        {audit.length === 0 ? (
-          <EmptyState icon="ScrollText" title="No audit entries yet"
+        {auditPage.error ? (
+          <EmptyState icon="AlertTriangle" title="Could not load the audit trail" hint={auditPage.error} />
+        ) : audit.length === 0 ? (
+          <EmptyState icon="ScrollText"
+            title={entity === 'all' ? 'No audit entries yet' : 'No entries for this filter'}
             hint="Every order, trade, treasury movement and settings change writes a line here." />
         ) : (
+          <>
           <Table columns={['When', 'Action', 'Actor', 'Member', 'Changed', 'Reason']}>
-            {audit.slice(0, 120).map((a) => (
+            {audit.map((a) => (
               <tr key={a.id} className="border-b border-border/60">
                 <td className="py-2.5 pr-4 text-muted-foreground whitespace-nowrap text-xs">
                   {new Date(a.created_at).toLocaleString('en-KE', {
@@ -204,6 +248,17 @@ const CompliancePanel = ({ ctx, ov }) => {
               </tr>
             ))}
           </Table>
+          <Pagination
+            page={auditPage.page}
+            pageCount={auditPage.pageCount}
+            from={auditPage.from}
+            to={auditPage.to}
+            total={auditPage.total}
+            onPageChange={auditPage.setPage}
+            loading={auditPage.loading}
+            noun="audit entries"
+          />
+          </>
         )}
       </Card>
     </div>

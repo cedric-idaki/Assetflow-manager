@@ -1,4 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import Icon from '../../../../components/AppIcon';
+import { supabase } from '../../../../lib/supabase';
+import { fetchAllRows } from '../../../../lib/fetchAllRows';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -31,7 +34,7 @@ const CHART_TOOLTIP = {
  */
 const AnalyticsPanel = ({ ctx, ov }) => {
   const {
-    sharePrices = [], shareTxns = [], transfers = [], shares = [], members = [],
+    sharePrices = [], transfers = [], shares = [], members = [],
     dividends = [],
   } = ctx;
   const [range, setRange] = useState('90');
@@ -43,6 +46,44 @@ const AnalyticsPanel = ({ ctx, ov }) => {
     return d.toISOString().slice(0, 10);
   }, [range]);
 
+  /**
+   * The share ledger for the selected window, read from Postgres.
+   *
+   * These series used to filter the dashboard's shareTxns array, which holds
+   * the newest 1,000 rows. The range picker then narrowed THAT — so "All time"
+   * on an active sacco silently began at whenever row 1,000 fell, and every
+   * chart, top-buyer table and treasury line started mid-history with nothing
+   * saying so. Fetching by the window makes the range mean what it says, and
+   * costs less than holding the whole ledger for a 30-day view.
+   */
+  const [shareTxns, setShareTxns] = useState([]);
+  const [txnsLoading, setTxnsLoading] = useState(true);
+  const [txnsError, setTxnsError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTxnsLoading(true);
+    setTxnsError(null);
+
+    (async () => {
+      try {
+        const rows = await fetchAllRows(() => {
+          const q = supabase.from('sacco_share_transactions').select('*');
+          return (since ? q.gte('created_at', since) : q).order('created_at', { ascending: false });
+        });
+        if (!cancelled) setShareTxns(rows);
+      } catch (e) {
+        if (!cancelled) { setShareTxns([]); setTxnsError(e?.message || 'Could not load the share ledger.'); }
+      } finally {
+        if (!cancelled) setTxnsLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [since]);
+
+  // The window is applied by the query now; this stays for rows that carry
+  // their own dates from elsewhere (transfers, dividends).
   const inRange = (d) => !since || String(d || '').slice(0, 10) >= since;
 
   const memberName = (id) => members.find((m) => m.id === id)?.full_name || '—';
@@ -157,6 +198,20 @@ const AnalyticsPanel = ({ ctx, ov }) => {
           </Select>
         </div>
       </div>
+
+      {/* Flat charts while the ledger is still arriving read as "no trading
+          happened", which is exactly the wrong conclusion to draw. */}
+      {txnsLoading && (
+        <p className="text-xs text-muted-foreground">Loading the share ledger for this period…</p>
+      )}
+      {txnsError && (
+        <div className="flex items-start gap-2 p-3 rounded-lg border border-destructive/30 bg-destructive/10">
+          <Icon name="AlertTriangle" size={15} color="#dc2626" className="mt-0.5 shrink-0" />
+          <p className="text-xs text-foreground">
+            Trading charts could not be built for this period, so they are showing empty rather than partial. {txnsError}
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Trades in period" value={rangedTrades.length.toLocaleString()} icon="ArrowLeftRight" tone="primary" />

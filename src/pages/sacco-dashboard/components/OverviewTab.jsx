@@ -5,7 +5,7 @@ import { Card, StatCard, KES } from './_shared';
 
 const OverviewTab = ({ ctx, onNavigate }) => {
   const navigate = useNavigate();
-  const { stats, sacco, members, loans, motions } = ctx;
+  const { stats, sacco, members, motions } = ctx;
   const bill = stats.billing;
   const freeGb = stats.tier?.storageGb || 0;
   const usedGb = Number(sacco?.storage_used_gb || 0);
@@ -23,7 +23,7 @@ const OverviewTab = ({ ctx, onNavigate }) => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Total members" value={stats.totalMembers} hint={`${stats.activeMembers} active`} icon="Users" />
         <StatCard label="Total savings" value={KES(stats.totalSavings)} hint="Paid contributions" icon="PiggyBank" tone="success" />
-        <StatCard label="Active loans" value={stats.activeLoans} hint={`${loans.length} total`} icon="Banknote" tone="warning" />
+        <StatCard label="Active loans" value={stats.activeLoans} hint={`${(stats.totalLoans ?? 0).toLocaleString('en-KE')} total`} icon="Banknote" tone="warning" />
         <StatCard label="Share value" value={KES(stats.totalShareValue)} hint="Across members" icon="PieChart" />
       </div>
 
