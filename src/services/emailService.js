@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
  * Calls the send-email Edge Function via Supabase
  */
 const callEmailFunction = async (type, to, data) => {
-  const { data: result, error } = await supabase?.functions?.invoke('send-email', {
+  const { data: result, error } = await supabase.functions.invoke('send-email', {
     body: { type, to, data },
   });
 

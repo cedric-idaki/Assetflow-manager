@@ -63,13 +63,10 @@
     "build": "vite build",
     "serve": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:errors": "eslint . --quiet",
+    "lint:fix": "eslint . --fix"
   },
   "browserslist": {
     "production": [
@@ -94,6 +91,10 @@
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "^2.1.9",
     "autoprefixer": "^10.4.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^15.15.0",
     "jsdom": "^29.1.1",
     "postcss": "^8.4.8",
     "tailwindcss": "^3.4.6",

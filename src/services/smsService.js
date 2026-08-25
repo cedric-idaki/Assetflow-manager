@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
  * Calls the send-sms Edge Function via Supabase
  */
 const callSmsFunction = async (type, to, data) => {
-  const { data: result, error } = await supabase?.functions?.invoke('send-sms', {
+  const { data: result, error } = await supabase.functions.invoke('send-sms', {
     body: { type, to, data },
   });
 
@@ -38,7 +38,7 @@ export const sendPaymentReminderSMS = async (toPhone, { client, payment, asset, 
  */
 export const sendSigningLinkSMS = async (toPhone, { signerName, documentName, link }) => {
   const message = `Ararat E-Sign: Hi ${signerName || 'there'}, "${documentName}" is ready for your signature. Sign securely: ${link}`;
-  const { data: result, error } = await supabase?.functions?.invoke('send-sms', {
+  const { data: result, error } = await supabase.functions.invoke('send-sms', {
     body: { type: 'custom', to: toPhone, message },
   });
   if (error) throw new Error(error.message || 'Failed to invoke SMS function');

@@ -29,17 +29,17 @@ export const useRealtimeDashboard = () => {
     try {
       // 1. Total asset value sold — sum of selling_price from assets
       const { data: assets } = await supabase
-        ?.from('assets')
-        ?.select('selling_price');
+        .from('assets')
+        .select('selling_price');
       const totalAssetValueSold = (assets || [])?.reduce(
         (sum, a) => sum + parseFloat(a?.selling_price || 0), 0
       );
 
       // 2. Total collected — sum from payments where payment_status = 'completed'
       const { data: completedPayments } = await supabase
-        ?.from('payments')
-        ?.select('amount')
-        ?.eq('payment_status', 'completed');
+        .from('payments')
+        .select('amount')
+        .eq('payment_status', 'completed');
       const totalCollected = (completedPayments || [])?.reduce(
         (sum, p) => sum + parseFloat(p?.amount || 0), 0
       );
@@ -47,9 +47,9 @@ export const useRealtimeDashboard = () => {
       // 3. Outstanding balance — sum of balance from installment_plans
       // balance = total_amount - (installments_paid * installment_amount)
       const { data: plans } = await supabase
-        ?.from('installment_plans')
-        ?.select('total_amount, installments_paid, installment_amount')
-        ?.eq('plan_status', 'active');
+        .from('installment_plans')
+        .select('total_amount, installments_paid, installment_amount')
+        .eq('plan_status', 'active');
       const outstandingBalance = (plans || [])?.reduce((sum, p) => {
         const paid = parseFloat(p?.installments_paid || 0) * parseFloat(p?.installment_amount || 0);
         const balance = parseFloat(p?.total_amount || 0) - paid;
@@ -63,9 +63,9 @@ export const useRealtimeDashboard = () => {
 
       // 5. Pending approvals from maker_checker_queue
       const { count: pendingApprovals } = await supabase
-        ?.from('maker_checker_queue')
-        ?.select('id', { count: 'exact', head: true })
-        ?.eq('status', 'pending');
+        .from('maker_checker_queue')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending');
 
       setKpis({
         totalAssetValueSold,
@@ -91,10 +91,10 @@ export const useRealtimeDashboard = () => {
 
       // Get overdue installment_charges (scheduled_date < today, not succeeded/cancelled)
       const { data: charges } = await supabase
-        ?.from('installment_charges')
-        ?.select('amount, scheduled_date, charge_status')
-        ?.lt('scheduled_date', todayStr)
-        ?.not('charge_status', 'in', '("succeeded","cancelled")');
+        .from('installment_charges')
+        .select('amount, scheduled_date, charge_status')
+        .lt('scheduled_date', todayStr)
+        .not('charge_status', 'in', '("succeeded","cancelled")');
 
       const bucket1 = { label: '1-30 Days', days: '1-30', amount: 0, count: 0, severity: 'low' };
       const bucket2 = { label: '31-60 Days', days: '31-60', amount: 0, count: 0, severity: 'medium' };
@@ -126,10 +126,10 @@ export const useRealtimeDashboard = () => {
   const fetchRecentPayments = useCallback(async () => {
     try {
       const { data } = await supabase
-        ?.from('payments')
-        ?.select('id, amount, payment_method, payment_status, payment_date, transaction_id, client:clients(full_name, account_number)')
-        ?.order('payment_date', { ascending: false })
-        ?.limit(10);
+        .from('payments')
+        .select('id, amount, payment_method, payment_status, payment_date, transaction_id, client:clients(full_name, account_number)')
+        .order('payment_date', { ascending: false })
+        .limit(10);
       setRecentPayments(data || []);
     } catch (err) {
       console.error('[useRealtimeDashboard] Recent payments fetch error:', err);
@@ -139,10 +139,10 @@ export const useRealtimeDashboard = () => {
   const fetchActivityFeed = useCallback(async () => {
     try {
       const { data } = await supabase
-        ?.from('audit_logs')
-        ?.select('id, action, description, table_name, severity, created_at, user:user_profiles(full_name, role)')
-        ?.order('created_at', { ascending: false })
-        ?.limit(15);
+        .from('audit_logs')
+        .select('id, action, description, table_name, severity, created_at, user:user_profiles(full_name, role)')
+        .order('created_at', { ascending: false })
+        .limit(15);
       setActivityFeed(data || []);
     } catch (err) {
       console.error('[useRealtimeDashboard] Activity feed fetch error:', err);
@@ -229,7 +229,7 @@ export const useRealtimeDashboard = () => {
     channelsRef.current = [assetsCh, paymentsCh, plansCh, chargesCh, auditCh, makerCh];
 
     return () => {
-      channelsRef?.current?.forEach(ch => supabase?.removeChannel(ch));
+      channelsRef?.current?.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps

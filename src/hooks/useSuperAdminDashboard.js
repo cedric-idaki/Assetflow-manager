@@ -1,7 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '/src/lib/supabase.js';
+import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { emailLoginCredentials } from '../services/credentialsEmailService';
 import { auditLogsService } from '../services/supabaseService';
+
+// Module-level counter, not Date.now(): a remount can land inside the same
+// millisecond as the teardown before it. supabase.channel(name) RETURNS AN
+// EXISTING channel for a name already in use, so the second run would get the
+// first run's already-subscribed channel and .on() throws
+// "cannot add `postgres_changes` callbacks ... after `subscribe()`", which the
+// error boundary renders as a blank "Something went wrong" page.
+// Same fix and same reasoning as useAdminDashboard and useCrmOversight.
+let _superAdminDashboardChannelSeq = 0;
 
 export const useSuperAdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -538,44 +548,68 @@ export const useSuperAdminDashboard = () => {
     setLoading(false);
   }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchContracts, fetchClients, fetchAssistRejections, fetchWithdrawalRequests]);
 
-  useEffect(() => {
-    fetchAll();
+  const resetState = useCallback(() => {
+    setStats({
+      activeAccounts: 0, inactiveAccounts: 0, totalValue: 0,
+      totalSales: 0, totalSalesUsers: 0, pendingRegistrations: 0, totalTransactions: 0,
+    });
+    setAssetBreakdown([]);
+    setCompanyAnalytics([]);
+    setAuditTrail([]);
+    setSalesAgents([]);
+    setSalesTarget({ target: 0, achieved: 0, percentage: 0 });
+    setStaffUsers([]);
+    setContracts([]);
+    setClients([]);
+    setWithdrawalRequests([]);
+    setAssistRejections([]);
+    setLoading(true);
+    setConnectionStatus('connecting');
+  }, []);
 
-    const auditCh = supabase.channel(`sa_audit_${Date.now()}`)
+  // ── Initial load — once per signed-in user, never while signed out ──────────
+  const userId = useAuthScopedLoader(fetchAll, resetState);
+
+  // ── Realtime ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!userId) return undefined;
+    const t = ++_superAdminDashboardChannelSeq;
+
+    const auditCh = supabase.channel(`sa_audit_${t}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs' }, fetchAuditTrail)
       .subscribe(s => {
         if (s === 'SUBSCRIBED') setConnectionStatus('connected');
         if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') setConnectionStatus('disconnected');
       });
 
-    const clientsCh = supabase.channel(`sa_clients_${Date.now()}`)
+    const clientsCh = supabase.channel(`sa_clients_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, fetchStats)
       .subscribe();
 
-    const paymentsCh = supabase.channel(`sa_payments_${Date.now()}`)
+    const paymentsCh = supabase.channel(`sa_payments_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
         fetchStats();
         fetchCompanyAnalytics();
       })
       .subscribe();
 
-    const agentsCh = supabase.channel(`sa_agents_${Date.now()}`)
+    const agentsCh = supabase.channel(`sa_agents_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' }, () => {
         fetchSalesAgents();
         fetchSalesTarget();
       })
       .subscribe();
 
-    const staffCh = supabase.channel(`sa_staff_${Date.now()}`)
+    const staffCh = supabase.channel(`sa_staff_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'user_profiles' }, fetchStaffUsers)
       .subscribe();
 
     // A rejection is worth seeing when it happens, not at the next page load.
-    const assistsCh = supabase.channel(`sa_assists_${Date.now()}`)
+    const assistsCh = supabase.channel(`sa_assists_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists' }, fetchAssistRejections)
       .subscribe();
 
-    const withdrawalsCh = supabase.channel(`sa_withdrawals_${Date.now()}`)
+    const withdrawalsCh = supabase.channel(`sa_withdrawals_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_wallets' }, fetchWithdrawalRequests)
       .subscribe();
 
@@ -584,7 +618,9 @@ export const useSuperAdminDashboard = () => {
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, [fetchAll, fetchAuditTrail, fetchStats, fetchCompanyAnalytics, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchAssistRejections]);
+    // Re-subscribed per user: a channel opened for the previous session would
+    // otherwise keep pushing refetches into the new one.
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     stats, assetBreakdown, companyAnalytics, auditTrail,

@@ -1,6 +1,7 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import { BrowserRouter, Routes as RouterRoutes, Route, Navigate } from "react-router-dom";
 import { isAndroidAppContext } from "utils/androidApp";
+import Icon from "components/AppIcon";
 import ScrollToTop from "components/ScrollToTop";
 import ErrorBoundary from "components/ErrorBoundary";
 import ProtectedRoute from "components/ProtectedRoute";
@@ -9,37 +10,62 @@ import RoleGuard from "components/RoleGuard";
 // ModuleGuard answers "did this organisation switch this module on". See
 // src/config/modules.js for the catalogue and which routes each module owns.
 import ModuleGuard from "components/ModuleGuard";
+// Eager: the catch-all has to be able to render without fetching a chunk.
 import NotFound from "pages/NotFound";
-import LoginPage from "./pages/login";
-import LandingPage from "./pages/landing";
-import SystemAdministration from './pages/system-administration';
-import ReportsAnalyticsCenter from './pages/reports-analytics-center';
-import AssetClientManagement from './pages/asset-client-management';
-import SalesAgentPortal from './pages/sales-agent-portal';
-import RoleBasedDashboard from './pages/role-based-dashboard';
-import PaymentCollectionsHub from './pages/payment-collections-hub';
-import ClientPortalDashboard from './pages/client-portal-dashboard';
-import PaymentConfirmationScreen from './pages/payment-confirmation-screen';
-import UserRegistrationScreen from './pages/user-registration-screen';
-import KYCManagementScreen from './pages/kyc-management-screen';
-import KYCRenewalManagementScreen from './pages/kyc-renewal-management-screen';
-import SuperAdminDashboard from './pages/super-admin-dashboard';
-import AdminRegistration from './pages/admin-registration';
-import AdminDashboard from './pages/admin-dashboard';
-import FinanceHub from './pages/finance-hub';
-import HRPage from './pages/hr-management';
-import POSModule from './pages/pos-module';
-import ESignaturePage from './pages/e-signature';
-import ExternalSignPage from './pages/external-sign';
-import ResetPassword from './pages/reset-password';
-import ClientPortal from './pages/client-portal';
-import SubscriptionBilling from './pages/subscription-billing';
-import ProfilePage from './pages/profile';
-import SaccoDashboard from './pages/sacco-dashboard';
-import SaccoMemberPortal from './pages/sacco-member-portal';
-import SaccoOversight from './pages/sacco-oversight';
-import ChoosePortal from './pages/choose-portal';
-import PublicListing from './pages/public-listing';
+
+// Every page below is code-split. They used to be static imports, which put all
+// 32 of them in the entry chunk — 3.29 MB, every byte of it downloaded before
+// the login screen could paint, including the SACCO, HR, POS and e-signature
+// modules a given user may have no entitlement to open at all.
+const LoginPage                 = lazy(() => import('./pages/login'));
+const LandingPage               = lazy(() => import('./pages/landing'));
+const SystemAdministration      = lazy(() => import('./pages/system-administration'));
+const ReportsAnalyticsCenter    = lazy(() => import('./pages/reports-analytics-center'));
+const AssetClientManagement     = lazy(() => import('./pages/asset-client-management'));
+const SalesAgentPortal          = lazy(() => import('./pages/sales-agent-portal'));
+const RoleBasedDashboard        = lazy(() => import('./pages/role-based-dashboard'));
+const PaymentCollectionsHub     = lazy(() => import('./pages/payment-collections-hub'));
+const ClientPortalDashboard     = lazy(() => import('./pages/client-portal-dashboard'));
+const PaymentConfirmationScreen = lazy(() => import('./pages/payment-confirmation-screen'));
+const UserRegistrationScreen    = lazy(() => import('./pages/user-registration-screen'));
+const KYCManagementScreen       = lazy(() => import('./pages/kyc-management-screen'));
+const KYCRenewalManagementScreen= lazy(() => import('./pages/kyc-renewal-management-screen'));
+const SuperAdminDashboard       = lazy(() => import('./pages/super-admin-dashboard'));
+const AdminRegistration         = lazy(() => import('./pages/admin-registration'));
+const AdminDashboard            = lazy(() => import('./pages/admin-dashboard'));
+const FinanceHub                = lazy(() => import('./pages/finance-hub'));
+const HRPage                    = lazy(() => import('./pages/hr-management'));
+const POSModule                 = lazy(() => import('./pages/pos-module'));
+const ESignaturePage            = lazy(() => import('./pages/e-signature'));
+const ExternalSignPage          = lazy(() => import('./pages/external-sign'));
+const ResetPassword             = lazy(() => import('./pages/reset-password'));
+const ClientPortal              = lazy(() => import('./pages/client-portal'));
+const SubscriptionBilling       = lazy(() => import('./pages/subscription-billing'));
+const ProfilePage               = lazy(() => import('./pages/profile'));
+const SaccoDashboard            = lazy(() => import('./pages/sacco-dashboard'));
+const SaccoMemberPortal         = lazy(() => import('./pages/sacco-member-portal'));
+const SaccoOversight            = lazy(() => import('./pages/sacco-oversight'));
+const ChoosePortal              = lazy(() => import('./pages/choose-portal'));
+const PublicListing             = lazy(() => import('./pages/public-listing'));
+
+// Matches the splash ProtectedRoute shows while the session is restoring, so a
+// cold load that has to do both does not visibly change skin halfway through.
+const RouteFallback = () => (
+  <div className="min-h-screen bg-background flex items-center justify-center">
+    <div className="flex flex-col items-center gap-4">
+      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center shadow-lg shadow-blue-500/30 animate-pulse">
+        <Icon name="Building2" size={24} color="white" />
+      </div>
+      <div className="flex items-center gap-2 text-muted-foreground">
+        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        </svg>
+        <span className="text-sm">Loading…</span>
+      </div>
+    </div>
+  </div>
+);
 
 const ADMIN_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations'];
 // sacco_admin runs the same back-office tooling as a company admin (finance,
@@ -68,6 +94,7 @@ const Routes = () => {
     <BrowserRouter>
       <ErrorBoundary>
         <ScrollToTop />
+        <Suspense fallback={<RouteFallback />}>
         <RouterRoutes>
 
           {/* ── Public routes ──────────────────────────────────────────── */}
@@ -304,6 +331,7 @@ const Routes = () => {
 
           <Route path="*" element={<NotFound />} />
         </RouterRoutes>
+        </Suspense>
       </ErrorBoundary>
     </BrowserRouter>
   );

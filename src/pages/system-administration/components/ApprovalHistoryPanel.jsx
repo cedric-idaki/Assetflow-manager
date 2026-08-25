@@ -22,10 +22,10 @@ const ApprovalHistoryPanel = () => {
   const fetchHistory = async () => {
     setLoading(true);
     try {
-      let query = supabase?.from('maker_checker_queue')?.select('*', { count: 'exact' })?.not('status', 'eq', 'pending')?.order('updated_at', { ascending: false })?.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+      let query = supabase.from('maker_checker_queue').select('*', { count: 'exact' }).not('status', 'eq', 'pending').order('updated_at', { ascending: false }).range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
-      if (filterStatus !== 'all') query = query?.eq('status', filterStatus);
-      if (filterType !== 'all') query = query?.eq('action_type', filterType);
+      if (filterStatus !== 'all') query = query.eq('status', filterStatus);
+      if (filterType !== 'all') query = query.eq('action_type', filterType);
 
       const { data, error, count } = await query;
       if (error) throw error;

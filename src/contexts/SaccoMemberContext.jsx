@@ -12,7 +12,7 @@
 import React, {
   createContext, useContext, useState, useEffect, useCallback, useRef,
 } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, invokeSupabaseFunction } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 
 const SaccoMemberContext = createContext(null);

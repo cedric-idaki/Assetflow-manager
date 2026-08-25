@@ -89,7 +89,7 @@ export default function RecurringBillingPanel() {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: err } = await supabase?.from('installment_plans')?.select('*, clients(full_name, email, account_number)')?.order('created_at', { ascending: false });
+      const { data, error: err } = await supabase.from('installment_plans').select('*, clients(full_name, email, account_number)').order('created_at', { ascending: false });
       if (err) throw err;
       setPlans(data || []);
     } catch (err) {
@@ -101,7 +101,7 @@ export default function RecurringBillingPanel() {
 
   const loadCharges = useCallback(async (planId) => {
     try {
-      const { data, error: err } = await supabase?.from('installment_charges')?.select('*')?.eq('plan_id', planId)?.order('installment_number', { ascending: true });
+      const { data, error: err } = await supabase.from('installment_charges').select('*').eq('plan_id', planId).order('installment_number', { ascending: true });
       if (err) throw err;
       setCharges(data || []);
     } catch (err) {
@@ -129,10 +129,10 @@ export default function RecurringBillingPanel() {
 
   // Real-time subscription
   useEffect(() => {
-    const channel = supabase?.channel(`installment_plans_changes_${++_recurringBillingChannelSeq}`)?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_plans' }, () => loadPlans())?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_charges' }, () => {
+    const channel = supabase.channel(`installment_plans_changes_${++_recurringBillingChannelSeq}`)?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_plans' }, () => loadPlans())?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_charges' }, () => {
         if (selectedPlan) loadCharges(selectedPlan?.id);
       })?.subscribe();
-    return () => supabase?.removeChannel(channel);
+    return () => supabase.removeChannel(channel);
   }, [loadPlans, loadCharges, selectedPlan]);
 
   const validateForm = () => {
@@ -152,8 +152,8 @@ export default function RecurringBillingPanel() {
     setCreating(true);
     setError(null);
     try {
-      const { data: { user } } = await supabase?.auth?.getUser();
-      const { data, error: err } = await supabase?.functions?.invoke('create-installment-plan', {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data, error: err } = await supabase.functions.invoke('create-installment-plan', {
         body: {
           planData: {
             clientId: form?.clientId,
@@ -191,7 +191,7 @@ export default function RecurringBillingPanel() {
     setActionLoading(charge?.id);
     setError(null);
     try {
-      const { data, error: err } = await supabase?.functions?.invoke('process-installment-charge', {
+      const { data, error: err } = await supabase.functions.invoke('process-installment-charge', {
         body: { chargeId: charge?.id },
       });
       if (err) throw err;
@@ -228,7 +228,7 @@ export default function RecurringBillingPanel() {
     setActionLoading(`pause-${plan?.id}`);
     try {
       const newStatus = plan?.plan_status === 'paused' ? 'active' : 'paused';
-      const { error: err } = await supabase?.from('installment_plans')?.update({ plan_status: newStatus, updated_at: new Date()?.toISOString() })?.eq('id', plan?.id);
+      const { error: err } = await supabase.from('installment_plans').update({ plan_status: newStatus, updated_at: new Date()?.toISOString() }).eq('id', plan?.id);
       if (err) throw err;
       setSuccessMsg(`Plan ${newStatus === 'paused' ? 'paused' : 'resumed'} successfully.`);
       await loadPlans();
@@ -246,7 +246,7 @@ export default function RecurringBillingPanel() {
     if (!window.confirm(`Cancel plan "${plan?.plan_name}"? This cannot be undone.`)) return;
     setActionLoading(`cancel-${plan?.id}`);
     try {
-      const { error: err } = await supabase?.from('installment_plans')?.update({ plan_status: 'cancelled', updated_at: new Date()?.toISOString() })?.eq('id', plan?.id);
+      const { error: err } = await supabase.from('installment_plans').update({ plan_status: 'cancelled', updated_at: new Date()?.toISOString() }).eq('id', plan?.id);
       if (err) throw err;
       setSuccessMsg('Plan cancelled.');
       await loadPlans();

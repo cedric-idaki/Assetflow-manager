@@ -57,7 +57,7 @@ const RegistrationForm = () => {
   };
 
   const handleChange = (e) => {
-    const { name, value, type, checked } = e?.target;
+    const { name, value, type, checked } = e.target;
     setFormData((prev) => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value,
@@ -79,7 +79,7 @@ const RegistrationForm = () => {
     setLoading(true);
     setServerError('');
     try {
-      const { data, error } = await supabase?.auth?.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email: formData?.email,
         password: formData?.password,
       });

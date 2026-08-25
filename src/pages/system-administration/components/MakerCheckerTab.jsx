@@ -67,18 +67,18 @@ const MakerCheckerTab = ({ onBadgeCountChange }) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnectionStatus('disconnected');
         if (status === 'CLOSED') setConnectionStatus('connecting');
       });
-    return () => supabase?.removeChannel(channel);
+    return () => supabase.removeChannel(channel);
   }, []);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase
-        ?.from('maker_checker_queue')
-        ?.select('*')
-        ?.in('status', ['pending', 'escalated'])
-        ?.order('priority', { ascending: false })
-        ?.order('created_at', { ascending: true });
+        .from('maker_checker_queue')
+        .select('*')
+        .in('status', ['pending', 'escalated'])
+        .order('priority', { ascending: false })
+        .order('created_at', { ascending: true });
       if (error) throw error;
       setQueueItems(data || []);
       const count = (data || [])?.length;
@@ -100,7 +100,7 @@ const MakerCheckerTab = ({ onBadgeCountChange }) => {
 
   const sendNotification = async (item, status, checkerComment) => {
     try {
-      await supabase?.functions?.invoke('maker-checker-notify', {
+      await supabase.functions.invoke('maker-checker-notify', {
         body: {
           action_id: item?.id,
           action_type: item?.action_type,
@@ -124,13 +124,13 @@ const MakerCheckerTab = ({ onBadgeCountChange }) => {
     setProcessingId(id);
     try {
       const item = queueItems?.find(q => q?.id === id);
-      const { error } = await supabase?.from('maker_checker_queue')?.update({
+      const { error } = await supabase.from('maker_checker_queue').update({
           status: 'approved',
           checker_comment: comment,
           checker_name: 'Current User',
           resolved_at: new Date()?.toISOString(),
           notification_sent: true,
-        })?.eq('id', id);
+        }).eq('id', id);
       if (error) throw error;
       if (item) await sendNotification(item, 'approved', comment);
       showToast('Action approved successfully');
@@ -146,13 +146,13 @@ const MakerCheckerTab = ({ onBadgeCountChange }) => {
     setProcessingId(id);
     try {
       const item = queueItems?.find(q => q?.id === id);
-      const { error } = await supabase?.from('maker_checker_queue')?.update({
+      const { error } = await supabase.from('maker_checker_queue').update({
           status: 'rejected',
           checker_comment: comment,
           checker_name: 'Current User',
           resolved_at: new Date()?.toISOString(),
           notification_sent: true,
-        })?.eq('id', id);
+        }).eq('id', id);
       if (error) throw error;
       if (item) await sendNotification(item, 'rejected', comment);
       showToast('Action rejected', 'warning');
@@ -167,11 +167,11 @@ const MakerCheckerTab = ({ onBadgeCountChange }) => {
   const handleEscalate = async (id, comment) => {
     setProcessingId(id);
     try {
-      const { error } = await supabase?.from('maker_checker_queue')?.update({
+      const { error } = await supabase.from('maker_checker_queue').update({
           status: 'escalated',
           escalation_reason: comment,
           escalated_at: new Date()?.toISOString(),
-        })?.eq('id', id);
+        }).eq('id', id);
       if (error) throw error;
       showToast('Action escalated for senior review', 'warning');
       await fetchQueue();
@@ -189,13 +189,13 @@ const MakerCheckerTab = ({ onBadgeCountChange }) => {
     }
     setBulkProcessing(true);
     try {
-      const { error } = await supabase?.from('maker_checker_queue')?.update({
+      const { error } = await supabase.from('maker_checker_queue').update({
           status: 'approved',
           checker_comment: bulkComment,
           checker_name: 'Current User',
           resolved_at: new Date()?.toISOString(),
           notification_sent: true,
-        })?.in('id', selectedIds);
+        }).in('id', selectedIds);
       if (error) throw error;
       showToast(`${selectedIds?.length} actions approved successfully`);
       setSelectedIds([]);
