@@ -3,6 +3,9 @@ import { supabase } from '../lib/supabase';
 import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { monthlyInstallmentFor } from './usePOS';
 
+// Module-level counter — see realtime channel naming convention.
+let _financeHubChannelSeq = 0;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // KENYA TAX ENGINE (2025/26)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -604,8 +607,9 @@ export const useFinanceHub = () => {
   // Real-time journal updates
   useEffect(() => {
     if (!adminId) return;
+    const t = ++_financeHubChannelSeq;
     const ch = supabase
-      .channel(`fh_${adminId}`)
+      .channel(`fh_${adminId}_${t}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'journal_entries', filter: `admin_id=eq.${adminId}` },
         async () => {
           const journals = await fetchJournalEntries(adminId);

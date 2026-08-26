@@ -3,6 +3,11 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { auditLogsService } from '../services/supabaseService';
+
+// Module-level counter: these eight channel names were unique per AGENT but
+// fixed across remounts, so navigating off the portal and back re-ran this
+// effect while removeChannel() was still settling and .on() threw.
+let _agentPortalChannelSeq = 0;
 import { sendAssistRequest, sendAssistUpdate } from '../services/emailService';
 import {
   helpTypeLabel, declineReasonLabel, isHelpType, isDeclineReason,
@@ -423,9 +428,10 @@ export const useSalesAgentPortal = () => {
   useEffect(() => {
     if (!agentProfile?.id) return;
     const agentId = agentProfile.id;
+    const t = ++_agentPortalChannelSeq;
 
     const agentProfileChannel = supabase
-      .channel(`agent_profile_${agentId}`)
+      .channel(`agent_profile_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agents', filter: `id=eq.${agentId}` }, async (payload) => {
         if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
           const nextProfile = payload.new || payload?.new?.[0] || null;
@@ -440,22 +446,22 @@ export const useSalesAgentPortal = () => {
       .subscribe();
 
     const leadsChannel = supabase
-      .channel(`leads_${agentId}`)
+      .channel(`leads_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads', filter: `agent_id=eq.${agentId}` }, () => fetchLeads(agentId))
       .subscribe((status) => { if (status === 'SUBSCRIBED') setConnected(true); });
 
     const walletChannel = supabase
-      .channel(`wallet_${agentId}`)
+      .channel(`wallet_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_wallets', filter: `agent_id=eq.${agentId}` }, () => fetchWallet(agentId))
       .subscribe();
 
     const expensesChannel = supabase
-      .channel(`expenses_${agentId}`)
+      .channel(`expenses_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_expenses', filter: `agent_id=eq.${agentId}` }, () => fetchExpenses(agentId))
       .subscribe();
 
     const followUpsChannel = supabase
-      .channel(`followups_${agentId}`)
+      .channel(`followups_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'follow_ups', filter: `agent_id=eq.${agentId}` }, () => {
         fetchFollowUps(agentId);
         fetchCompletedFollowUps(agentId);
@@ -463,7 +469,7 @@ export const useSalesAgentPortal = () => {
       .subscribe();
 
     const auditChannel = supabase
-      .channel(`audit_${user?.id}`)
+      .channel(`audit_${user?.id}_${t}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs', filter: `user_id=eq.${user?.id}` }, () => fetchActivityFeed())
       .subscribe();
 
@@ -471,12 +477,12 @@ export const useSalesAgentPortal = () => {
     // own channel. The incoming one is the point of the feature: a gold agent
     // should see "someone needs help" while it is still useful, not at payday.
     const assistsInChannel = supabase
-      .channel(`assists_in_${agentId}`)
+      .channel(`assists_in_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists', filter: `gold_agent_id=eq.${agentId}` }, () => fetchAssists(agentId))
       .subscribe();
 
     const assistsOutChannel = supabase
-      .channel(`assists_out_${agentId}`)
+      .channel(`assists_out_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists', filter: `bronze_agent_id=eq.${agentId}` }, () => fetchAssists(agentId))
       .subscribe();
 

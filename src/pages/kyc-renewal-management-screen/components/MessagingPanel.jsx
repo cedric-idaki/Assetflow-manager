@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
 
+// Module-level counter — see realtime channel naming convention.
+let _kycMessagesChannelSeq = 0;
+
 const formatTime = (iso) => {
   const d = new Date(iso);
   return d.toLocaleString('en-KE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -44,7 +47,7 @@ const MessagingPanel = ({ renewal, currentUser }) => {
 
     // Realtime subscription for new messages
     const channel = supabase
-      .channel(`kyc_messages_${renewal.id}`)
+      .channel(`kyc_messages_${renewal.id}_${++_kycMessagesChannelSeq}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',

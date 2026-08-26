@@ -16,6 +16,9 @@ import { detectSignableAreas } from "../../utils/detectSignableAreas";
 import { sendSigningOtp, sendSignatureAlert, sendSigningInvite } from "../../services/emailService";
 import { sendSigningLinkSMS } from "../../services/smsService";
 
+// Module-level counter — see realtime channel naming convention.
+let _esignChannelSeq = 0;
+
 // ── Audit event display mapping ─────────────────────────────────────────────────
 const AUDIT_ACTION_LABEL = {
   created: "Document Created & Uploaded",
@@ -1210,7 +1213,7 @@ export default function ESignaturePage() {
       }, 400);
     };
     const ch = supabase
-      .channel(`esign-live-${adminId}`)
+      .channel(`esign-live-${adminId}_${++_esignChannelSeq}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "esign_signers", filter: `admin_id=eq.${adminId}` }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "esign_documents", filter: `admin_id=eq.${adminId}` }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "esign_notifications", filter: `admin_id=eq.${adminId}` }, refresh)
