@@ -3,6 +3,7 @@ import Icon from '../AppIcon';
 import { supabase } from '../../lib/supabase';
 import { sendSigningInvite } from '../../services/emailService';
 import { sendSigningLinkSMS } from '../../services/smsService';
+import useDragReorder, { ReorderHandle, newRowUid } from '../esign/useDragReorder';
 
 // One-time token for an external signer's secure /sign/:token link.
 const genSignToken = () =>
@@ -17,6 +18,7 @@ const genSignToken = () =>
 // 'generated' rows in generated_contracts (POS sales).
 const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
   const [signers, setSigners] = useState([{
+    uid:   newRowUid(),
     name:  context.defaultClient?.name  || '',
     email: context.defaultClient?.email || '',
     phone: context.defaultClient?.phone || '',
@@ -30,8 +32,9 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
   const [doneCount, setDoneCount] = useState(null);
 
   const setS = (i, k, v) => setSigners(prev => prev.map((p, j) => j === i ? { ...p, [k]: v } : p));
-  const addSigner = () => setSigners(p => [...p, { name: '', email: '', phone: '', role: 'Signer', type: 'external' }]);
+  const addSigner = () => setSigners(p => [...p, { uid: newRowUid(), name: '', email: '', phone: '', role: 'Signer', type: 'external' }]);
   const removeSigner = (i) => setSigners(p => p.filter((_, j) => j !== i));
+  const drag = useDragReorder(setSigners);
 
   const handleSend = async () => {
     const clean = signers.filter(s => s.email.trim());
@@ -146,9 +149,20 @@ const SendForSignatureModal = ({ context, adminId, onClose, onSent }) => {
             )}
 
             {signers.map((s, i) => (
-              <div key={i} className="border border-border rounded-xl p-3 space-y-2">
+              <div key={s.uid} {...drag.rowProps(i)}
+                className={`border border-border rounded-xl p-3 space-y-2 transition-all ${drag.rowClass(i)}`}>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-muted-foreground">Signer {i + 1}</span>
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                    {signers.length > 1 && (
+                      <ReorderHandle {...drag.handleProps(i, signers.length, 'signer')} />
+                    )}
+                    Signer {i + 1}
+                    {order === 'sequential' && signers.length > 1 && (
+                      <span className="text-[10px] font-medium text-muted-foreground/70 bg-muted rounded-full px-1.5 py-0.5">
+                        signs #{i + 1}
+                      </span>
+                    )}
+                  </span>
                   {signers.length > 1 && (
                     <button onClick={() => removeSigner(i)} className="text-muted-foreground hover:text-red-500">
                       <Icon name="X" size={13} color="currentColor" />
