@@ -93,6 +93,7 @@ var Sidebar = function(props) {
     { label: 'POS / New Sale',   path: '/pos',                           icon: 'ShoppingCart',modules: ['pos'] },
     { label: 'E-Signature',       path: '/e-signature',                   icon: 'PenTool',     modules: ['esign'] },
     { label: 'Payments',         path: '/payment-collections-hub',       icon: 'CreditCard',  modules: ['payments'] },
+    { label: 'Finance Hub',      path: '/finance-hub',                   icon: 'Landmark',    modules: ['accounting'] },
     { label: 'KYC Management',   path: '/kyc-management-screen',         icon: 'ShieldCheck', modules: ['kyc'] },
     { label: 'Reports',          path: '/reports-analytics-center',      icon: 'BarChart3',   modules: ['reports'] },
     { label: 'HR Management',     path: '/hr-management',                 icon: 'Users',       modules: ['hr'] },

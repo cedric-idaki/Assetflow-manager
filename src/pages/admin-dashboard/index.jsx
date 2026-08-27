@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
@@ -75,7 +75,6 @@ const AdminDashboard = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'overview';
   const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
-  const navigate = useNavigate();
 
   // Seat limit comes from the subscription's own snapshot (reflects purchased
   // extra users), falling back to the catalog plan. Only portal-staff consume
@@ -121,14 +120,6 @@ const AdminDashboard = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate('/finance-hub')}
-              className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border border-border text-muted-foreground hover:text-primary hover:border-primary/40 transition-all"
-              title="Open Finance Hub"
-            >
-              <Icon name="TrendingUp" size={15} color="currentColor" />
-              <span className="hidden sm:inline text-xs">Finance Hub</span>
-            </button>
             <ConnDot status={connectionStatus} />
             <button
               onClick={refetch}
