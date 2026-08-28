@@ -558,20 +558,38 @@ export const useSalesAgentPortal = () => {
     return data;
   }, [agentProfile?.id, user?.id]);
 
-  const updateLeadStage = useCallback(async (leadId, newStage) => {
+  /**
+   * Move a lead along the pipeline.
+   *
+   * `lost` carries why the deal died, and is only meaningful when the lead is
+   * being closed WITHOUT converting. The database clears lost_reason/lost_notes
+   * automatically if the lead is later revived or converted
+   * (trg_leads_stamp_lost), so nothing here has to remember to undo it — a lead
+   * that comes back to life must not stay in the loss report.
+   */
+  const updateLeadStage = useCallback(async (leadId, newStage, lost = null) => {
+    const patch = { stage: newStage, updated_at: new Date().toISOString() };
+
+    if (newStage === 'closed' && lost?.reason) {
+      patch.lost_reason = lost.reason;
+      patch.lost_notes  = lost.notes?.trim() || null;
+    }
+
     const { error: err } = await supabase
       .from('leads')
-      .update({ stage: newStage, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq('id', leadId);
     if (err) throw err;
-    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, stage: newStage } : l));
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
     await auditLogsService.log(
       'update',
       'leads',
-      `Lead stage updated to "${newStage.replace(/_/g, ' ')}" by agent ${agentProfile?.agent_code || ''}`,
+      `Lead stage updated to "${newStage.replace(/_/g, ' ')}"`
+        + (patch.lost_reason ? ` — lost: ${patch.lost_reason}` : '')
+        + ` by agent ${agentProfile?.agent_code || ''}`,
       leadId,
       null,
-      { stage: newStage, agent_code: agentProfile?.agent_code }
+      { stage: newStage, lost_reason: patch.lost_reason || null, agent_code: agentProfile?.agent_code }
     );
   }, [user?.id, agentProfile]);
 

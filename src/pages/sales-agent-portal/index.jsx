@@ -26,6 +26,7 @@ import CrmPanel from './components/CrmPanel';
 import LogInteractionModal from './components/LogInteractionModal';
 import InteractionTimeline from './components/InteractionTimeline';
 import CustomerRecord from '../../components/crm/CustomerRecord';
+import LostReasonModal from './components/LostReasonModal';
 import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
 import { deriveStaleLeads } from '../../hooks/useCrmInteractions';
 
@@ -719,8 +720,34 @@ const SalesAgentPortal = () => {
     showToast('Lead registered successfully!');
   };
 
+  // Closing a lead without converting it is the ONE moment the reason is
+  // actually known, so both close paths (drag-to-closed and the detail modal)
+  // are intercepted here rather than each growing its own copy of the prompt.
+  // A lead that already converted is a win being tidied up, not a loss — it is
+  // never asked.
+  const [pendingClose, setPendingClose] = useState(null);
+
+  const requestStageChange = async (leadId, newStage) => {
+    const lead = leads.find(l => l.id === leadId);
+    if (newStage === 'closed' && lead && !lead.converted_at) {
+      setPendingClose(lead);
+      return;
+    }
+    await updateLeadStage(leadId, newStage);
+  };
+
+  const confirmClose = async (lost) => {
+    const lead = pendingClose;
+    if (!lead) return;
+    await updateLeadStage(lead.id, 'closed', lost);
+    setPendingClose(null);
+    showToast(lost?.reason ? 'Lead closed — reason recorded' : 'Lead closed');
+  };
+
   const handleDrop = async (leadId, newStage) => {
-    try { await updateLeadStage(leadId, newStage); } catch (err) {}
+    // Swallowed on purpose: a failed drag should not throw out of a drop
+    // handler. requestStageChange surfaces real failures through the modal.
+    try { await requestStageChange(leadId, newStage); } catch (err) {}
   };
 
   // What this agent registers by default — the sacco path is the explicit
@@ -1499,12 +1526,20 @@ const SalesAgentPortal = () => {
         />
       )}
 
+      {/* ── Why was this lead lost? ── */}
+      <LostReasonModal
+        open={Boolean(pendingClose)}
+        lead={pendingClose}
+        onCancel={() => setPendingClose(null)}
+        onConfirm={confirmClose}
+      />
+
       {/* ── Lead Detail Modal ── */}
       {modals.leadDetail && (
         <LeadDetailModal
           lead={modals.leadDetail}
           onClose={() => closeModal('leadDetail')}
-          onStageChange={updateLeadStage}
+          onStageChange={requestStageChange}
           onConvertToClient={handleConvertToClient}
           onScheduleFollowUp={handleScheduleFollowUp}
           onLogInteraction={handleOpenLogInteraction}
