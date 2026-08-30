@@ -15,7 +15,7 @@ import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 
 import KYCReviewTab   from './components/KYCReviewTab';
-import CrmOversightTab from '../../components/crm/CrmOversightTab';
+import AdminCrmTab from '../../components/crm/AdminCrmTab';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -258,13 +258,15 @@ const AdminDashboard = () => {
           </>
         )}
 
-        {/* CRM TAB — the pipeline and contact history behind the Sales Agents
-            tab. Rendered outside the loading swap because it fetches its own
-            rows (leads / crm_interactions arrive through the supervisor
-            policies, not through useAdminDashboard) and carries its own
-            skeleton — gating it on this page's spinner would leave it blank
-            while its data was already there. */}
-        {activeTab === 'crm' && <CrmOversightTab onExport={exportCSV} />}
+        {/* CRM TAB — the admin's own customer relationships (client book,
+            diary, communication record, reporting) with the read-only agent
+            oversight kept as one view inside it. Rendered outside the loading
+            swap because it fetches its own rows (clients / crm_interactions /
+            follow_ups arrive through the supervisor policies, not through
+            useAdminDashboard) and carries its own skeleton — gating it on this
+            page's spinner would leave it blank while its data was already
+            there. */}
+        {activeTab === 'crm' && <AdminCrmTab onExport={exportCSV} />}
 
         {/* CONTRACTS TAB — render directly (no loading swap) so the upload modal
             and its selected-file state aren't torn down by a background refetch */}

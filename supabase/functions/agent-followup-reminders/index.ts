@@ -6,9 +6,11 @@
 // same mechanism kyc-renewal-reminders and sacco-governance-tick use). It:
 //   1. finds every OPEN follow-up whose remind_at has passed and that has not
 //      been reminded yet (public.follow_ups, indexed by idx_follow_ups_due);
-//   2. emails the owning agent via the send-email `agent_follow_up_reminder`
-//      template;
-//   3. writes an audit_logs row so the reminder also lands in the agent's
+//   2. emails whoever OWNS it via the send-email `agent_follow_up_reminder`
+//      template — the agent for an agent's appointment, and since
+//      20260830180000 the person who booked it for one the office keeps in its
+//      own diary (agent_id IS NULL);
+//   3. writes an audit_logs row so the reminder also lands in that person's
 //      in-app notification bell (the Header bell reads audit_logs);
 //   4. stamps reminder_sent_at so the same follow-up is never emailed twice.
 //
@@ -28,9 +30,13 @@ declare const Deno: any;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-// Where the agent portal lives, for the "open my portal" button in the email.
+// Where the portal lives, for the "open my portal" button in the email. An
+// appointment booked by the office belongs to the admin CRM tab, not the agent
+// portal — sending a manager to a portal they cannot open is a dead link.
 const PORTAL_URL = Deno.env.get("PORTAL_URL") || "";
-const portalLink = PORTAL_URL ? `${PORTAL_URL.replace(/\/$/, "")}/sales-agent-portal` : "";
+const baseUrl = PORTAL_URL.replace(/\/$/, "");
+const portalLink = PORTAL_URL ? `${baseUrl}/sales-agent-portal` : "";
+const officeLink = PORTAL_URL ? `${baseUrl}/admin-dashboard?tab=crm` : "";
 
 // How far back to look. A follow-up whose remind_at is older than this was
 // almost certainly missed while the worker was down; emailing a two-week-old
@@ -106,6 +112,35 @@ const resolveAdminId = async (userId: string): Promise<string> => {
   const adminId = (Array.isArray(data) && data[0]?.admin_id) || userId;
   adminIdCache.set(userId, adminId);
   return adminId;
+};
+
+// Who to remind when NO agent owns the appointment.
+//
+// Since 20260830180000 the office keeps its own diary: follow_ups with
+// agent_id IS NULL, owned by the tenant. Those rows have no agents row to
+// embed, and before this they fell into the `no_email` bucket and were stamped
+// as sent — a reminder silently swallowed for every appointment an admin ever
+// booked.
+//
+// The reminder goes to whoever BOOKED it (created_by) rather than to the
+// tenant owner, because a manager who promised to ring somebody on Friday is
+// the person who needs telling. admin_id is the fallback for rows written by a
+// backend with no session behind them.
+const profileCache = new Map<string, { id: string; email: string; full_name: string } | null>();
+
+const resolveProfile = async (userId: string | null) => {
+  if (!userId) return null;
+  if (profileCache.has(userId)) return profileCache.get(userId)!;
+
+  const { data } = await rest(`/user_profiles?select=id,email,full_name,is_active&id=eq.${userId}&limit=1`);
+  const row = Array.isArray(data) ? data[0] : null;
+  // A deactivated account still owns its appointments, but emailing somebody
+  // who has been switched off is noise; the in-app notification still lands.
+  const profile = row?.email && row?.is_active !== false
+    ? { id: row.id, email: row.email, full_name: row.full_name || "" }
+    : null;
+  profileCache.set(userId, profile);
+  return profile;
 };
 
 // How the follow-up is meant to happen, for the notification text. A bell entry
@@ -189,9 +224,13 @@ serve(async (req) => {
   try {
     // 1. Due, open, not yet reminded — embed the agent so we have their inbox.
     const { data: due, ok } = await rest(
-      `/follow_ups?select=id,agent_id,lead_id,lead_name,appointment_type,scheduled_at,remind_at,location,notes,` +
+      `/follow_ups?select=id,agent_id,admin_id,created_by,lead_id,client_id,lead_name,appointment_type,` +
+        `scheduled_at,remind_at,location,notes,` +
         `agent:agents(id,full_name,email,user_id,agent_code),` +
-        `lead:leads(full_name,phone,email)` +
+        `lead:leads(full_name,phone,email),` +
+        // The office books appointments against CLIENTS, which leads cannot
+        // stand in for: a converted customer has no lead row to embed.
+        `client:clients(full_name,phone,email)` +
         `&is_completed=eq.false&reminder_sent_at=is.null&remind_at=lte.${now.toISOString()}` +
         `&order=remind_at.asc&limit=200`,
     );
@@ -217,26 +256,35 @@ serve(async (req) => {
         continue;
       }
 
-      const agentEmail = f.agent?.email;
-      if (!agentEmail) {
+      // Who owns this appointment. An agent's row is embedded; the office's
+      // has to be looked up, because admin_id / created_by carry no foreign
+      // key PostgREST could join through.
+      const owner = f.agent?.email
+        ? { email: f.agent.email, name: f.agent.full_name, userId: f.agent.user_id, url: portalLink }
+        : await (async () => {
+            const p = await resolveProfile(f.created_by || f.admin_id || null);
+            return p ? { email: p.email, name: p.full_name, userId: p.id, url: officeLink } : null;
+          })();
+
+      if (!owner?.email) {
         summary.no_email++;
         await stamp();
         continue;
       }
 
-      const leadName  = f.lead?.full_name || f.lead_name || "a lead";
+      const leadName  = f.lead?.full_name || f.client?.full_name || f.lead_name || "a contact";
       const isOverdue = new Date(f.scheduled_at) < now;
 
-      const { ok: sent, error } = await sendEmail(agentEmail, {
-        agentName:       f.agent?.full_name,
+      const { ok: sent, error } = await sendEmail(owner.email, {
+        agentName:       owner.name,
         leadName,
-        leadPhone:       f.lead?.phone,
-        leadEmail:       f.lead?.email,
+        leadPhone:       f.lead?.phone || f.client?.phone,
+        leadEmail:       f.lead?.email || f.client?.email,
         appointmentType: f.appointment_type,
         scheduledAt:     f.scheduled_at,
         location:        f.location,
         notes:           f.notes,
-        portalUrl:       portalLink,
+        portalUrl:       owner.url,
         isOverdue,
       });
 
@@ -248,7 +296,7 @@ serve(async (req) => {
 
       // In-app notification regardless of email outcome.
       await logNotification(
-        f.agent?.user_id || null, f.id, leadName, f.scheduled_at, isOverdue, f.appointment_type,
+        owner.userId || null, f.id, leadName, f.scheduled_at, isOverdue, f.appointment_type,
       );
 
       // Stamp either way — see the header note on retry loops.

@@ -137,6 +137,7 @@ var Sidebar = function(props) {
   var saccoAdminItems = [
     { label: 'Dashboard',     path: '/sacco-dashboard', icon: 'LayoutDashboard', tab: 'overview' },
     { label: 'Shares',        path: '/sacco-dashboard', icon: 'PieChart',        tab: 'shares', modules: ['shares'] },
+    { label: 'Asset Register', path: '/sacco-dashboard', icon: 'Package',        tab: 'assets', modules: ['fixed_assets'] },
     // Shared back-office modules (same pages as a company admin; data stays
     // tenant-isolated). Sales agents are created under Staff & System.
     { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool',  modules: ['esign'] },

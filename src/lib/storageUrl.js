@@ -25,6 +25,10 @@ const PRIVATE_BUCKETS = new Set([
   'contracts',
   'esign-documents',
   'employee-documents',
+  // Asset register attachments — title deeds and logbooks, private from the
+  // first day (20260830200000). Rows here store the BARE PATH rather than a
+  // URL, so callers pass { bucket: ASSET_DOC_BUCKET } to resolve one.
+  'sacco-asset-documents',
 ]);
 
 /** Long enough to open and read a document, short enough not to be a share link. */

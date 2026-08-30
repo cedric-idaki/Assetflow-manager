@@ -41,8 +41,16 @@ const toLocalInput = (date) => {
   return d.toISOString().slice(0, 16);
 };
 
+/**
+ * `clients` and `prefillClient` are for the administrator's CRM, which books
+ * appointments against CUSTOMERS rather than leads — a converted buyer is
+ * still somebody you ring, and follow_ups.client_id (20260830180000) is where
+ * that now lands. Both default to empty, so the agent portal renders exactly
+ * what it always did.
+ */
 const ScheduleFollowUpModal = ({
   isOpen, onClose, onSubmit, leads = [], prefillLead = null, prefillChannel = null,
+  clients = [], prefillClient = null,
 }) => {
   const defaultWhen = useMemo(() => {
     // Default to a week out at 10:00 — the most common "check me next week".
@@ -54,7 +62,8 @@ const ScheduleFollowUpModal = ({
 
   const [form, setForm] = useState({
     leadId:          prefillLead?.id || '',
-    leadName:        prefillLead?.full_name || '',
+    clientId:        prefillClient?.id || '',
+    leadName:        prefillLead?.full_name || prefillClient?.full_name || '',
     appointmentType: toFollowUpChannel(prefillChannel),
     scheduledAt:     defaultWhen,
     reminderOffset:  60,
@@ -78,8 +87,16 @@ const ScheduleFollowUpModal = ({
 
   const handleLeadPick = (leadId) => {
     const lead = (leads || []).find(l => l.id === leadId);
-    setForm(p => ({ ...p, leadId, leadName: lead?.full_name || p.leadName }));
-    setErrors(p => ({ ...p, leadId: '' }));
+    // Picking one side clears the other: an appointment is with one person, and
+    // sending both ids would put it in two timelines.
+    setForm(p => ({ ...p, leadId, clientId: leadId ? '' : p.clientId, leadName: lead?.full_name || p.leadName }));
+    setErrors(p => ({ ...p, leadId: '', leadName: '' }));
+  };
+
+  const handleClientPick = (clientId) => {
+    const client = (clients || []).find(c => c.id === clientId);
+    setForm(p => ({ ...p, clientId, leadId: clientId ? '' : p.leadId, leadName: client?.full_name || p.leadName }));
+    setErrors(p => ({ ...p, leadName: '' }));
   };
 
   const applyQuick = (days) => {
@@ -118,7 +135,9 @@ const ScheduleFollowUpModal = ({
     try {
       await onSubmit({
         leadId:          form.leadId || null,
+        clientId:        form.clientId || null,
         leadName:        form.leadName.trim(),
+        contactName:     form.leadName.trim(),
         appointmentType: form.appointmentType,
         scheduledAt:     form.scheduledAt,
         remindAt:        computeRemindAt(),
@@ -161,12 +180,14 @@ const ScheduleFollowUpModal = ({
 
           {/* Who */}
           <div>
-            <label className="block text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wide">Lead</label>
-            {openLeads.length > 0 ? (
+            <label className="block text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wide">
+              {clients.length > 0 ? 'Who' : 'Lead'}
+            </label>
+            {openLeads.length > 0 && (
               <select
                 value={form.leadId}
                 onChange={e => handleLeadPick(e.target.value)}
-                className={ic(errors.leadName)}
+                className={`${ic(errors.leadName)}${clients.length > 0 ? ' mb-2' : ''}`}
               >
                 <option value="">— Select a lead —</option>
                 {openLeads.map(l => (
@@ -175,12 +196,29 @@ const ScheduleFollowUpModal = ({
                   </option>
                 ))}
               </select>
-            ) : (
+            )}
+            {clients.length > 0 && (
+              <select
+                value={form.clientId}
+                onChange={e => handleClientPick(e.target.value)}
+                className={`${ic(false)} mb-2`}
+              >
+                <option value="">{openLeads.length > 0 ? '— or an existing client —' : '— Select a client —'}</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.full_name}{c.phone ? ` · ${c.phone}` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+            {(openLeads.length === 0 || clients.length > 0) && (
               <input
                 type="text"
                 value={form.leadName}
                 onChange={e => set('leadName', e.target.value)}
-                placeholder="Who is this follow-up with?"
+                placeholder={clients.length > 0
+                  ? '…or just type a name (somebody not on the books yet)'
+                  : 'Who is this follow-up with?'}
                 className={ic(errors.leadName)}
               />
             )}
