@@ -2,6 +2,7 @@ import React from 'react';
 import Icon from '../AppIcon';
 import { useCustomerRecord } from '../../hooks/useCustomerRecord';
 import { typeMeta, outcomeMeta } from '../../hooks/useCrmInteractions';
+import { channelMeta } from '../../config/crmVocabulary';
 
 /**
  * One person, in full.
@@ -373,8 +374,8 @@ const CustomerRecord = ({
                     }`}>
                       {tag === 'done' ? 'Done' : tag === 'overdue' ? 'Overdue' : 'Upcoming'}
                     </span>
-                    <span className="text-foreground capitalize">
-                      {(f.appointment_type || 'follow up').replace(/_/g, ' ')}
+                    <span className="text-foreground">
+                      {channelMeta(f.appointment_type).label}
                     </span>
                     <span className="text-xs text-muted-foreground">{fmtWhen(f.scheduled_at)}</span>
                     {f.location && <span className="text-xs text-muted-foreground">· {f.location}</span>}

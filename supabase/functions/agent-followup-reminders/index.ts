@@ -108,6 +108,21 @@ const resolveAdminId = async (userId: string): Promise<string> => {
   return adminId;
 };
 
+// How the follow-up is meant to happen, for the notification text. A bell entry
+// that says "Email Jane Mwangi" tells the agent what to do; "Follow-up reminder"
+// makes them open the portal to find out. Mirrors CONTACT_CHANNELS in
+// src/config/crmVocabulary.js, plus the two pre-20260829140000 spellings that a
+// queue built before that migration can still be carrying.
+const CHANNEL_LABELS: Record<string, string> = {
+  follow_up: "Check-in", call: "Phone call", whatsapp: "WhatsApp", sms: "SMS",
+  email: "Email", meeting: "Meeting", site_visit: "Site visit",
+  proposal: "Proposal", other: "Follow-up",
+  phone_call: "Phone call", office_meeting: "Meeting",
+};
+
+const channelLabel = (value: unknown): string =>
+  CHANNEL_LABELS[String(value ?? "").toLowerCase()] || "Follow-up";
+
 // The in-app half of the reminder: the notification bell renders audit_logs.
 const logNotification = async (
   userId: string | null,
@@ -115,6 +130,7 @@ const logNotification = async (
   leadName: string,
   scheduledAt: string,
   isOverdue: boolean,
+  appointmentType: unknown,
 ) => {
   if (!userId) return;
   await rest("/audit_logs", {
@@ -127,8 +143,8 @@ const logNotification = async (
       table_name: "follow_ups",
       record_id: followUpId,
       description: isOverdue
-        ? `Overdue follow-up with ${leadName} — was due ${new Date(scheduledAt).toLocaleString("en-KE")}`
-        : `Follow-up reminder: ${leadName} at ${new Date(scheduledAt).toLocaleString("en-KE")}`,
+        ? `Overdue ${channelLabel(appointmentType).toLowerCase()} with ${leadName} — was due ${new Date(scheduledAt).toLocaleString("en-KE")}`
+        : `${channelLabel(appointmentType)} due: ${leadName} at ${new Date(scheduledAt).toLocaleString("en-KE")}`,
       severity: isOverdue ? "warning" : "info",
     }),
   });
@@ -231,7 +247,9 @@ serve(async (req) => {
       }
 
       // In-app notification regardless of email outcome.
-      await logNotification(f.agent?.user_id || null, f.id, leadName, f.scheduled_at, isOverdue);
+      await logNotification(
+        f.agent?.user_id || null, f.id, leadName, f.scheduled_at, isOverdue, f.appointment_type,
+      );
 
       // Stamp either way — see the header note on retry loops.
       await stamp();

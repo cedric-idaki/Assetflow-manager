@@ -2,7 +2,12 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import { calcKenyaTax } from '../../hooks/useFinanceHub';
+import { computePayroll, payrollInputForEmployee, resolvePayrollRecord } from '../../utils/kenyaPayroll';
+import { payslipDocument } from '../../utils/payslipDocument';
+import { buildP10Rows, p10Totals, p10Exceptions, P10_COLUMNS } from '../../utils/payeReturns';
+import { downloadCSV } from '../../utils/exportUtils';
+import { computeVatReturn } from '../../utils/vatLedger';
+import { buildIncomeStatement, buildBalanceSheet, buildCashFlow, buildTrialBalance } from '../../utils/financialStatements';
 import { useFinanceHubContext } from '../../contexts/FinanceHubContext';
 import { sendInvoiceEmail } from '../../services/emailService';
 import Icon from '../../components/AppIcon';
@@ -181,76 +186,25 @@ const toast = (msg, type = 'success') => {
   }, 3500);
 };
 
-// Printable payslip — opens a clean, print-ready window for the given employee/period
-const printPayslip = ({ company, employee, month, data }) => {
+// Printable payslip. The markup lives in src/utils/payslipDocument.js so HR can
+// print the same document, and so the payslip an employee receives can be
+// asserted on without going through a print dialog. This wrapper is only the
+// window + pop-up handling.
+export const printPayslip = ({ company, employee, month, data }) =>
+  openPrintWindow(payslipDocument([{ company, employee, month, data }]), 'payslip');
+
+// A whole month in one print job. The browser print dialog is the only route to
+// a file here, so "download all payslips" has to mean one document holding
+// every slip, page-broken — not one pop-up per employee.
+export const printPayslipBatch = (payslips) => {
+  if (!payslips || payslips.length === 0) { toast('No payslips to print', 'error'); return; }
+  openPrintWindow(payslipDocument(payslips), 'payslips');
+};
+
+const openPrintWindow = (markup, what) => {
   const w = window.open('', '_blank');
-  if (!w) { toast('Allow pop-ups to print the payslip', 'error'); return; }
-  const coName = company?.company_name || 'Ararat Company';
-  // These return pre-marked raw fragments, so `${earn(...)}` inside the escaped
-  // template below renders as markup while its label/value stay escaped.
-  const earn = (label, value) =>
-    rawHtml(html`<div class="row"><span>${label}</span><span>${fmt(value)}</span></div>`);
-  const ded = (label, value) =>
-    rawHtml(html`<div class="row"><span>${label}</span><span class="neg">(${fmt(value)})</span></div>`);
-  w.document.write(html`
-    <html><head><title>Payslip — ${employee.full_name || 'Employee'} — ${fmtMonth(month)}</title>
-    <style>
-      body { font-family: Arial, sans-serif; max-width: 640px; margin: 32px auto; color: #111; }
-      .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1A56DB; padding-bottom: 16px; margin-bottom: 20px; }
-      .co { font-size: 18px; font-weight: 700; }
-      .muted { color: #666; font-size: 12px; margin-top: 2px; }
-      .title { font-size: 22px; font-weight: 800; color: #1A56DB; text-align: right; }
-      .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; font-size: 13px; }
-      .lbl { font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: .05em; margin-bottom: 4px; }
-      .sec { font-weight: 700; border-bottom: 1px solid #ddd; padding-bottom: 6px; margin: 16px 0 4px; }
-      .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
-      .row span:last-child { font-family: monospace; font-weight: 600; }
-      .neg { color: #DC2626; }
-      .gross { font-weight: 700; border-top: 2px solid #111; }
-      .net { display: flex; justify-content: space-between; padding: 14px 0; border-top: 2px solid #111; margin-top: 8px; font-size: 18px; font-weight: 800; }
-      .net span:last-child { color: #059669; font-family: monospace; }
-      .foot { margin-top: 28px; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 12px; }
-    </style></head><body>
-      <div class="head">
-        <div>
-          <div class="co">${coName}</div>
-          ${company?.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${company.kra_pin}</div>`) : ''}
-          ${company?.physical_address ? rawHtml(html`<div class="muted">${company.physical_address}</div>`) : ''}
-        </div>
-        <div>
-          <div class="title">PAYSLIP</div>
-          <div class="muted" style="text-align:right;">${fmtMonth(month)}</div>
-        </div>
-      </div>
-      <div class="meta">
-        <div>
-          <div class="lbl">Employee</div>
-          <div style="font-weight:600;">${employee.full_name || '—'}</div>
-          ${employee.department ? rawHtml(html`<div class="muted">${employee.department}</div>`) : ''}
-          ${employee.email ? rawHtml(html`<div class="muted">${employee.email}</div>`) : ''}
-        </div>
-        <div>
-          <div class="lbl">Employee ID</div>
-          <div style="font-family:monospace;font-size:12px;word-break:break-all;">${employee.id || '—'}</div>
-          <div class="lbl" style="margin-top:8px;">Pay Period</div>
-          <div>${fmtMonth(month)}</div>
-        </div>
-      </div>
-      <div class="sec">Earnings</div>
-      ${earn('Basic Salary', data.basic)}
-      ${earn('Housing Allowance', data.housing)}
-      ${earn('Transport Allowance', data.transport)}
-      <div class="row gross"><span>Gross Pay</span><span>${fmt(data.gross)}</span></div>
-      <div class="sec">Deductions</div>
-      ${ded('PAYE (Income Tax)', data.paye)}
-      ${ded('NSSF (Tier I & II)', data.nssf)}
-      ${ded('SHA (2.75%)', data.shif)}
-      ${ded('Housing Levy (1.5%)', data.housingLevy)}
-      ${ded('Total Deductions', data.totalDeductions)}
-      <div class="net"><span>NET PAY</span><span>${fmt(data.net)}</span></div>
-      <div class="foot">Generated by ${coName} on ${fmtDate(new Date())} · Computer-generated payslip, no signature required.</div>
-    </body></html>
-  `);
+  if (!w) { toast(`Allow pop-ups to print the ${what}`, 'error'); return; }
+  w.document.write(markup);
   w.document.close();
   w.focus();
   w.print();
@@ -1574,6 +1528,68 @@ const ChartOfAccountsTab = ({ chartOfAccounts, loading, onAdd, onToggle }) => {
   );
 };
 
+/**
+ * The PAYE working, shown rather than asserted.
+ *
+ * A single "PAYE: 19,812" line is unfalsifiable — an employee querying their
+ * tax and an accountant answering KRA both need the base it was charged on and
+ * the band split that got there. This is the same arithmetic the payslip
+ * prints, on screen before the run is committed.
+ */
+const PayeWorking = ({ result }) => {
+  const [open, setOpen] = useState(false);
+  if (!result) return null;
+
+  const pct = (r) => `${(r * 100).toFixed(r === 0.325 ? 1 : 0)}%`;
+  const Line = ({ label, value, indent, strong, negative }) => (
+    <div className={`flex justify-between py-1.5 text-xs ${strong ? 'font-semibold border-t border-border mt-1 pt-2' : ''}`}>
+      <span className={`text-muted-foreground ${indent ? 'pl-4' : ''}`}>{label}</span>
+      <span className={`font-mono ${negative ? 'text-red-500' : 'text-foreground'}`}>
+        {negative ? `(${fmt(value)})` : fmt(value)}
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="mt-4 border border-border rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/30 hover:bg-muted/50 transition-colors"
+      >
+        <span className="text-xs font-semibold text-foreground">How this PAYE was calculated</span>
+        <Icon name={open ? 'ChevronUp' : 'ChevronDown'} size={14} color="var(--muted-foreground)" />
+      </button>
+
+      {open && (
+        <div className="px-3 py-2">
+          <Line label="Gross pay" value={result.grossPay} />
+          <Line label="NSSF" value={result.pensionDeduction} indent negative />
+          <Line label="SHIF" value={result.shif} indent negative />
+          <Line label="Affordable Housing Levy" value={result.housingLevy} indent negative />
+          {result.mortgageDeduction > 0 && <Line label="Mortgage interest" value={result.mortgageDeduction} indent negative />}
+          {result.medicalFundDeduction > 0 && <Line label="Post-retirement medical" value={result.medicalFundDeduction} indent negative />}
+          {result.disabilityRelief > 0 && <Line label="Disability exemption" value={result.disabilityRelief} indent negative />}
+          <Line label="Taxable pay" value={result.taxablePay} strong />
+
+          {result.payeBands.map(b => (
+            <Line key={b.rate} label={`${pct(b.rate)} on ${fmt(b.amount)}`} value={b.tax} indent />
+          ))}
+          <Line label="Tax on taxable pay" value={result.grossTax} strong />
+
+          <Line label="Personal relief" value={result.personalRelief} indent negative />
+          {result.insuranceRelief > 0 && <Line label="Insurance relief" value={result.insuranceRelief} indent negative />}
+          <Line label="PAYE payable" value={result.paye} strong />
+
+          <p className="text-[11px] text-muted-foreground mt-3 pt-2 border-t border-border">
+            Statutory rates: {result.rateLabel}
+            {result.beforeHistory && ' — this pay month predates the rate tables held in the app; figures are indicative only.'}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB 5 — PAYROLL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1586,9 +1602,12 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
   const [transport, setTransport] = useState('');
   const [preview, setPreview]   = useState(null);
   const [saving,  setSaving]    = useState(false);
-  // PAYE standalone calculator
+  // PAYE standalone calculator. Priced on the selected pay month, so checking a
+  // past month quotes that month's rates rather than today's.
   const [calcGross, setCalcGross] = useState('');
-  const calcResult = calcGross ? calcKenyaTax(parseFloat(calcGross)) : null;
+  const calcResult = calcGross
+    ? computePayroll({ payMonth: month, basic: parseFloat(calcGross) })
+    : null;
 
   const selectedEmp = employees.find(e => e.id === empId);
 
@@ -1610,23 +1629,27 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
     return () => { cancelled = true; };
   }, [empId]);
 
+  // The exact input the engine is given, so the preview on screen and the row
+  // that gets saved are two renderings of one calculation, never two guesses.
+  // Typing over a field is a one-off override of the employee's standing figure.
+  const buildInput = () => ({
+    ...payrollInputForEmployee(selectedEmp || {}, {}, month),
+    basic:              parseFloat(gross     || selectedEmp?.basic_salary        || 0),
+    housingAllowance:   parseFloat(housing   || selectedEmp?.housing_allowance   || 0),
+    transportAllowance: parseFloat(transport || selectedEmp?.transport_allowance || 0),
+  });
+
   const handlePreview = () => {
-    const g = parseFloat(gross || selectedEmp?.basic_salary || 0);
-    const h = parseFloat(housing || selectedEmp?.housing_allowance || 0);
-    const t = parseFloat(transport || selectedEmp?.transport_allowance || 0);
-    if (!g) { toast('Enter a gross salary', 'error'); return; }
-    const totalGross = g + h + t;
-    setPreview({ ...calcKenyaTax(totalGross), housing: h, transport: t, basic: g });
+    const input = buildInput();
+    if (!input.basic) { toast('Enter a gross salary', 'error'); return; }
+    setPreview(computePayroll(input));
   };
 
   const handleRun = async () => {
     if (!empId || !month || !preview) { toast('Select employee, month and preview first', 'error'); return; }
     setSaving(true);
     try {
-      await onRunPayroll(empId, parseFloat(gross || selectedEmp?.basic_salary || 0), month, {
-        housing: parseFloat(housing || selectedEmp?.housing_allowance || 0),
-        transport: parseFloat(transport || selectedEmp?.transport_allowance || 0),
-      });
+      await onRunPayroll(empId, month, buildInput());
       setPreview(null); setGross(''); setHousing(''); setTransport('');
       toast(`Payroll run for ${selectedEmp?.full_name} — ${fmtMonth(month)} submitted`, 'success');
     } catch (e) { toast(e.message, 'error'); }
@@ -1641,8 +1664,6 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
   };
 
   const handlePrintRecord = (r) => {
-    const gross = parseFloat(r.gross_salary || 0);
-    const t = calcKenyaTax(gross);
     printPayslip({
       company: companyProfile,
       employee: {
@@ -1652,19 +1673,49 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
         email: r.employee?.email,
       },
       month: r.pay_month,
-      data: {
-        basic: gross,
-        housing: 0,
-        transport: 0,
-        gross,
-        paye:            r.paye ?? t.paye,
-        nssf:            r.nssf ?? t.nssf,
-        shif:            r.shif ?? t.shif,
-        housingLevy:     t.housingLevy,
-        totalDeductions: r.total_deductions ?? t.totalDeductions,
-        net:             r.net_salary ?? t.net,
-      },
+      data: resolvePayrollRecord(r),
     });
+  };
+
+  // Every payslip for a month as one page-broken document, so a run goes out in
+  // a single print/save rather than one pop-up per employee.
+  const handlePrintAll = (month, records) => {
+    printPayslipBatch(records.map(r => ({
+      company: companyProfile,
+      employee: {
+        id: r.employee_id,
+        full_name: r.employee?.full_name,
+        department: r.employee?.department,
+        email: r.employee?.email,
+        kra_pin: employees.find(e => e.id === r.employee_id)?.kra_pin,
+      },
+      month: r.pay_month,
+      data: resolvePayrollRecord(r),
+    })));
+    toast(`${records.length} payslip(s) for ${fmtMonth(month)} ready to print or save as PDF`, 'success');
+  };
+
+  // The PAYE return figures. Exceptions are surfaced rather than left in the
+  // file: a missing KRA PIN is a rejected return, and it is far cheaper to hear
+  // about it here than from iTax.
+  const handleExportP10 = (month, records) => {
+    const employeesById = Object.fromEntries(employees.map(e => [e.id, e]));
+    const rows = buildP10Rows({ records, employeesById });
+    const { missingPin, reconstructed } = p10Exceptions(rows);
+
+    if (!downloadCSV(rows, `P10_${month}`, P10_COLUMNS)) {
+      toast('Nothing to export for this month', 'error');
+      return;
+    }
+
+    const totals = p10Totals(rows);
+    if (missingPin.length) {
+      toast(`Exported — but ${missingPin.length} employee(s) have no KRA PIN on file: ${missingPin.slice(0, 3).join(', ')}${missingPin.length > 3 ? '…' : ''}. KRA will reject those rows.`, 'error');
+    } else if (reconstructed) {
+      toast(`Exported ${totals.employees} employee(s) · PAYE ${fmt(totals.paye)}. ${reconstructed} row(s) had their tax base reconstructed — check them before filing.`, 'info');
+    } else {
+      toast(`P10 exported — ${totals.employees} employee(s) · PAYE ${fmt(totals.paye)} due to KRA`, 'success');
+    }
   };
 
   // Group by month
@@ -1769,9 +1820,9 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
                 <div className={S.body}>
                   <div className="space-y-0">
                     {[
-                      { label: 'Basic Salary',       value: fmt(preview.basic),     color: 'text-emerald-600' },
-                      { label: 'Housing Allowance',  value: fmt(preview.housing),   color: 'text-emerald-600' },
-                      { label: 'Transport Allowance',value: fmt(preview.transport), color: 'text-emerald-600' },
+                      { label: 'Basic Salary',        value: fmt(preview.basic),              color: 'text-emerald-600' },
+                      { label: 'Housing Allowance',   value: fmt(preview.housingAllowance),   color: 'text-emerald-600' },
+                      { label: 'Transport Allowance', value: fmt(preview.transportAllowance), color: 'text-emerald-600' },
                     ].map(({ label, value, color }) => (
                       <div key={label} className="flex justify-between py-2 border-b border-border text-sm">
                         <span className="text-muted-foreground">{label}</span>
@@ -1780,13 +1831,13 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
                     ))}
                     <div className="flex justify-between py-2.5 border-b-2 border-border text-sm font-bold">
                       <span className="text-foreground">Gross Pay</span>
-                      <span className="font-mono text-foreground">{fmt(preview.gross)}</span>
+                      <span className="font-mono text-foreground">{fmt(preview.grossCash)}</span>
                     </div>
                     {[
-                      { label: 'PAYE (Income Tax)',   value: preview.paye },
-                      { label: 'NSSF (Tier I & II)',  value: preview.nssf },
-                      { label: 'SHA (2.75%)',          value: preview.shif },
-                      { label: 'Housing Levy (1.5%)', value: preview.housingLevy },
+                      { label: 'NSSF (Tier I & II)',           value: preview.nssf },
+                      { label: 'SHIF (2.75%)',                 value: preview.shif },
+                      { label: 'Housing Levy (1.5%)',          value: preview.housingLevy },
+                      { label: 'PAYE (Income Tax)',            value: preview.paye },
                     ].map(({ label, value }) => (
                       <div key={label} className="flex justify-between py-2 border-b border-border text-sm">
                         <span className="text-muted-foreground">{label}</span>
@@ -1795,9 +1846,11 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
                     ))}
                     <div className="flex justify-between pt-3 pb-1 text-base font-bold">
                       <span className="text-foreground">NET PAY</span>
-                      <span className="font-mono text-emerald-600 text-xl">{fmt(preview.net)}</span>
+                      <span className="font-mono text-emerald-600 text-xl">{fmt(preview.netPay)}</span>
                     </div>
                   </div>
+
+                  <PayeWorking result={preview} />
                   {selectedEmp?.bank_name && (
                     <p className="text-xs text-muted-foreground mt-3">
                       Bank: {selectedEmp.bank_name}{bankAccount ? ` · A/C: ${bankAccount}` : ''}
@@ -1833,35 +1886,46 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
         <div className="max-w-xl">
           <div className={S.panel}>
             <div className={S.header}>
-              <span className="font-semibold text-foreground">Kenya PAYE Calculator (2025/26)</span>
+              <span className="font-semibold text-foreground">Kenya PAYE Calculator</span>
             </div>
             <div className={`${S.body} space-y-4`}>
               <div>
                 <label className={S.label}>Gross Monthly Income (KES)</label>
                 <input type="number" className={S.input} placeholder="e.g. 85000" value={calcGross} onChange={e => setCalcGross(e.target.value)} />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Priced for {fmtMonth(month)} — change the pay month on the Run Payroll tab to quote another period.
+                </p>
               </div>
               {calcResult && (
-                <div className="space-y-0 border border-border rounded-xl overflow-hidden">
-                  {[
-                    { label: 'Gross Income',       value: fmt(calcResult.gross),        color: 'text-foreground' },
-                    { label: 'PAYE Tax',           value: fmt(calcResult.paye),         color: 'text-red-500' },
-                    { label: 'NSSF (Tier I+II)',   value: fmt(calcResult.nssf),         color: 'text-red-500' },
-                    { label: 'SHA (2.75%)',         value: fmt(calcResult.shif),         color: 'text-red-500' },
-                    { label: 'Housing Levy (1.5%)',value: fmt(calcResult.housingLevy),  color: 'text-red-500' },
-                    { label: 'Total Deductions',   value: fmt(calcResult.totalDeductions), color: 'text-red-500', bold: true },
-                  ].map(({ label, value, color, bold }) => (
-                    <div key={label} className={`flex justify-between px-4 py-3 border-b border-border text-sm ${bold ? 'bg-muted/30 font-semibold' : ''}`}>
-                      <span className="text-muted-foreground">{label}</span>
-                      <span className={`font-mono font-semibold ${color}`}>{value}</span>
+                <>
+                  <div className="space-y-0 border border-border rounded-xl overflow-hidden">
+                    {[
+                      { label: 'Gross Income',        value: fmt(calcResult.grossCash),       color: 'text-foreground' },
+                      { label: 'Taxable Pay',         value: fmt(calcResult.taxablePay),      color: 'text-foreground' },
+                      { label: 'PAYE Tax',            value: fmt(calcResult.paye),            color: 'text-red-500' },
+                      { label: 'NSSF (Tier I+II)',    value: fmt(calcResult.nssf),            color: 'text-red-500' },
+                      { label: 'SHIF (2.75%)',        value: fmt(calcResult.shif),            color: 'text-red-500' },
+                      { label: 'Housing Levy (1.5%)', value: fmt(calcResult.housingLevy),     color: 'text-red-500' },
+                      { label: 'Total Deductions',    value: fmt(calcResult.totalDeductions), color: 'text-red-500', bold: true },
+                    ].map(({ label, value, color, bold }) => (
+                      <div key={label} className={`flex justify-between px-4 py-3 border-b border-border text-sm ${bold ? 'bg-muted/30 font-semibold' : ''}`}>
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className={`font-mono font-semibold ${color}`}>{value}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between px-4 py-4 bg-primary/5">
+                      <span className="font-bold text-foreground text-base">NET PAY</span>
+                      <span className="font-mono font-black text-emerald-600 text-xl">{fmt(calcResult.netPay)}</span>
                     </div>
-                  ))}
-                  <div className="flex justify-between px-4 py-4 bg-primary/5">
-                    <span className="font-bold text-foreground text-base">NET PAY</span>
-                    <span className="font-mono font-black text-emerald-600 text-xl">{fmt(calcResult.net)}</span>
                   </div>
-                </div>
+                  <PayeWorking result={calcResult} />
+                </>
               )}
-              <p className="text-xs text-muted-foreground">Rates: PAYE per KRA bands 2025/26 · NSSF New Act · SHA 2.75% (min KES 300) · AHL 1.5%</p>
+              <p className="text-xs text-muted-foreground">
+                {calcResult
+                  ? `Rates: ${calcResult.rateLabel} · PAYE charged on gross less NSSF, SHIF and AHL · personal relief KES 2,400`
+                  : 'PAYE is charged on gross pay less NSSF, SHIF and the housing levy, then reduced by personal relief.'}
+              </p>
             </div>
           </div>
         </div>
@@ -1884,20 +1948,32 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
                     <span className="font-semibold text-foreground">{fmtMonth(month)}</span>
                     <span className="text-xs text-muted-foreground ml-3">{records.length} records · Gross {fmt(totalGross)} · Net {fmt(totalNet)}</span>
                   </div>
-                  {pending > 0 && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-semibold">{pending} pending approval</span>}
+                  <div className="flex items-center gap-2">
+                    {pending > 0 && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-semibold">{pending} pending approval</span>}
+                    <button className={S.btnSec} onClick={() => handleExportP10(month, records)} title="PAYE return figures in P10 column order">
+                      <Icon name="Download" size={13} color="currentColor" /> P10
+                    </button>
+                    <button className={S.btnSec} onClick={() => handlePrintAll(month, records)} title="All payslips for this month as one document">
+                      <Icon name="Printer" size={13} color="currentColor" /> All Payslips
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full">
-                    <thead><tr>{['Employee', 'Dept', 'Gross', 'PAYE', 'NSSF', 'SHA', 'Net Pay', 'Status', ''].map(h => <th key={h} className={S.th}>{h}</th>)}</tr></thead>
+                    <thead><tr>{['Employee', 'Dept', 'Gross', 'Taxable Pay', 'PAYE', 'NSSF', 'SHIF', 'AHL', 'Net Pay', 'Status', ''].map(h => <th key={h} className={S.th}>{h}</th>)}</tr></thead>
                     <tbody>
                       {records.map(r => (
                         <tr key={r.id} className={S.row}>
                           <td className={S.tdFirst}>{r.employee?.full_name || '—'}</td>
                           <td className={S.td}>{r.employee?.department || '—'}</td>
                           <td className={`${S.td} font-mono`}>{fmt(r.gross_salary)}</td>
+                          {/* Legacy rows predate the breakdown columns. A dash says
+                              "not recorded"; a zero would read as "no tax base". */}
+                          <td className={`${S.td} font-mono`}>{r.taxable_pay == null ? '—' : fmt(r.taxable_pay)}</td>
                           <td className={`${S.td} font-mono text-red-500`}>({fmt(r.paye)})</td>
                           <td className={`${S.td} font-mono text-red-500`}>({fmt(r.nssf)})</td>
                           <td className={`${S.td} font-mono text-red-500`}>({fmt(r.shif)})</td>
+                          <td className={`${S.td} font-mono text-red-500`}>{r.housing_levy == null ? '—' : `(${fmt(r.housing_levy)})`}</td>
                           <td className={`${S.td} font-mono font-bold text-emerald-600`}>{fmt(r.net_salary)}</td>
                           <td className={S.td}><StatusBadge status={r.status} /></td>
                           <td className={S.td}>
@@ -1934,37 +2010,134 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB 6 — FINANCIAL STATEMENTS
 // ─────────────────────────────────────────────────────────────────────────────
-const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries, chartOfAccounts, companyProfile, loading }) => {
+const StatementsTab = ({ journalEntries, automatedEntries, chartOfAccounts, companyProfile, loading }) => {
   const [stmt,   setStmt]   = useState('pl');
   const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
 
   const co      = companyProfile;
-  const allJournals = [...journalEntries, ...automatedEntries];
+  // Memoised: a fresh array each render would recompute the trial balance and
+  // the VAT return on every keystroke, and defeats their useMemos entirely.
+  const allJournals = useMemo(
+    () => [...journalEntries, ...automatedEntries],
+    [journalEntries, automatedEntries],
+  );
   const coName  = co?.company_name || 'Ararat Company';
   const periodLabel = fmtMonth(period);
 
-  // Trial balance from chart of accounts + journals
-  const trialBalance = useMemo(() => {
-    const accts = {};
-    chartOfAccounts.forEach(a => {
-      accts[a.account_name] = { code: a.account_code, name: a.account_name, type: a.account_type, debit: 0, credit: 0 };
-    });
-    allJournals.filter(j => j.status === 'posted').forEach(j => {
-      const d = j.debit_account;
-      const c = j.credit_account;
-      const amt = parseFloat(j.amount || 0);
-      if (d && accts[d]) accts[d].debit += amt;
-      if (c && accts[c]) accts[c].credit += amt;
-      // New accounts not in COA
-      if (d && !accts[d]) accts[d] = { code: '—', name: d, type: '?', debit: amt, credit: 0 };
-      if (c && !accts[c]) accts[c] = { code: '—', name: c, type: '?', debit: 0,   credit: amt };
-    });
-    return Object.values(accts).filter(a => a.debit > 0 || a.credit > 0)
-      .sort((a, b) => a.code.localeCompare(b.code));
-  }, [chartOfAccounts, allJournals]);
+  // The VAT return is computed for the SELECTED PERIOD, off the ledger.
+  //
+  // Everything else on this tab still sums the whole ledger and merely labels
+  // itself with the period — a pre-existing gap. VAT cannot live with it: a
+  // return is filed for one month, and a figure covering all time under an
+  // "August 2026" heading is not a return, it is a running total wearing one.
+  const vat = useMemo(
+    () => computeVatReturn({
+      journals: allJournals,
+      chartOfAccounts,
+      period,
+    }),
+    [allJournals, chartOfAccounts, period],
+  );
 
-  const totalTBDebit  = trialBalance.reduce((s, a) => s + a.debit,  0);
-  const totalTBCredit = trialBalance.reduce((s, a) => s + a.credit, 0);
+  // Every statement, built from the ledger for the selected period.
+  //
+  // These replace `financialSummary`, which summed the whole ledger regardless
+  // of the month picked and derived the balance sheet from ratios of ratios
+  // (assets = cash + revenue*0.3, receivables = revenue*0.35, and so on). The
+  // period selector could not be honoured on figures like that, because there
+  // is no such thing as `revenue * 0.3` "as at August 2026".
+  //
+  // P&L and cash flow are FLOWS — what happened during the month. Balance sheet
+  // and trial balance are POSITIONS — where things stand at month end, counting
+  // everything since inception. See src/utils/financialStatements.js.
+  const stmtArgs = useMemo(
+    () => ({ journals: allJournals, chartOfAccounts, period }),
+    [allJournals, chartOfAccounts, period],
+  );
+  const pl = useMemo(() => buildIncomeStatement(stmtArgs), [stmtArgs]);
+  const bs = useMemo(() => buildBalanceSheet(stmtArgs),    [stmtArgs]);
+  const cf = useMemo(() => buildCashFlow(stmtArgs),        [stmtArgs]);
+  const tb = useMemo(() => buildTrialBalance(stmtArgs),    [stmtArgs]);
+
+  /**
+   * Export whichever statement is on screen, as the same line items the screen
+   * shows. This button used to fire a "Exporting to PDF…" toast and do nothing.
+   *
+   * VAT carries an explicit estimate flag: input VAT is not derived from
+   * purchase records, it is assumed to be 40% of output VAT (see
+   * useFinanceHub computeSummary). A figure like that must not leave the app
+   * looking like a filed number.
+   */
+  const handleExportStatement = () => {
+    const line = (item, amount, note = '') => ({ Item: item, Amount: amount, Note: note });
+    const sheets = {
+      // Flows: what happened during the month.
+      pl: () => [
+        line('Period', period, 'Movements during this month only'),
+        ...pl.revenueAccounts.map(a => line(a.name, a.balance, 'Revenue')),
+        line('Total Revenue', pl.revenue),
+        line('Cost of Sales', pl.cogs),
+        line('Gross Profit', pl.grossProfit),
+        line('Gross Margin %', pl.grossMargin),
+        ...pl.expenseAccounts.filter(a => a.type !== 'cost_of_sales').map(a => line(a.name, a.balance, 'Operating expense')),
+        line('Total Expenses', pl.expenses),
+        line('Net Profit', pl.netProfit),
+      ],
+      // Positions: where things stand at month end, counting everything since
+      // inception. Line items are real account balances.
+      bs: () => [
+        line('As at', period, 'Cumulative to the end of this month'),
+        ...bs.assetAccounts.map(a => line(a.name, a.balance, 'Asset')),
+        line('Total Assets', bs.totalAssets),
+        ...bs.liabilityAccounts.map(a => line(a.name, a.balance, 'Liability')),
+        line('Total Liabilities', bs.totalLiabilities),
+        ...bs.equityAccounts.map(a => line(a.name, a.balance, 'Equity')),
+        line('Retained Earnings', bs.retainedEarnings, 'Cumulative profit since inception'),
+        line('Total Equity', bs.totalEquity),
+        line('Total Liabilities & Equity', bs.totalLiabilitiesAndEquity),
+        line('Difference', bs.difference, bs.balanced ? 'Balanced' : 'OUT OF BALANCE — some accounts have no type set'),
+      ],
+      cf: () => [
+        line('Period', period, 'Movements during this month only'),
+        line('Opening Cash', cf.openingCash),
+        line('Cash from Operations', cf.operating),
+        line('Cash from Investing', cf.investing),
+        line('Cash from Financing', cf.financing),
+        line('Net Change', cf.netChange),
+        line('Closing Cash', cf.closingCash),
+        line('Cash accounts', cf.cashAccountNames.join(' | '), 'Accounts treated as cash'),
+      ],
+      tb: () => tb.rows.map(a => ({
+        Code: a.code, Account: a.name, Type: a.type, Debit: a.debit, Credit: a.credit,
+      })),
+      // The only statement on this tab whose figures are confined to the
+      // selected period — see the `vat` memo above.
+      vat: () => [
+        line('Period', period),
+        line('Standard Rated Sales', vat.taxableSales, 'Grossed up from output VAT at 16%'),
+        line('Output VAT (16%)', vat.outputVAT, `${vat.diagnostics.outputEntryCount} posted entries`),
+        line('Standard Rated Purchases', vat.taxablePurchases, 'Grossed up from input VAT at 16%'),
+        line('Input VAT Claimable (16%)', vat.inputVAT,
+          vat.diagnostics.inputEntryCount === 0
+            ? (vat.diagnostics.hasInputVatAccount
+              ? 'No purchase VAT posted this period'
+              : 'No input VAT account in the chart of accounts')
+            : `${vat.diagnostics.inputEntryCount} posted entries`),
+        line('Net VAT Payable to KRA', vat.netVAT,
+          vat.netVAT < 0 ? 'Credit carried forward' : ''),
+        ...vat.diagnostics.unclassifiedAccounts.map(a =>
+          line(`Excluded account: ${a}`, 0, 'VAT account whose input/output role is unclear — not counted')),
+      ],
+    };
+
+    const rows = (sheets[stmt] || sheets.pl)();
+    const label = stmts.find(s => s.id === stmt)?.label.replace(/[^\w]+/g, '_') || 'statement';
+    if (!downloadCSV(rows, `${label}_${period}`)) {
+      toast('Nothing to export for this period', 'error');
+      return;
+    }
+    toast(`${label.replace(/_/g, ' ')} exported for ${periodLabel}`, 'success');
+  };
 
   const stmts = [
     { id: 'pl',  label: 'P&L Statement',  icon: 'TrendingUp'  },
@@ -1988,8 +2161,8 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
           </button>
         ))}
         <input type="month" className={`${S.input} ml-auto w-auto`} value={period} onChange={e => setPeriod(e.target.value)} />
-        <button className={S.btnSec} onClick={() => toast('Exporting to PDF…', 'info')}>
-          <Icon name="Download" size={14} color="currentColor" /> Export
+        <button className={S.btnSec} onClick={handleExportStatement}>
+          <Icon name="Download" size={14} color="currentColor" /> Export CSV
         </button>
       </div>
 
@@ -2012,33 +2185,42 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
                 <p className="text-sm text-muted-foreground">Period: {periodLabel}</p>
               </div>
 
+              {/* Every revenue account that moved this month, by name. The old
+                  version showed three fixed lines carved out of one all-time
+                  total, so a company whose revenue was not "asset sales,
+                  interest, penalties" had nowhere for it to appear. */}
               <FSRow label="REVENUE" header />
-              <FSRow label="Asset Sales Revenue" value={fmt(fs.totalRevenue - fs.totalInterestIncome - fs.totalPenaltyIncome)} indent color="text-emerald-600" />
-              <FSRow label="Interest Income (HP)"   value={fmt(fs.totalInterestIncome)} indent color="text-emerald-600" />
-              <FSRow label="Penalty Income"          value={fmt(fs.totalPenaltyIncome)}  indent color="text-emerald-600" />
-              <FSRow label="TOTAL REVENUE"           value={fmt(fs.totalRevenue)} total color="text-emerald-600" />
+              {pl.revenueAccounts.length === 0
+                ? <FSRow label="No revenue posted this period" value={fmt(0)} indent />
+                : pl.revenueAccounts.map(a => (
+                    <FSRow key={a.name} label={a.name} value={fmt(a.balance)} indent color="text-emerald-600" />
+                  ))}
+              <FSRow label="TOTAL REVENUE" value={fmt(pl.revenue)} total color="text-emerald-600" />
 
               <div className="mt-4" />
               <FSRow label="COST OF SALES" header />
-              <FSRow label="Cost of Assets Sold (COGS)" value={fmt(fs.totalCOGS)} indent color="text-red-500" />
-              <FSRow label="GROSS PROFIT"    value={fmt(fs.grossProfit)} total />
+              <FSRow label="Cost of Sales" value={fmt(pl.cogs)} indent color="text-red-500" />
+              <FSRow label="GROSS PROFIT"  value={fmt(pl.grossProfit)} total />
 
               <div className="mt-4" />
               <FSRow label="OPERATING EXPENSES" header />
-              <FSRow label="Salaries & Wages"  value={fmt(fs.totalSalaries)} indent color="text-red-500" />
-              <FSRow label="Other Operating Expenses" value={fmt(Math.max(fs.totalExpenses - fs.totalCOGS - fs.totalSalaries, 0))} indent color="text-red-500" />
-              <FSRow label="TOTAL EXPENSES"  value={fmt(fs.totalExpenses)} total color="text-red-500" />
+              {pl.expenseAccounts.filter(a => a.type !== 'cost_of_sales').length === 0
+                ? <FSRow label="No operating expenses posted this period" value={fmt(0)} indent />
+                : pl.expenseAccounts.filter(a => a.type !== 'cost_of_sales').map(a => (
+                    <FSRow key={a.name} label={a.name} value={fmt(a.balance)} indent color="text-red-500" />
+                  ))}
+              <FSRow label="TOTAL EXPENSES" value={fmt(pl.expenses)} total color="text-red-500" />
 
               <div className="mt-6 p-4 rounded-xl border-2 border-primary/30 bg-primary/5">
                 <div className="flex justify-between items-center">
                   <span className="text-base font-black text-foreground">NET PROFIT / (LOSS)</span>
-                  <span className={`text-2xl font-black font-mono ${fs.netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {fmt(fs.netProfit)}
+                  <span className={`text-2xl font-black font-mono ${pl.netProfit >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {fmt(pl.netProfit)}
                   </span>
                 </div>
                 <div className="mt-2 flex gap-4 text-xs text-muted-foreground">
-                  <span>Gross Margin: <strong className="text-foreground">{fmtPct(fs.grossMargin)}</strong></span>
-                  <span>Net Margin: <strong className="text-foreground">{fs.totalRevenue > 0 ? fmtPct((fs.netProfit / fs.totalRevenue) * 100) : '0.0%'}</strong></span>
+                  <span>Gross Margin: <strong className="text-foreground">{fmtPct(pl.grossMargin)}</strong></span>
+                  <span>Net Margin: <strong className="text-foreground">{fmtPct(pl.netMargin)}</strong></span>
                 </div>
               </div>
             </div>
@@ -2046,12 +2228,12 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
           {/* Side ratios */}
           <div className="space-y-4">
             {[
-              { label: 'Total Revenue',   value: fmt(fs.totalRevenue),   color: 'text-emerald-600' },
-              { label: 'Total Expenses',  value: fmt(fs.totalExpenses),  color: 'text-red-500' },
-              { label: 'Net Profit',      value: fmt(fs.netProfit),      color: fs.netProfit >= 0 ? 'text-emerald-600' : 'text-red-500' },
-              { label: 'Gross Margin',    value: fmtPct(fs.grossMargin), color: 'text-blue-600' },
-              { label: 'Interest Income', value: fmt(fs.totalInterestIncome), color: 'text-emerald-600' },
-              { label: 'Penalty Income',  value: fmt(fs.totalPenaltyIncome),  color: 'text-orange-500' },
+              { label: 'Total Revenue',   value: fmt(pl.revenue),   color: 'text-emerald-600' },
+              { label: 'Total Expenses',  value: fmt(pl.expenses),  color: 'text-red-500' },
+              { label: 'Net Profit',      value: fmt(pl.netProfit), color: pl.netProfit >= 0 ? 'text-emerald-600' : 'text-red-500' },
+              { label: 'Gross Margin',    value: fmtPct(pl.grossMargin), color: 'text-blue-600' },
+              { label: 'Interest Income', value: fmt(pl.interestIncome), color: 'text-emerald-600' },
+              { label: 'Penalty Income',  value: fmt(pl.penaltyIncome),  color: 'text-orange-500' },
             ].map(({ label, value, color }) => (
               <div key={label} className="bg-card border border-border rounded-xl p-5">
                 <p className="text-xs text-muted-foreground mb-1">{label}</p>
@@ -2069,31 +2251,65 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
               <p className="text-xl font-black text-foreground">Balance Sheet</p>
               <p className="text-sm text-muted-foreground">As at {periodLabel}</p>
             </div>
+            {/* Every line is now an account balance as at period end. Each of
+                these used to be a fraction of another figure — receivables were
+                `revenue * 0.35`, share capital `equity * 0.6` — so the sheet
+                described no company in particular. */}
             <FSRow label="ASSETS" header />
-            <p className="text-xs font-semibold text-muted-foreground mt-3 mb-1">Current Assets</p>
-            <FSRow label="Cash & Cash Equivalents" value={fmt(fs.closingCash)} indent color="text-emerald-600" />
-            <FSRow label="Accounts Receivable (HP)" value={fmt(fs.totalRevenue * 0.35)} indent />
-            <FSRow label="Inventory" value={fmt(fs.totalAssets * 0.15)} indent />
-            <p className="text-xs font-semibold text-muted-foreground mt-3 mb-1">Non-Current Assets</p>
-            <FSRow label="Property & Equipment" value={fmt(fs.totalAssets * 0.4)} indent />
-            <FSRow label="Less: Depreciation" value={`(${fmt(fs.totalAssets * 0.05)})`} indent color="text-red-500" />
-            <FSRow label="TOTAL ASSETS" value={fmt(fs.totalAssets)} total color="text-emerald-600" />
+            {bs.assetAccounts.length === 0 && <FSRow label="No asset balances" value={fmt(0)} indent />}
+            {['current_asset', 'non_current_asset'].map(type => {
+              const rows = bs.assetAccounts.filter(a => a.type === type);
+              if (rows.length === 0) return null;
+              return (
+                <React.Fragment key={type}>
+                  <p className="text-xs font-semibold text-muted-foreground mt-3 mb-1">
+                    {type === 'current_asset' ? 'Current Assets' : 'Non-Current Assets'}
+                  </p>
+                  {rows.map(a => (
+                    <FSRow key={a.name} label={a.name} value={fmt(a.balance)} indent
+                      color={a.isCash ? 'text-emerald-600' : ''} />
+                  ))}
+                </React.Fragment>
+              );
+            })}
+            <FSRow label="TOTAL ASSETS" value={fmt(bs.totalAssets)} total color="text-emerald-600" />
 
             <div className="mt-6" />
             <FSRow label="LIABILITIES & EQUITY" header />
-            <p className="text-xs font-semibold text-muted-foreground mt-3 mb-1">Current Liabilities</p>
-            <FSRow label="Accounts Payable"     value={fmt(fs.totalLiabilities * 0.3)} indent color="text-red-500" />
-            <FSRow label="VAT Payable"          value={fmt(fs.netVAT)}                 indent color="text-red-500" />
-            <FSRow label="Payroll Liabilities"  value={fmt(fs.totalSalaries * 0.08)}   indent color="text-red-500" />
-            <p className="text-xs font-semibold text-muted-foreground mt-3 mb-1">Equity</p>
-            <FSRow label="Share Capital"        value={fmt(fs.equity * 0.6)}            indent />
-            <FSRow label="Retained Earnings"    value={fmt(fs.equity * 0.4)}            indent />
-            <FSRow label="Current Year Profit"  value={fmt(fs.netProfit)}               indent color="text-emerald-600" />
-            <FSRow label="TOTAL LIABILITIES & EQUITY" value={fmt(fs.totalAssets)} total />
+            {['current_liability', 'non_current_liability'].map(type => {
+              const rows = bs.liabilityAccounts.filter(a => a.type === type);
+              if (rows.length === 0) return null;
+              return (
+                <React.Fragment key={type}>
+                  <p className="text-xs font-semibold text-muted-foreground mt-3 mb-1">
+                    {type === 'current_liability' ? 'Current Liabilities' : 'Non-Current Liabilities'}
+                  </p>
+                  {rows.map(a => <FSRow key={a.name} label={a.name} value={fmt(a.balance)} indent color="text-red-500" />)}
+                </React.Fragment>
+              );
+            })}
+            <FSRow label="TOTAL LIABILITIES" value={fmt(bs.totalLiabilities)} total color="text-red-500" />
 
-            {/* Balance check */}
-            <div className={`mt-4 p-3 rounded-lg border text-xs font-medium ${Math.abs(fs.totalAssets - (fs.totalLiabilities + fs.equity + fs.netProfit)) < 1000 ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-900/20 dark:border-emerald-800 dark:text-emerald-400' : 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-400'}`}>
-              ✓ Balance Sheet is balanced
+            <p className="text-xs font-semibold text-muted-foreground mt-3 mb-1">Equity</p>
+            {bs.equityAccounts.map(a => <FSRow key={a.name} label={a.name} value={fmt(a.balance)} indent />)}
+            {/* Revenue and expense accounts close into equity. This is what
+                makes the sheet balance — and what the ratio version had to fake. */}
+            <FSRow label="Retained Earnings (cumulative)" value={fmt(bs.retainedEarnings)} indent
+              color={bs.retainedEarnings >= 0 ? 'text-emerald-600' : 'text-red-500'} />
+            <FSRow label="TOTAL EQUITY" value={fmt(bs.totalEquity)} total />
+            <FSRow label="TOTAL LIABILITIES & EQUITY" value={fmt(bs.totalLiabilitiesAndEquity)} total />
+
+            {/* A real check with a real answer. The badge here used to print
+                "✓ Balance Sheet is balanced" on BOTH branches of its condition —
+                only the colour changed — so it could never report otherwise. */}
+            <div className={`mt-4 p-3 rounded-lg border text-xs font-medium ${bs.balanced
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-900/20 dark:border-emerald-800 dark:text-emerald-400'
+              : 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-400'}`}>
+              {bs.balanced
+                ? '✓ Balance sheet balances — assets equal liabilities plus equity.'
+                : `⚠ Out of balance by ${fmt(Math.abs(bs.difference))}.${bs.unclassified.length
+                  ? ` ${bs.unclassified.length} account(s) have no type set and could not be placed: ${bs.unclassified.map(a => a.name).join(', ')}. Set their type in the Chart of Accounts.`
+                  : ''}`}
             </div>
           </div>
           {/* Key ratios */}
@@ -2101,11 +2317,13 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
             <div className={`${S.panel} p-5`}>
               <p className="font-semibold text-foreground mb-4">Key Financial Ratios</p>
               {[
-                { label: 'Current Ratio',       value: fs.totalLiabilities > 0 ? ((fs.closingCash + fs.totalRevenue * 0.35) / fs.totalLiabilities).toFixed(2) : '—', note: 'Liquidity' },
-                { label: 'Debt-to-Equity',      value: fs.equity > 0 ? (fs.totalLiabilities / fs.equity).toFixed(2) : '—', note: 'Leverage' },
-                { label: 'Return on Equity',    value: fs.equity > 0 ? fmtPct((fs.netProfit / fs.equity) * 100) : '—', note: 'Profitability' },
-                { label: 'Asset Turnover',      value: fs.totalAssets > 0 ? `${(fs.totalRevenue / fs.totalAssets).toFixed(2)}x` : '—', note: 'Efficiency' },
-                { label: 'Net Profit Margin',   value: fs.totalRevenue > 0 ? fmtPct((fs.netProfit / fs.totalRevenue) * 100) : '—', note: 'Profitability' },
+                // Ratios off the real balances. The current ratio previously
+                // used `closingCash + revenue * 0.35` as current assets.
+                { label: 'Current Ratio',     value: bs.currentLiabilities > 0 ? (bs.currentAssets / bs.currentLiabilities).toFixed(2) : '—', note: 'Liquidity' },
+                { label: 'Debt-to-Equity',    value: bs.totalEquity > 0 ? (bs.totalLiabilities / bs.totalEquity).toFixed(2) : '—', note: 'Leverage' },
+                { label: 'Return on Equity',  value: bs.totalEquity > 0 ? fmtPct((pl.netProfit / bs.totalEquity) * 100) : '—', note: 'Profitability' },
+                { label: 'Asset Turnover',    value: bs.totalAssets > 0 ? `${(pl.revenue / bs.totalAssets).toFixed(2)}x` : '—', note: 'Efficiency' },
+                { label: 'Net Profit Margin', value: pl.revenue > 0 ? fmtPct(pl.netMargin) : '—', note: 'Profitability' },
               ].map(({ label, value, note }) => (
                 <div key={label} className="flex items-center justify-between p-3 bg-muted/30 rounded-xl mb-2">
                   <div>
@@ -2127,29 +2345,48 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
               <p className="text-xl font-black text-foreground">Cash Flow Statement</p>
               <p className="text-sm text-muted-foreground">{periodLabel}</p>
             </div>
-            <FSRow label="OPERATING ACTIVITIES" header />
-            <FSRow label="Net Profit"              value={fmt(fs.netProfit)}              indent color="text-emerald-600" />
-            <FSRow label="Add: Depreciation"       value={fmt(fs.totalAssets * 0.05)}     indent />
-            <FSRow label="Increase in Receivables" value={`(${fmt(fs.totalRevenue * 0.1)})`} indent color="text-red-500" />
-            <FSRow label="Increase in Payables"    value={fmt(fs.totalLiabilities * 0.15)} indent color="text-emerald-600" />
-            <FSRow label="Net Operating Cash" value={fmt(fs.cashFromOperations)} total color="text-emerald-600" />
+            {/* Direct method: actual movements on the cash accounts this month,
+                classified by what the cash moved against. Every line here used
+                to be a ratio — operating cash was `netProfit + COGS * 0.05`,
+                depreciation `assets * 0.05`, receivables `revenue * 0.1`. */}
+            {[
+              { key: 'operating', label: 'OPERATING ACTIVITIES', total: cf.operating },
+              { key: 'investing', label: 'INVESTING ACTIVITIES', total: cf.investing },
+              { key: 'financing', label: 'FINANCING ACTIVITIES', total: cf.financing },
+            ].map(({ key, label, total }) => {
+              const lines = cf.movements.filter(m => m.activity === key);
+              return (
+                <React.Fragment key={key}>
+                  <FSRow label={label} header />
+                  {lines.length === 0
+                    ? <FSRow label="No movement this period" value={fmt(0)} indent />
+                    : lines.slice(0, 12).map((m, i) => (
+                        <FSRow key={`${m.id || i}-${m.contraName}`}
+                          label={m.contraName}
+                          value={m.signed < 0 ? `(${fmt(Math.abs(m.signed))})` : fmt(m.signed)}
+                          indent color={m.signed < 0 ? 'text-red-500' : 'text-emerald-600'} />
+                      ))}
+                  {lines.length > 12 && (
+                    <p className="text-xs text-muted-foreground pl-4 py-1">+ {lines.length - 12} more movement(s)</p>
+                  )}
+                  <FSRow label={`Net ${key.charAt(0).toUpperCase() + key.slice(1)} Cash`} value={fmt(total)} total
+                    color={total < 0 ? 'text-red-500' : 'text-emerald-600'} />
+                  <div className="mt-5" />
+                </React.Fragment>
+              );
+            })}
 
-            <div className="mt-5" />
-            <FSRow label="INVESTING ACTIVITIES" header />
-            <FSRow label="Purchase of Equipment"  value={`(${fmt(Math.abs(fs.cashFromInvesting))})`} indent color="text-red-500" />
-            <FSRow label="Net Investing Cash" value={fmt(fs.cashFromInvesting)} total color={fs.cashFromInvesting < 0 ? 'text-red-500' : 'text-emerald-600'} />
-
-            <div className="mt-5" />
-            <FSRow label="FINANCING ACTIVITIES" header />
-            <FSRow label="Loan Repayments" value={fmt(fs.cashFromFinancing)} indent />
-            <FSRow label="Net Financing Cash" value={fmt(fs.cashFromFinancing)} total />
-
-            <div className="mt-6 p-4 rounded-xl bg-primary/5 border border-primary/20">
-              <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Opening Balance</span><span className="font-mono font-semibold">{fmt(fs.openingCash)}</span></div>
-              <div className="flex justify-between text-sm mb-2"><span className="text-muted-foreground">Net Change</span><span className={`font-mono font-semibold ${fs.closingCash - fs.openingCash >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>+ {fmt(fs.cashFromOperations + fs.cashFromInvesting + fs.cashFromFinancing)}</span></div>
+            <div className="mt-1 p-4 rounded-xl bg-primary/5 border border-primary/20">
+              <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Opening Balance</span><span className="font-mono font-semibold">{fmt(cf.openingCash)}</span></div>
+              <div className="flex justify-between text-sm mb-2">
+                <span className="text-muted-foreground">Net Change</span>
+                <span className={`font-mono font-semibold ${cf.netChange >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {cf.netChange >= 0 ? '+ ' : '− '}{fmt(Math.abs(cf.netChange))}
+                </span>
+              </div>
               <div className="border-t border-primary/20 pt-2 flex justify-between">
                 <span className="font-bold text-foreground">Closing Balance</span>
-                <span className="font-black text-2xl font-mono text-emerald-600">{fmt(fs.closingCash)}</span>
+                <span className="font-black text-2xl font-mono text-emerald-600">{fmt(cf.closingCash)}</span>
               </div>
             </div>
           </div>
@@ -2157,9 +2394,9 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
             <div className={`${S.panel} p-5`}>
               <p className="font-semibold text-foreground mb-4">Cash Position Summary</p>
               {[
-                { label: 'Cash from Operations', value: fs.cashFromOperations, icon: 'TrendingUp' },
-                { label: 'Cash from Investing',  value: fs.cashFromInvesting,  icon: 'BarChart2'  },
-                { label: 'Cash from Financing',  value: fs.cashFromFinancing,  icon: 'Landmark'   },
+                { label: 'Cash from Operations', value: cf.operating, icon: 'TrendingUp' },
+                { label: 'Cash from Investing',  value: cf.investing, icon: 'BarChart2'  },
+                { label: 'Cash from Financing',  value: cf.financing, icon: 'Landmark'   },
               ].map(({ label, value, icon }) => (
                 <div key={label} className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl mb-2">
                   <Icon name={icon} size={16} color={value >= 0 ? '#10b981' : '#ef4444'} />
@@ -2169,6 +2406,27 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
                   <span className={`font-mono font-bold text-sm ${value >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{fmt(value)}</span>
                 </div>
               ))}
+            </div>
+            {/* The cash set is matched on account name, so say which accounts
+                are in it — an account that should be here and isn't would
+                otherwise silently drop out of the statement. */}
+            <div className={`${S.panel} p-5`}>
+              <p className="font-semibold text-foreground mb-2">Cash Accounts</p>
+              {cf.cashAccountNames.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No cash accounts found in the chart of accounts. Accounts named for cash, bank,
+                  M-Pesa or a till are treated as cash — without one, this statement stays empty.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground mb-2">Movements on these accounts make up the statement:</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {cf.cashAccountNames.map(n => (
+                      <span key={n} className="text-xs bg-muted px-2 py-0.5 rounded-full text-foreground">{n}</span>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2182,8 +2440,8 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
               <p className="text-xs text-muted-foreground">All posted journal entries</p>
             </div>
             <div className="flex gap-3">
-              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${Math.abs(totalTBDebit - totalTBCredit) < 1 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
-                {Math.abs(totalTBDebit - totalTBCredit) < 1 ? '✓ Balanced' : '⚠ Out of balance'}
+              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${Math.abs(tb.totalDebit - tb.totalCredit) < 1 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
+                {Math.abs(tb.totalDebit - tb.totalCredit) < 1 ? '✓ Balanced' : '⚠ Out of balance'}
               </span>
             </div>
           </div>
@@ -2199,11 +2457,11 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
                 </tr>
               </thead>
               <tbody>
-                {trialBalance.length === 0 ? (
+                {tb.rows.length === 0 ? (
                   <tr><td colSpan={5}><Empty icon="List" text="No posted entries" sub="Journal entries will appear here once posted" /></td></tr>
                 ) : (
                   <>
-                    {trialBalance.map(a => (
+                    {tb.rows.map(a => (
                       <tr key={a.name} className={S.row}>
                         <td className={`${S.td} font-mono text-xs`}>{a.code}</td>
                         <td className={S.tdFirst}>{a.name}</td>
@@ -2214,8 +2472,8 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
                     ))}
                     <tr className="border-t-2 border-border bg-muted/20 font-bold">
                       <td colSpan={3} className="px-4 py-3 text-sm text-foreground">TOTALS</td>
-                      <td className="px-4 py-3 text-right font-mono text-sm text-foreground">{totalTBDebit.toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
-                      <td className="px-4 py-3 text-right font-mono text-sm text-foreground">{totalTBCredit.toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
+                      <td className="px-4 py-3 text-right font-mono text-sm text-foreground">{tb.totalDebit.toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
+                      <td className="px-4 py-3 text-right font-mono text-sm text-foreground">{tb.totalCredit.toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
                     </tr>
                   </>
                 )}
@@ -2233,25 +2491,56 @@ const StatementsTab = ({ financialSummary: fs, journalEntries, automatedEntries,
               <p className="text-sm text-muted-foreground">{periodLabel} · Rate: 16%</p>
             </div>
             <FSRow label="OUTPUT VAT (Sales)" header />
-            <FSRow label="Standard Rated Sales" value={fmt(fs.totalRevenue)} indent />
-            <FSRow label="Output VAT (16%)" value={fmt(fs.outputVAT)} indent color="text-red-500" />
+            <FSRow label="Standard Rated Sales" value={fmt(vat.taxableSales)} indent />
+            <FSRow label="Output VAT (16%)" value={fmt(vat.outputVAT)} indent color="text-red-500" />
 
             <div className="mt-4" />
             <FSRow label="INPUT VAT (Purchases)" header />
-            <FSRow label="Standard Rated Purchases" value={fmt(fs.inputVAT / 0.16)} indent />
-            <FSRow label="Input VAT Claimable (16%)" value={fmt(fs.inputVAT)} indent color="text-emerald-600" />
+            <FSRow label="Standard Rated Purchases" value={fmt(vat.taxablePurchases)} indent />
+            <FSRow label="Input VAT Claimable (16%)" value={fmt(vat.inputVAT)} indent color="text-emerald-600" />
 
-            <div className="mt-6 p-4 rounded-xl border-2 border-border">
-              <FSRow label="Net VAT Payable to KRA" value={fmt(fs.netVAT)} total color={fs.netVAT > 0 ? 'text-red-500' : 'text-emerald-600'} />
+            {/* Input VAT is now the debit balance on the input-VAT account for
+                this period, not a fraction of output VAT. A zero is therefore a
+                real answer — but "no account set up" and "account set up, nothing
+                posted" are different problems with different fixes, so the panel
+                says which one it is instead of showing a bare zero. */}
+            {vat.inputVAT === 0 && vat.outputVAT !== 0 && (
+              <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                <strong>No input VAT recorded for {periodLabel}.</strong>{' '}
+                {vat.diagnostics.hasInputVatAccount
+                  ? 'An input VAT account exists but nothing was posted to it this period. If you bought from VAT-registered suppliers, post the tax to that account so it can be reclaimed.'
+                  : 'No input VAT account exists in your chart of accounts. Add one (e.g. "Input VAT", a current asset) and post the VAT on purchases to it — otherwise none of it can be reclaimed here.'}
+              </div>
+            )}
+
+            {vat.diagnostics.unclassifiedAccounts.length > 0 && (
+              <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                <strong>Not counted:</strong> {vat.diagnostics.unclassifiedAccounts.join(', ')}.
+                {' '}These look like VAT accounts but it is unclear whether they are input or output.
+                Rename them (e.g. "Input VAT" / "VAT Payable") or set the account type to an asset
+                or a liability so they can be included.
+              </div>
+            )}
+
+            <div className="mt-4 p-4 rounded-xl border-2 border-border">
+              <FSRow label="Net VAT Payable to KRA" value={fmt(vat.netVAT)} total color={vat.netVAT > 0 ? 'text-red-500' : 'text-emerald-600'} />
             </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              {vat.diagnostics.outputEntryCount + vat.diagnostics.inputEntryCount} posted journal
+              {vat.diagnostics.outputEntryCount + vat.diagnostics.inputEntryCount === 1 ? ' entry' : ' entries'} for {periodLabel}.
+              {vat.netVAT < 0 && ' A negative figure is a credit carried forward, not a payment due.'}
+            </p>
             <div className="mt-4 flex gap-3">
-              <button className={S.btnPri} onClick={() => toast('Preparing iTax export…', 'info')}>
-                <Icon name="Upload" size={14} color="currentColor" /> File with KRA
-              </button>
-              <button className={S.btnSec} onClick={() => toast('Downloading iTax format…', 'info')}>
-                <Icon name="Download" size={14} color="currentColor" /> iTax Export
+              <button className={S.btnSec} onClick={handleExportStatement}>
+                <Icon name="Download" size={14} color="currentColor" /> Export VAT Figures
               </button>
             </div>
+            {/* The "File with KRA" button that used to sit here fired a toast and
+                did nothing — there is no iTax integration to file through. */}
+            <p className="text-xs text-muted-foreground mt-3">
+              Returns are filed on the KRA iTax portal. This exports the figures to carry across;
+              it does not submit anything.
+            </p>
           </div>
           <div className="space-y-4">
             <div className={`${S.panel} p-5`}>
@@ -2426,7 +2715,6 @@ const FinanceHub = () => {
           )}
           {activeTab === 'statements' && (
             <StatementsTab
-              financialSummary={fs}
               journalEntries={journalEntries}
               automatedEntries={automatedEntries}
               chartOfAccounts={chartOfAccounts}

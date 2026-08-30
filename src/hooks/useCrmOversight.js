@@ -35,7 +35,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { logger } from '../utils/logger';
 import { outcomeMeta, daysSince, STALE_CONTACT_DAYS } from './useCrmInteractions';
-import { sourceMeta, lostReasonMeta, isLostLead } from '../config/crmVocabulary';
+import {
+  sourceMeta, lostReasonMeta, isLostLead, channelMeta,
+  PIPELINE_STAGES, OPPORTUNITY_STAGES,
+} from '../config/crmVocabulary';
+import { summariseOpportunities, leadValue, formatCompactMoney } from '../utils/pipelineValue';
 
 const DAY = 86400000;
 
@@ -51,14 +55,16 @@ let _crmOversightChannelSeq = 0;
 /** Roles the supervisor policies admit. Mirrors public.is_crm_supervisor(). */
 export const CRM_SUPERVISOR_ROLES = ['super_admin', 'admin', 'director', 'manager', 'sacco_admin'];
 
-/** Pipeline order, left to right, matching the agent portal's board. */
-export const PIPELINE_STAGES = [
-  { value: 'new_lead',      label: 'New',           tone: 'slate'   },
-  { value: 'contacted',     label: 'Contacted',     tone: 'blue'    },
-  { value: 'qualified',     label: 'Qualified',     tone: 'violet'  },
-  { value: 'proposal_sent', label: 'Proposal sent', tone: 'amber'   },
-  { value: 'closed',        label: 'Closed',        tone: 'emerald' },
-];
+/**
+ * Pipeline order, left to right, matching the agent portal's board.
+ *
+ * Re-exported from the shared vocabulary rather than declared here, for the
+ * same reason INTERACTION_TYPES is: the agent portal weights its forecast by
+ * stage and so does this dashboard, and two copies of the odds means the two
+ * screens quote different money for the same pipeline. Importers already
+ * pointed here, so the name stays.
+ */
+export { PIPELINE_STAGES };
 
 /** Rows fetched per table. Deep enough for a quarter, shallow enough to load. */
 const ROW_LIMIT = 2000;
@@ -107,7 +113,14 @@ export const summarisePipeline = (leads = []) => {
   // the same thing a CRM would call an opportunity, so it is derived here
   // rather than invented as a new entity nobody writes to.
   const qualified     = byStage.qualified || 0;
-  const opportunities = qualified + (byStage.proposal_sent || 0);
+  const opportunities = OPPORTUNITY_STAGES.reduce((n, s) => n + (byStage[s] || 0), 0);
+
+  // The same pipeline, measured in money. Counting was always the wrong unit
+  // for a supervisor too: "14 opportunities" says nothing about whether the
+  // quarter lands, and an agent nursing one large deal read as the weakest
+  // person on the team. Derived from the one shared summariser so the agent's
+  // own panel and this dashboard cannot quote different figures.
+  const value = summariseOpportunities(leads);
 
   return {
     total,
@@ -116,6 +129,13 @@ export const summarisePipeline = (leads = []) => {
     converted,
     qualified,
     opportunities,
+    openValue:          value.open.value,
+    weightedValue:      value.open.weighted,
+    opportunityValue:   value.opportunities.value,
+    wonValue:           value.won.value,
+    lostValue:          value.lost.value,
+    unvaluedOpen:       value.unvalued.count,
+    valueWinRate:       value.valueWinRate,
     // Named for what a supervisor asks for. `won` is an alias of `converted`
     // on purpose: one number, two vocabularies, never allowed to drift apart.
     won: converted,
@@ -251,6 +271,14 @@ export const buildCrmTotals = ({ scorecards = [], interactions = [], now = Date.
     converted:        acc.converted + c.pipeline.converted,
     qualified:        acc.qualified + c.pipeline.qualified,
     opportunities:    acc.opportunities + c.pipeline.opportunities,
+    // The money behind those counts, summed the same way. `salesValue` below
+    // is banked commissionable revenue; these are the pipeline that has not
+    // happened yet, and a supervisor needs both to see whether next quarter
+    // has anything in it.
+    openValue:        acc.openValue + c.pipeline.openValue,
+    weightedValue:    acc.weightedValue + c.pipeline.weightedValue,
+    opportunityValue: acc.opportunityValue + c.pipeline.opportunityValue,
+    unvaluedOpen:     acc.unvaluedOpen + c.pipeline.unvaluedOpen,
     won:              acc.won + c.pipeline.won,
     lost:             acc.lost + c.pipeline.lost,
     salesValue:       acc.salesValue + c.salesValue,
@@ -260,6 +288,7 @@ export const buildCrmTotals = ({ scorecards = [], interactions = [], now = Date.
   }), {
     agents: 0, activeAgents: 0, enabledAgents: 0, openLeads: 0, totalLeads: 0,
     converted: 0, qualified: 0, opportunities: 0, won: 0, lost: 0,
+    openValue: 0, weightedValue: 0, opportunityValue: 0, unvaluedOpen: 0,
     salesValue: 0, commission: 0, overdueFollowUps: 0, neglectedLeads: 0,
   });
 
@@ -607,7 +636,7 @@ export const buildKpiBreakdown = (key, {
             items: overdue.map(f => ({
               id: f.id,
               primary: f.lead_name || leadById.get(f.lead_id)?.full_name || 'Unnamed lead',
-              secondary: [agentName(f.agent_id), f.appointment_type].filter(Boolean).join(' · '),
+              secondary: [agentName(f.agent_id), channelMeta(f.appointment_type).label].filter(Boolean).join(' · '),
               value: `due ${fmtDay(f.scheduled_at) || '—'}`,
               tone: 'bad',
               lead: leadById.get(f.lead_id) || null,
@@ -673,25 +702,39 @@ export const buildKpiBreakdown = (key, {
     // ---------------------------------------------------------------------
     case 'opportunities': {
       const inStage = (v) => leads.filter(l => l && (l.stage || 'new_lead') === v && !l.converted_at);
-      const row = (l) => ({
-        id: l.id,
-        primary: l.full_name || 'Unnamed lead',
-        secondary: [agentName(l.agent_id), l.asset_interest, l.budget_range]
-          .filter(Boolean).join(' · '),
-        value: l.last_contact_at ? fmtDay(l.last_contact_at) : 'never contacted',
-        tone: 'plain',
-        lead: l,
-      });
-      const qualified = inStage('qualified');
-      const proposals = inStage('proposal_sent');
+      const row = (l) => {
+        const { value: amount, source } = leadValue(l);
+        return {
+          id: l.id,
+          primary: l.full_name || 'Unnamed lead',
+          secondary: [agentName(l.agent_id), l.asset_interest, l.budget_range]
+            .filter(Boolean).join(' · '),
+          // The deal's size where there is one, falling back to when it was
+          // last touched. An opportunity with no price on it is a real and
+          // reportable state — it says so rather than showing a bare zero,
+          // which would read as a worthless deal instead of an unpriced one.
+          value: source === 'none'
+            ? (l.last_contact_at ? fmtDay(l.last_contact_at) : 'never contacted')
+            : `${source === 'estimated' ? '~' : ''}${formatCompactMoney(amount)}`,
+          tone: 'plain',
+          lead: l,
+        };
+      };
+      const bySize = (a, b) => leadValue(b).value - leadValue(a).value;
+      const sum = (rows) => rows.reduce((t, l) => t + leadValue(l).value, 0);
+
+      const qualified = inStage('qualified').sort(bySize);
+      const proposals = inStage('proposal_sent').sort(bySize);
 
       return {
         title: 'Opportunities',
-        hint: 'Leads that are qualified or have a proposal out. This schema has no separate opportunity record — the pipeline stage is the opportunity.',
+        hint: 'Leads that are qualified or have a proposal out, biggest first. This schema has no separate opportunity record — the pipeline stage is the opportunity, and leads.deal_value is what it is worth.',
         sections: [
-          { label: `Qualified (${qualified.length})`, items: qualified.map(row),
+          { label: `Qualified (${qualified.length}) · ${formatCompactMoney(sum(qualified))}`,
+            items: qualified.map(row),
             empty: 'Nothing has been qualified yet.' },
-          { label: `Proposal sent (${proposals.length})`, items: proposals.map(row),
+          { label: `Proposal sent (${proposals.length}) · ${formatCompactMoney(sum(proposals))}`,
+            items: proposals.map(row),
             empty: 'No proposals are outstanding.' },
         ],
       };
@@ -880,6 +923,12 @@ export const useCrmOversight = () => {
       .channel(`crm_oversight_${++_crmOversightChannelSeq}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'crm_interactions' }, () => fetchAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' },            () => fetchAll())
+      // `agents` carries the commercial half — total_sales, total_commission,
+      // agent_status — which a trigger on payments now maintains. Without this
+      // the activity side of the dashboard was live while the money side sat
+      // stale until a manual refresh, and nothing on screen said which was
+      // which. Published by 20260828160000.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' },           () => fetchAll())
       .subscribe();
     channelsRef.current = [channel];
     return () => { supabase.removeChannel(channel); channelsRef.current = []; };

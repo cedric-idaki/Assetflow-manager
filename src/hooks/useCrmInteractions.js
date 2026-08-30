@@ -18,6 +18,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { logger } from '../utils/logger';
+import { LOGGABLE_CHANNELS, channelMeta } from '../config/crmVocabulary';
 
 const DAY = 86400000;
 
@@ -31,17 +32,16 @@ export const STALE_CONTACT_DAYS = 14;
 /** How many rows the portal timeline holds before "load more" would be needed. */
 const PAGE_SIZE = 200;
 
-export const INTERACTION_TYPES = [
-  { value: 'call',       label: 'Phone call',   icon: 'Phone',        tone: 'blue'    },
-  { value: 'whatsapp',   label: 'WhatsApp',     icon: 'MessageCircle', tone: 'emerald' },
-  { value: 'sms',        label: 'SMS',          icon: 'MessageSquare', tone: 'slate'   },
-  { value: 'email',      label: 'Email',        icon: 'Mail',         tone: 'violet'  },
-  { value: 'meeting',    label: 'Meeting',      icon: 'Users',        tone: 'amber'   },
-  { value: 'site_visit', label: 'Site visit',   icon: 'MapPin',       tone: 'orange'  },
-  { value: 'proposal',   label: 'Proposal sent', icon: 'FileText',    tone: 'indigo'  },
-  { value: 'note',       label: 'Note',         icon: 'StickyNote',   tone: 'slate'   },
-  { value: 'other',      label: 'Other',        icon: 'Circle',       tone: 'slate'   },
-];
+/**
+ * The channels a contact can be recorded on.
+ *
+ * Re-exported from the shared vocabulary rather than declared here, because the
+ * follow-up scheduler needs the same list: an agent who logs an email and then
+ * books the next email must be picking from one set of values, or the two
+ * halves of the CRM describe the same act with different words and no report
+ * can join them. See src/config/crmVocabulary.js for why that matters.
+ */
+export const INTERACTION_TYPES = LOGGABLE_CHANNELS;
 
 /**
  * Outcomes are a fixed list, not free text, because the oversight dashboard
@@ -59,9 +59,12 @@ export const INTERACTION_OUTCOMES = [
   { value: 'lost',           label: 'Lost to someone else', sentiment: 'negative' },
 ];
 
-export const typeMeta = (value) =>
-  INTERACTION_TYPES.find(t => t.value === value)
-  || { value, label: value || 'Contact', icon: 'Circle', tone: 'slate' };
+/**
+ * Describe an interaction type, including the follow-up vocabulary's spellings
+ * of it -- a timeline built from both tables meets `phone_call` as well as
+ * `call`, and both have to render as the same thing.
+ */
+export const typeMeta = channelMeta;
 
 export const outcomeMeta = (value) =>
   INTERACTION_OUTCOMES.find(o => o.value === value) || null;

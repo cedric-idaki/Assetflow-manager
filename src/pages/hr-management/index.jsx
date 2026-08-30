@@ -8,6 +8,10 @@ import Icon from '../../components/AppIcon';
 import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
 import { generateTempPassword } from '../../services/credentialsEmailService';
 import { PII_FIELDS, emptyPii, fetchEmployeePii, saveEmployeePii } from '../../services/employeePiiService';
+import { computePayroll, payrollInputForEmployee, payrollRecordFrom, resolveRateSchedule, resolvePayrollRecord } from '../../utils/kenyaPayroll';
+import { payslipDocument } from '../../utils/payslipDocument';
+import { buildP10Rows, p10Totals, p10Exceptions, P10_COLUMNS } from '../../utils/payeReturns';
+import { downloadCSV } from '../../utils/exportUtils';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -170,6 +174,62 @@ const DocThumb = ({ url }) => {
   );
 };
 
+/**
+ * What this employee's compensation actually costs and nets, priced live off
+ * the form as it is filled in.
+ *
+ * This replaces a read-only "Housing Levy (AHL 1.5%)" box that computed the
+ * levy inline and was the only statutory figure the form showed — a number
+ * that no payroll run ever deducted. Everything here comes from the same
+ * engine that runs payroll, so what is quoted at hire is what gets paid.
+ */
+const StatutoryPreview = ({ form }) => {
+  const r = computePayroll({
+    basic:                  form.basic_salary,
+    housingAllowance:       form.housing_allowance,
+    transportAllowance:     form.transport_allowance,
+    pension:                form.pension_contribution,
+    mortgageInterest:       form.mortgage_interest,
+    insurancePremiums:      form.insurance_premiums,
+    postRetirementMedical:  form.post_retirement_medical,
+    hasDisabilityExemption: !!form.has_disability_exemption,
+  });
+
+  if (!r.grossCash) {
+    return (
+      <div className="p-3 bg-muted/30 border border-border rounded-lg text-xs text-muted-foreground">
+        Enter a basic salary to see the statutory deductions and take-home pay.
+      </div>
+    );
+  }
+
+  const Row = ({ label, value, negative, strong }) => (
+    <div className={`flex justify-between py-1.5 text-xs ${strong ? 'font-semibold border-t border-border pt-2 mt-1' : ''}`}>
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`font-mono ${negative ? 'text-red-500' : 'text-foreground'}`}>
+        {negative ? `(${fmt(value)})` : fmt(value)}
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="p-4 bg-muted/20 border border-border rounded-xl">
+      <p className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">Monthly Statutory Position</p>
+      <Row label="Gross pay" value={r.grossCash} />
+      <Row label="NSSF" value={r.nssf} negative />
+      <Row label="SHIF" value={r.shif} negative />
+      <Row label="Affordable Housing Levy" value={r.housingLevy} negative />
+      <Row label={`PAYE (on taxable pay of ${fmt(r.taxablePay)})`} value={r.paye} negative />
+      {r.voluntaryDeductions > 0 && <Row label="Pension / medical fund" value={r.voluntaryDeductions} negative />}
+      <Row label="Net pay" value={r.netPay} strong />
+      <p className="text-[11px] text-muted-foreground mt-2 pt-2 border-t border-border">
+        Employer also owes {fmt(r.employerNssf + r.employerHousingLevy)} a month in matching NSSF and housing levy —
+        total cost of employment {fmt(r.grossCash + r.employerNssf + r.employerHousingLevy)}.
+      </p>
+    </div>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EMPLOYEE FORM MODAL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,6 +263,12 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     basic_salary:        employee?.basic_salary        || '',
     housing_allowance:   employee?.housing_allowance   || '',
     transport_allowance: employee?.transport_allowance || '',
+    // Standing tax-deductible items — see the Tax Reliefs & Deductions section.
+    pension_contribution:     employee?.pension_contribution     || '',
+    mortgage_interest:        employee?.mortgage_interest        || '',
+    insurance_premiums:       employee?.insurance_premiums       || '',
+    post_retirement_medical:  employee?.post_retirement_medical  || '',
+    has_disability_exemption: employee?.has_disability_exemption ?? false,
     national_id:         employee?.national_id         || '',
     kra_pin:             employee?.kra_pin             || '',
     nssf_number:         '',   // encrypted — see the fetch below
@@ -336,6 +402,11 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
         basic_salary:        parseFloat(form.basic_salary)        || 0,
         housing_allowance:   parseFloat(form.housing_allowance)   || 0,
         transport_allowance: parseFloat(form.transport_allowance) || 0,
+        pension_contribution:     parseFloat(form.pension_contribution)    || 0,
+        mortgage_interest:        parseFloat(form.mortgage_interest)       || 0,
+        insurance_premiums:       parseFloat(form.insurance_premiums)      || 0,
+        post_retirement_medical:  parseFloat(form.post_retirement_medical) || 0,
+        has_disability_exemption: !!form.has_disability_exemption,
         national_id:         form.national_id         || null,
         kra_pin:             form.kra_pin             || null,
         sha_number:          form.sha_number          || null,
@@ -644,14 +715,47 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
               <label className={S.label}>SHA Number *</label>
               <input className={S.input + inv('sha_number')} value={form.sha_number} onChange={e => set('sha_number', e.target.value)} />
             </div>
+
+            {/* Tax-deductible items the employee funds. They belong on the person
+                rather than in each payroll run: they are standing monthly
+                figures, and re-keying them every month is how they end up
+                different every month. Payroll reads them from here. */}
+            <Section title="Tax Reliefs & Deductions" />
             <div>
-              <label className={S.label}>Housing Levy (AHL 1.5%)</label>
-              <input
-                className={`${S.input} bg-muted/40`}
-                readOnly
-                value={fmt((parseFloat(form.basic_salary || 0) + parseFloat(form.housing_allowance || 0) + parseFloat(form.transport_allowance || 0)) * 0.015)}
-              />
-              <p className="text-[11px] text-muted-foreground mt-1">1.5% of gross · auto-deducted in payroll</p>
+              <label className={S.label}>Pension Contribution (KES/month)</label>
+              <input type="number" className={S.input} placeholder="0" value={form.pension_contribution} onChange={e => set('pension_contribution', e.target.value)} />
+              <p className="text-[11px] text-muted-foreground mt-1">Registered scheme · deductible before PAYE, sharing one ceiling with NSSF</p>
+            </div>
+            <div>
+              <label className={S.label}>Mortgage Interest (KES/month)</label>
+              <input type="number" className={S.input} placeholder="0" value={form.mortgage_interest} onChange={e => set('mortgage_interest', e.target.value)} />
+              <p className="text-[11px] text-muted-foreground mt-1">Owner-occupier only · lowers tax, never withheld from pay</p>
+            </div>
+            <div>
+              <label className={S.label}>Insurance Premiums (KES/month)</label>
+              <input type="number" className={S.input} placeholder="0" value={form.insurance_premiums} onChange={e => set('insurance_premiums', e.target.value)} />
+              <p className="text-[11px] text-muted-foreground mt-1">Life / health / education · 15% relief, capped at KES 5,000</p>
+            </div>
+            <div>
+              <label className={S.label}>Post-Retirement Medical Fund (KES/month)</label>
+              <input type="number" className={S.input} placeholder="0" value={form.post_retirement_medical} onChange={e => set('post_retirement_medical', e.target.value)} />
+              <p className="text-[11px] text-muted-foreground mt-1">Deductible up to KES 15,000</p>
+            </div>
+            <div className="flex items-start gap-3 pt-5 md:col-span-2">
+              <input type="checkbox" id="has_disability_exemption" checked={form.has_disability_exemption}
+                onChange={e => set('has_disability_exemption', e.target.checked)}
+                className="w-4 h-4 accent-primary mt-0.5" />
+              <label htmlFor="has_disability_exemption" className="text-sm font-medium text-foreground">
+                Holds a KRA disability exemption certificate
+                <span className="block text-[11px] font-normal text-muted-foreground">Exempts the first KES 150,000 of monthly pay from tax</span>
+              </label>
+            </div>
+
+            {/* What this employee's pay actually resolves to. Previously a lone
+                hardcoded 1.5% levy box that payroll then ignored — the levy was
+                displayed here and never deducted anywhere. */}
+            <div className="md:col-span-2">
+              <StatutoryPreview form={form} />
             </div>
 
             <Section title="Bank Details" />
@@ -1015,38 +1119,16 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved, initialMonth })
   const setExtra = (empId, field, val) =>
     setExtras(prev => ({ ...prev, [empId]: { ...prev[empId], [field]: val } }));
 
-  // Kenya statutory deduction calculators
-  const calcPAYE = (gross) => {
-    // Simplified Kenya PAYE tax bands 2024
-    if (gross <= 24000)  return 0;
-    if (gross <= 32333)  return (gross - 24000) * 0.10;
-    if (gross <= 40667)  return 833 + (gross - 32333) * 0.25;
-    if (gross <= 57333)  return 2917 + (gross - 40667) * 0.30;
-    return 7917 + (gross - 57333) * 0.35;
-  };
-  const calcNSSF  = (gross) => Math.min(gross * 0.06, 2160); // 6% capped at 2160
-  const calcSHIF  = (gross) => gross * 0.0275;               // 2.75% (SHA/SHIF)
+  // This modal used to carry its own copy of the Kenya tax rules — pre-2023
+  // bands, no personal relief, a stale NSSF cap and no housing levy at all —
+  // which disagreed with the Finance Hub's copy while writing to the same
+  // table. Both are gone: src/utils/kenyaPayroll.js is now the only engine, so
+  // a figure here and the same figure there cannot drift apart.
+  const computeRow = (emp) =>
+    computePayroll(payrollInputForEmployee(emp, extras[emp.id] || {}, payMonth));
 
-  const computeRow = (emp) => {
-    const basic     = parseFloat(emp.basic_salary || 0);
-    const housing   = parseFloat(emp.housing_allowance || 0);
-    const transport = parseFloat(emp.transport_allowance || 0);
-    const ex        = extras[emp.id] || {};
-    const loan      = parseFloat(ex.loan    || 0);
-    const meal      = parseFloat(ex.meal    || 0);
-    const advance   = parseFloat(ex.advance || 0);
-    const bonus     = parseFloat(ex.bonus   || 0);
-    const gift      = parseFloat(ex.gift    || 0);
-
-    const grossAdditions = basic + housing + transport + meal + bonus + gift;
-    const paye    = calcPAYE(grossAdditions);
-    const nssf    = calcNSSF(grossAdditions);
-    const shif    = calcSHIF(grossAdditions);
-    const totalDeductions = paye + nssf + shif + loan + advance;
-    const netPay  = grossAdditions - totalDeductions;
-
-    return { basic, housing, transport, meal, bonus, gift, loan, advance, grossAdditions, paye, nssf, shif, totalDeductions, netPay };
-  };
+  // The schedule this run will be priced under, for the note below the table.
+  const rates = resolveRateSchedule(payMonth);
 
   const handleRunPayroll = async () => {
     if (!payMonth) { setError('Please select a pay month.'); return; }
@@ -1063,19 +1145,17 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved, initialMonth })
           // admin that owns the employee. Falls back to the runner's id.
           admin_id:     emp.admin_id || adminId,
           pay_month:    payMonth,
-          gross_salary: r.grossAdditions,
-          basic_salary: r.basic,
-          housing_allowance:   r.housing,
-          transport_allowance: r.transport,
-          meal_allowance:      r.meal,
+          basic_salary:        r.basic,
+          housing_allowance:   r.housingAllowance,
+          transport_allowance: r.transportAllowance,
+          meal_allowance:      r.mealAllowance,
           bonus:               r.bonus,
           gift:                r.gift,
-          loan_deduction:      r.loan,
-          advance_deduction:   r.advance,
-          paye:        r.paye,
-          nssf:        r.nssf,
-          shif:        r.shif,
-          net_salary:  r.netPay,
+          loan_deduction:      r.loanDeduction,
+          advance_deduction:   r.advanceDeduction,
+          // gross_salary, taxable_pay, paye, nssf, shif, housing_levy, the
+          // reliefs, the totals and the rate version this was priced under.
+          ...payrollRecordFrom(r),
           status:      'pending',
           created_at:  new Date().toISOString(),
         };
@@ -1150,7 +1230,7 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved, initialMonth })
               <table className="w-full text-sm">
                 <thead>
                   <tr>
-                    {['Employee', 'Basic', 'Housing', 'Transport', 'Meal Allow.', 'Bonus', 'Gift', 'Loan Deduct.', 'Advance Deduct.', 'Est. Net Pay'].map(h => (
+                    {['Employee', 'Basic', 'Housing', 'Transport', 'Meal Allow.', 'Bonus', 'Gift', 'Loan Deduct.', 'Advance Deduct.', 'PAYE', 'NSSF', 'SHIF', 'AHL', 'Est. Net Pay'].map(h => (
                       <th key={h} className={S.th + ' whitespace-nowrap'}>{h}</th>
                     ))}
                   </tr>
@@ -1229,13 +1309,21 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved, initialMonth })
                           />
                         </td>
 
+                        {/* Statutory deductions, itemised. A single "deductions"
+                            total gives nobody a way to spot a wrong tax before
+                            the run is committed. */}
+                        <td className={`${S.td} font-mono text-red-500 whitespace-nowrap`}>({fmt(r.paye)})</td>
+                        <td className={`${S.td} font-mono text-red-500 whitespace-nowrap`}>({fmt(r.nssf)})</td>
+                        <td className={`${S.td} font-mono text-red-500 whitespace-nowrap`}>({fmt(r.shif)})</td>
+                        <td className={`${S.td} font-mono text-red-500 whitespace-nowrap`}>({fmt(r.housingLevy)})</td>
+
                         {/* Estimated net pay */}
                         <td className={S.td}>
                           <span className={`font-mono font-bold text-sm ${r.netPay >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                             {fmt(r.netPay)}
                           </span>
-                          <p className="text-xs text-muted-foreground">
-                            Deductions: {fmt(r.totalDeductions)}
+                          <p className="text-xs text-muted-foreground whitespace-nowrap">
+                            Taxable {fmt(r.taxablePay)} · Gross {fmt(r.grossCash)}
                           </p>
                         </td>
                       </tr>
@@ -1249,9 +1337,20 @@ const RunPayrollModal = ({ employees, adminId, onClose, onSaved, initialMonth })
           {error   && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">{error}</div>}
           {success && <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700">{success}</div>}
 
-          {/* Statutory note */}
-          <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-            <strong>Statutory deductions applied automatically:</strong> PAYE (Kenya tax bands), NSSF (6% capped at KES 2,160), SHA/SHIF (2.75%)
+          {/* Statutory note — read off the rate schedule that will actually be
+              applied to this pay month, so it can never describe rates other
+              than the ones the run is about to use. */}
+          <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700 space-y-1">
+            <p>
+              <strong>Statutory deductions applied automatically:</strong> NSSF (6% to a ceiling of{' '}
+              {fmt(rates.nssf.upperLimit * rates.nssf.rate)}), SHIF ({(rates.shif.rate * 100).toFixed(2)}%, minimum{' '}
+              {fmt(rates.shif.min)}), Affordable Housing Levy ({(rates.housingLevy.rate * 100).toFixed(1)}%), then PAYE.
+            </p>
+            <p>
+              PAYE is charged on gross pay <strong>less</strong> NSSF, SHIF and the housing levy, and reduced by
+              personal relief of {fmt(rates.personalRelief)}.
+            </p>
+            <p className="text-blue-600/80">Rates in force for {payMonth}: {rates.label}.</p>
           </div>
         </div>
 
@@ -1295,6 +1394,12 @@ const HRPage = () => {
   const [payrollSearch,  setPayrollSearch]  = useState('');    // name / email / ID
   const [payrollFrom,    setPayrollFrom]    = useState('');    // date range start (YYYY-MM)
   const [payrollTo,      setPayrollTo]      = useState('');    // date range end (YYYY-MM)
+  // Letterhead for printed payslips (name, KRA PIN, address).
+  const [companyProfile, setCompanyProfile] = useState(null);
+  // Result of an export — shown in the payroll tab rather than as a toast,
+  // because "3 employees have no KRA PIN" is something to read and act on, not
+  // something to catch before it fades.
+  const [payrollNotice,  setPayrollNotice]  = useState(null);
   const adminIdRef = useRef(null);
   const hasLoaded  = useRef(false);
 
@@ -1352,7 +1457,10 @@ const HRPage = () => {
     // employee-pii function. Naming them here would fail the query outright once
     // the plaintext columns are dropped.
     const BASE_EMP_COLS = 'id, admin_id, full_name, email, role, department, phone, gender, date_of_birth, is_active, employment_type, date_joined, leave_balance, basic_salary, housing_allowance, transport_allowance, kra_pin, sha_number, national_id, bank_name, bank_branch';
-    const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url`;
+    // The statutory profile (20260829120000) rides in the enriched set for the
+    // same reason next-of-kin does: naming a not-yet-migrated column fails the
+    // whole query, and an empty staff list is far worse than a blank field.
+    const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url, pension_contribution, mortgage_interest, post_retirement_medical, insurance_premiums, has_disability_exemption`;
 
     const runEmpQuery = (cols) => {
       let q = supabase.from('user_profiles')
@@ -1363,13 +1471,18 @@ const HRPage = () => {
       return q;
     };
 
-    let payQuery = supabase.from('payroll_records')
-      .select('id, employee_id, admin_id, pay_month, gross_salary, basic_salary, housing_allowance, transport_allowance, net_salary, paye, nssf, shif, status, meal_allowance, bonus, gift, loan_deduction, advance_deduction')
-      .order('pay_month', { ascending: false })
-      .limit(200);
-    if (!isSuper) payQuery = payQuery.eq('admin_id', aId);
+    const BASE_PAY_COLS = 'id, employee_id, admin_id, pay_month, gross_salary, basic_salary, housing_allowance, transport_allowance, net_salary, paye, nssf, shif, status, meal_allowance, bonus, gift, loan_deduction, advance_deduction';
+    const FULL_PAY_COLS = `${BASE_PAY_COLS}, taxable_pay, housing_levy, personal_relief, insurance_relief, pension_contribution, non_cash_benefits, rate_version`;
 
-    let [empRes, payRes] = await Promise.all([runEmpQuery(FULL_EMP_COLS), payQuery]);
+    const runPayQuery = (cols) => {
+      const q = supabase.from('payroll_records')
+        .select(cols)
+        .order('pay_month', { ascending: false })
+        .limit(200);
+      return isSuper ? q : q.eq('admin_id', aId);
+    };
+
+    let [empRes, payRes] = await Promise.all([runEmpQuery(FULL_EMP_COLS), runPayQuery(FULL_PAY_COLS)]);
 
     // Pending migration → enriched select errors. Fall back to base columns so the
     // list still loads (the new contact fields just won't populate until migrated).
@@ -1377,8 +1490,20 @@ const HRPage = () => {
       console.warn('HR: enriched employee query failed — falling back to base columns. Apply the latest migrations to enable next-of-kin / secondary-contact fields.', empRes.error.message);
       empRes = await runEmpQuery(BASE_EMP_COLS);
     }
+    // Same guard on payroll: the statutory breakdown columns land in
+    // 20260829120000, and the history table must still render without them.
+    if (payRes.error) {
+      console.warn('HR: enriched payroll query failed — falling back to base columns. Apply migration 20260829120000 to see the PAYE breakdown.', payRes.error.message);
+      payRes = await runPayQuery(BASE_PAY_COLS);
+    }
     if (empRes.error)  console.error('HR: employee query failed:', empRes.error.message);
     if (payRes.error)  console.error('HR: payroll query failed:',  payRes.error.message);
+
+    // Letterhead for payslips. Failing to load it is not worth blocking the
+    // page for — payslipDocument falls back to a default company name.
+    supabase.from('company_profiles').select('*').eq('admin_id', aId).maybeSingle()
+      .then(({ data }) => setCompanyProfile(data))
+      .catch(() => setCompanyProfile(null));
 
     setEmployees(empRes.data || []);
     setPayrollRecords(payRes.data || []);
@@ -1434,6 +1559,26 @@ const HRPage = () => {
     return true;
   });
 
+  // What the filtered month actually costs and what has to be remitted.
+  //
+  // NSSF and the Affordable Housing Levy are matched pound for pound by the
+  // employer, so the cheque written to each fund is twice what appears on the
+  // payslips. SHIF and PAYE are withheld only. Legacy rows carry no housing
+  // levy — they contribute 0 rather than being back-filled with a rate that
+  // may not have applied when they were run.
+  const payrollTotals = (() => {
+    const sum = (fn) => filteredPayroll.reduce((s, p) => s + (parseFloat(fn(p)) || 0), 0);
+    const nssf = sum(p => p.nssf);
+    const shif = sum(p => p.shif);
+    const ahl  = sum(p => p.housing_levy);
+    return {
+      gross: sum(p => p.gross_salary),
+      net:   sum(p => p.net_salary),
+      paye:  sum(p => p.paye),
+      remittance: (nssf * 2) + shif + (ahl * 2),
+    };
+  })();
+
   const hasPayrollFilters = !!(payrollFilter || payrollStatus !== 'all' || payrollDept !== 'all' || payrollRole !== 'all' || payrollSearch || payrollFrom || payrollTo);
   const clearPayrollFilters = () => {
     setPayrollFilter(''); setPayrollStatus('all'); setPayrollDept('all'); setPayrollRole('all');
@@ -1480,25 +1625,86 @@ const HRPage = () => {
         Bonus:      p.bonus || 0,
         Gift:       p.gift || 0,
         Gross:      p.gross_salary,
-        PAYE:       p.paye,
+        // The statutory working, so this export can be reconciled against a
+        // P10 return instead of just tying back to the net pay column.
+        Non_Cash_Benefits: p.non_cash_benefits ?? 0,
         NSSF:       p.nssf,
         SHIF:       p.shif,
+        Housing_Levy: p.housing_levy ?? '',
+        Pension:    p.pension_contribution ?? 0,
+        Taxable_Pay: p.taxable_pay ?? '',
+        Personal_Relief:  p.personal_relief ?? '',
+        Insurance_Relief: p.insurance_relief ?? '',
+        PAYE:       p.paye,
         Loan_Deduction:    p.loan_deduction || 0,
         Advance_Deduction: p.advance_deduction || 0,
         Net_Pay:    p.net_salary,
         Status:     p.status,
+        // Blank on rows written before rates were versioned. Left blank rather
+        // than stamped with today's, so a reconciliation can tell them apart.
+        Rate_Basis: p.rate_version ?? '',
       };
     });
-    if (!rows.length) return;
-    const keys = Object.keys(rows[0]);
-    const csv  = [keys.join(','), ...rows.map(r => keys.map(k => `"${r[k]}"`).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `payroll_${payrollFilter || 'all'}_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // Serialised through the shared writer: the inline version quoted every
+    // field but never doubled an internal quote, so one employee with a quote
+    // in their name shifted every column after it.
+    downloadCSV(rows, `payroll_${payrollFilter || 'all'}_${new Date().toISOString().split('T')[0]}`);
+  };
+
+  /**
+   * The PAYE return figures, in P10 column order.
+   *
+   * Exports whatever the payroll filters currently show, so the usual flow —
+   * pick a month, export — gives one month's return. Exceptions are raised
+   * here rather than buried in the file: a missing KRA PIN is a rejected
+   * return, and iTax is an expensive place to find that out.
+   */
+  const exportP10 = () => {
+    const employeesById = Object.fromEntries(employees.map(e => [e.id, e]));
+    const rows = buildP10Rows({ records: filteredPayroll, employeesById });
+    const months = [...new Set(filteredPayroll.map(p => p.pay_month))];
+    const label = months.length === 1 ? months[0] : `${months.length}_months`;
+
+    if (!downloadCSV(rows, `P10_${label}`, P10_COLUMNS)) return;
+
+    const totals = p10Totals(rows);
+    const { missingPin, reconstructed } = p10Exceptions(rows);
+    if (missingPin.length) {
+      setPayrollNotice({ tone: 'error', text: `P10 exported, but ${missingPin.length} employee(s) have no KRA PIN on file — KRA will reject those rows. Missing: ${missingPin.slice(0, 5).join(', ')}${missingPin.length > 5 ? '…' : ''}` });
+    } else if (reconstructed) {
+      setPayrollNotice({ tone: 'warn', text: `P10 exported — ${totals.employees} employee(s), PAYE ${fmt(totals.paye)}. ${reconstructed} row(s) predate the stored tax base and were reconstructed at their own month's rates; check them before filing.` });
+    } else {
+      setPayrollNotice({ tone: 'ok', text: `P10 exported — ${totals.employees} employee(s), gross ${fmt(totals.grossPay)}, PAYE ${fmt(totals.paye)} due to KRA.` });
+    }
+  };
+
+  /**
+   * Every payslip the filters currently show, as one page-broken document.
+   *
+   * HR had no payslip printing at all — running payroll here and then walking
+   * over to the Finance Hub to print each slip one at a time was the only way
+   * to hand staff their payslips.
+   */
+  const printPayslips = () => {
+    if (!filteredPayroll.length) return;
+    const w = window.open('', '_blank');
+    if (!w) {
+      setPayrollNotice({ tone: 'error', text: 'Allow pop-ups to print payslips.' });
+      return;
+    }
+    w.document.write(payslipDocument(filteredPayroll.map(p => {
+      const emp = employees.find(e => e.id === p.employee_id) || {};
+      return {
+        company: companyProfile,
+        employee: { id: p.employee_id, full_name: emp.full_name, department: emp.department, email: emp.email, kra_pin: emp.kra_pin },
+        month: p.pay_month,
+        data: resolvePayrollRecord(p),
+      };
+    })));
+    w.document.close();
+    w.focus();
+    w.print();
+    setPayrollNotice({ tone: 'ok', text: `${filteredPayroll.length} payslip(s) ready — print, or choose "Save as PDF" in the print dialog.` });
   };
 
   return (
@@ -1718,7 +1924,7 @@ const HRPage = () => {
                     onChange={e => setPayrollSearch(e.target.value)}
                   />
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
                     onClick={exportPayrollCSV}
                     disabled={filteredPayroll.length === 0}
@@ -1726,6 +1932,24 @@ const HRPage = () => {
                   >
                     <Icon name="Download" size={14} color="currentColor" />
                     Export CSV
+                  </button>
+                  <button
+                    onClick={exportP10}
+                    disabled={filteredPayroll.length === 0}
+                    className={S.btnSec + ' disabled:opacity-50'}
+                    title="PAYE return figures in KRA P10 column order"
+                  >
+                    <Icon name="Landmark" size={14} color="currentColor" />
+                    P10 Return
+                  </button>
+                  <button
+                    onClick={printPayslips}
+                    disabled={filteredPayroll.length === 0}
+                    className={S.btnSec + ' disabled:opacity-50'}
+                    title="All payslips shown, as one document"
+                  >
+                    <Icon name="Printer" size={14} color="currentColor" />
+                    Payslips
                   </button>
                   <button
                     onClick={() => openModal('hrPayroll', true)}
@@ -1786,18 +2010,48 @@ const HRPage = () => {
               </div>
             </div>
 
+            {/* Export result — sticks around so a missing-PIN warning can be
+                acted on rather than missed. */}
+            {payrollNotice && (
+              <div className={`flex items-start gap-3 p-3 rounded-xl border text-xs ${
+                payrollNotice.tone === 'error' ? 'bg-red-50 border-red-200 text-red-700'
+                : payrollNotice.tone === 'warn' ? 'bg-amber-50 border-amber-200 text-amber-800'
+                : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+              }`}>
+                <Icon
+                  name={payrollNotice.tone === 'ok' ? 'CheckCircle' : 'AlertTriangle'}
+                  size={15}
+                  color="currentColor"
+                  className="mt-0.5 shrink-0"
+                />
+                <p className="flex-1">{payrollNotice.text}</p>
+                <button onClick={() => setPayrollNotice(null)} className="shrink-0 opacity-60 hover:opacity-100">
+                  <Icon name="X" size={14} color="currentColor" />
+                </button>
+              </div>
+            )}
+
             {/* Payroll summary cards for selected month */}
             {filteredPayroll.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { label: 'Total Gross',      value: fmt(filteredPayroll.reduce((s, p) => s + parseFloat(p.gross_salary || 0), 0)),  color: 'text-foreground' },
-                  { label: 'Total Net Pay',     value: fmt(filteredPayroll.reduce((s, p) => s + parseFloat(p.net_salary   || 0), 0)),  color: 'text-emerald-600' },
-                  { label: 'Total PAYE',        value: fmt(filteredPayroll.reduce((s, p) => s + parseFloat(p.paye         || 0), 0)),  color: 'text-red-500' },
-                  { label: 'Total NSSF + SHIF', value: fmt(filteredPayroll.reduce((s, p) => s + parseFloat(p.nssf || 0) + parseFloat(p.shif || 0), 0)), color: 'text-orange-500' },
-                ].map(({ label, value, color }) => (
+                  { label: 'Total Gross',   value: fmt(payrollTotals.gross), color: 'text-foreground',
+                    sub: `${filteredPayroll.length} employee(s)` },
+                  { label: 'Total Net Pay', value: fmt(payrollTotals.net),   color: 'text-emerald-600',
+                    sub: 'Paid to staff' },
+                  { label: 'PAYE Due to KRA', value: fmt(payrollTotals.paye), color: 'text-red-500',
+                    sub: 'By the 9th of next month' },
+                  // NSSF and the housing levy are matched by the employer, so the
+                  // cash that actually leaves the business is roughly double what
+                  // was withheld. Showing only the withheld half understates the
+                  // month's statutory bill.
+                  { label: 'Statutory Remittance', value: fmt(payrollTotals.remittance), color: 'text-orange-500',
+                    sub: 'NSSF + SHIF + AHL, incl. employer match' },
+                ].map(({ label, value, color, sub }) => (
                   <div key={label} className="bg-card border border-border rounded-xl p-4">
                     <p className="text-xs text-muted-foreground mb-1">{label}</p>
                     <p className={`text-lg font-bold font-mono ${color}`}>{value}</p>
+                    <p className="text-[11px] text-muted-foreground mt-1">{sub}</p>
                   </div>
                 ))}
               </div>
@@ -1809,16 +2063,16 @@ const HRPage = () => {
                 <table className="w-full">
                   <thead>
                     <tr>
-                      {['Employee', 'Pay Month', 'Basic', 'Allowances', 'Additions', 'Gross', 'PAYE', 'NSSF', 'SHA', 'Other Deduct.', 'Net Pay', 'Status'].map(h => (
+                      {['Employee', 'Pay Month', 'Basic', 'Allowances', 'Additions', 'Gross', 'Taxable Pay', 'PAYE', 'NSSF', 'SHIF', 'AHL', 'Other Deduct.', 'Net Pay', 'Status'].map(h => (
                         <th key={h} className={S.th + ' whitespace-nowrap'}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {loading ? (
-                      Array(5).fill(0).map((_, i) => <tr key={i}>{Array(12).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>)
+                      Array(5).fill(0).map((_, i) => <tr key={i}>{Array(14).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>)
                     ) : filteredPayroll.length === 0 ? (
-                      <tr><td colSpan={12}>
+                      <tr><td colSpan={14}>
                         <div className="flex flex-col items-center justify-center py-16">
                           <Icon name="Receipt" size={28} color="var(--muted-foreground)" />
                           <p className="text-sm font-medium text-foreground mt-3">No payroll records yet</p>
@@ -1841,9 +2095,14 @@ const HRPage = () => {
                           <td className={`${S.td} font-mono`}>{fmt(allowances)}</td>
                           <td className={`${S.td} font-mono text-blue-600`}>{fmt(additions)}</td>
                           <td className={`${S.td} font-mono font-semibold`}>{fmt(p.gross_salary)}</td>
+                          {/* Records written before the statutory breakdown existed
+                              have no value here. A dash reads as "not recorded";
+                              a zero would read as "no tax base", which is a lie. */}
+                          <td className={`${S.td} font-mono`}>{p.taxable_pay == null ? '—' : fmt(p.taxable_pay)}</td>
                           <td className={`${S.td} font-mono text-red-500`}>({fmt(p.paye)})</td>
                           <td className={`${S.td} font-mono text-red-500`}>({fmt(p.nssf)})</td>
                           <td className={`${S.td} font-mono text-red-500`}>({fmt(p.shif)})</td>
+                          <td className={`${S.td} font-mono text-red-500`}>{p.housing_levy == null ? '—' : `(${fmt(p.housing_levy)})`}</td>
                           <td className={`${S.td} font-mono text-orange-500`}>{otherDeduct > 0 ? `(${fmt(otherDeduct)})` : '—'}</td>
                           <td className={`${S.td} font-mono font-bold text-emerald-600`}>{fmt(p.net_salary)}</td>
                           <td className={S.td}>

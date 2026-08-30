@@ -919,6 +919,28 @@ const buildSigningReminderEmail = (data: any) => {
 </body></html>`;
 };
 
+// How the follow-up will happen, in words that survive being dropped into a
+// sentence. `phrase` carries its own article because "a email" is wrong, and
+// `preposition` because you send an email TO someone but have a meeting WITH
+// them. Mirrors CONTACT_CHANNELS in src/config/crmVocabulary.js — the labels
+// have to agree with what the agent picked in the portal.
+const FOLLOW_UP_CHANNELS: Record<string, { label: string; phrase: string; preposition: string }> = {
+  follow_up:  { label: "Check-in",    phrase: "a check-in",          preposition: "with" },
+  call:       { label: "Phone call",  phrase: "a phone call",        preposition: "with" },
+  whatsapp:   { label: "WhatsApp",    phrase: "a WhatsApp message",  preposition: "to"   },
+  sms:        { label: "SMS",         phrase: "an SMS",              preposition: "to"   },
+  email:      { label: "Email",       phrase: "an email",            preposition: "to"   },
+  meeting:    { label: "Meeting",     phrase: "a meeting",           preposition: "with" },
+  site_visit: { label: "Site visit",  phrase: "a site visit",        preposition: "with" },
+  proposal:   { label: "Proposal",    phrase: "a proposal",          preposition: "for"  },
+  other:      { label: "Follow-up",   phrase: "a follow-up",         preposition: "with" },
+  // The pre-20260829140000 spellings. Rows written before the channel vocabulary
+  // was unified are normalised in the database, but a reminder can be sent from
+  // a queue that was already built, so both names have to resolve.
+  phone_call:     { label: "Phone call", phrase: "a phone call", preposition: "with" },
+  office_meeting: { label: "Meeting",    phrase: "a meeting",    preposition: "with" },
+};
+
 // Sales-agent follow-up reminder. Sent by the agent-followup-reminders worker
 // when a scheduled follow-up comes due, and addressed to the AGENT (not the
 // lead) — it is the agent's own diary nudge.
@@ -929,7 +951,18 @@ const buildFollowUpReminderEmail = (data: any) => {
   const accentDark  = isOverdue ? "#b91c1c" : "#1e429f";
   const bannerBg    = isOverdue ? "#fef2f2" : "#eff6ff";
   const bannerLine  = isOverdue ? "#fecaca" : "#bfdbfe";
-  const typeLabel   = (appointmentType || "follow_up").replace(/_/g, " ");
+
+  const channel = FOLLOW_UP_CHANNELS[String(appointmentType || "follow_up").toLowerCase()]
+    || { label: String(appointmentType || "Follow-up").replace(/_/g, " "), phrase: "a follow-up", preposition: "with" };
+  const typeLabel = channel.label;
+
+  // The reminder is only useful if it can be acted on from the phone that shows
+  // it: tapping the number should dial, tapping the address should compose.
+  // Both hrefs are built from a strict character set rather than the raw value.
+  const telHref  = String(leadPhone ?? "").replace(/[^\d+]/g, "");
+  const mailHref = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(leadEmail ?? "").trim())
+    ? String(leadEmail).trim()
+    : "";
   const when = scheduledAt
     ? new Date(scheduledAt).toLocaleString("en-KE", {
         weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
@@ -947,9 +980,9 @@ const buildFollowUpReminderEmail = (data: any) => {
     <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${isOverdue ? "This one has already passed" : "Coming up on your schedule"}</p>
   </div>
 
-  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${agentName || "there"}</strong>,</p>
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${esc(agentName) || "there"}</strong>,</p>
   <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
-    You scheduled a <strong>${typeLabel}</strong> with <strong>${leadName || "a lead"}</strong>.
+    You scheduled <strong>${channel.phrase}</strong> ${channel.preposition} <strong>${esc(leadName) || "a lead"}</strong>.
     ${isOverdue ? "It was due and is still open — close it out or push it to a new date." : "Here are the details so you're ready."}
   </p>
 
@@ -959,14 +992,14 @@ const buildFollowUpReminderEmail = (data: any) => {
   </div>
 
   <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
-    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Lead</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadName || "—"}</td></tr>
-    ${leadPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadPhone}</td></tr>` : ""}
-    ${leadEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadEmail}</td></tr>` : ""}
-    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Type</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;text-transform:capitalize">${typeLabel}</td></tr>
-    ${location ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Location</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${location}</td></tr>` : ""}
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Lead</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(leadName) || "—"}</td></tr>
+    ${leadPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${telHref ? `<a href="tel:${telHref}" style="color:${accent};text-decoration:none">${esc(leadPhone)}</a>` : esc(leadPhone)}</td></tr>` : ""}
+    ${leadEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${mailHref ? `<a href="mailto:${esc(mailHref)}" style="color:${accent};text-decoration:none">${esc(leadEmail)}</a>` : esc(leadEmail)}</td></tr>` : ""}
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">How</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(typeLabel)}</td></tr>
+    ${location ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Location</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(location)}</td></tr>` : ""}
   </table>
 
-  ${notes ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Your notes</p><p style="margin:0;font-size:13px;color:#374151">${notes}</p></div>` : ""}
+  ${notes ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Your notes</p><p style="margin:0;font-size:13px;color:#374151">${esc(notes)}</p></div>` : ""}
 
   ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:${accent};color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open my portal</a></div>` : ""}
 </div>

@@ -2,47 +2,17 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { monthlyInstallmentFor } from './usePOS';
+import { computePayroll, payrollRecordFrom } from '../utils/kenyaPayroll';
+import { computeVatReturn } from '../utils/vatLedger';
+import { buildIncomeStatement } from '../utils/financialStatements';
+import { fetchAllRows } from '../lib/fetchAllRows';
 
 // Module-level counter — see realtime channel naming convention.
 let _financeHubChannelSeq = 0;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// KENYA TAX ENGINE (2025/26)
-// ─────────────────────────────────────────────────────────────────────────────
-export const calcKenyaTax = (gross) => {
-  const bands = [
-    { limit: 24000,    rate: 0.10 },
-    { limit: 8333,     rate: 0.25 },
-    { limit: 467667,   rate: 0.30 },
-    { limit: 300000,   rate: 0.325 },
-    { limit: Infinity, rate: 0.35 },
-  ];
-  let paye = 0, remaining = gross;
-  for (const band of bands) {
-    if (remaining <= 0) break;
-    const taxable = Math.min(remaining, band.limit);
-    paye += taxable * band.rate;
-    remaining -= taxable;
-  }
-  paye = Math.max(0, paye - 2400);
-
-  const nssfTierI  = Math.min(gross, 7000) * 0.06;
-  const nssfTierII = Math.min(Math.max(gross - 7000, 0), 29000) * 0.06;
-  const nssf       = nssfTierI + nssfTierII;
-  const shif       = Math.max(gross * 0.0275, 300);
-  const housingLevy = gross * 0.015;
-  const totalDeductions = paye + nssf + shif + housingLevy;
-
-  return {
-    gross,
-    paye:            Math.round(paye),
-    nssf:            Math.round(nssf),
-    shif:            Math.round(shif),
-    housingLevy:     Math.round(housingLevy),
-    totalDeductions: Math.round(totalDeductions),
-    net:             Math.round(gross - totalDeductions),
-  };
-};
+// The Kenya tax engine used to live here as a local `calcKenyaTax`, with a
+// second copy in the HR payroll modal that disagreed with it. Both are gone:
+// see src/utils/kenyaPayroll.js for the one versioned implementation.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // JOURNAL HELPERS
@@ -166,13 +136,10 @@ export const useFinanceHub = () => {
   const [chartOfAccounts,  setChartOfAccounts]  = useState([]);
   const [financialSummary, setFinancialSummary] = useState({
     totalRevenue: 0, totalExpenses: 0, netProfit: 0,
-    totalAssets: 0, totalLiabilities: 0, equity: 0,
     totalInterestIncome: 0, totalPenaltyIncome: 0,
     totalCOGS: 0, grossProfit: 0, grossMargin: 0,
     totalSalaries: 0, pendingInvoices: 0, overdueInvoices: 0,
-    outputVAT: 0, inputVAT: 0, netVAT: 0,
-    cashFromOperations: 0, cashFromInvesting: 0, cashFromFinancing: 0,
-    openingCash: 0, closingCash: 0,
+    outputVAT: 0, inputVAT: 0, netVAT: 0, vatDiagnostics: null,
   });
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
@@ -180,6 +147,12 @@ export const useFinanceHub = () => {
   // Keep adminId in a ref so all callbacks always have the latest value
   const adminIdRef = useRef(null);
   useEffect(() => { adminIdRef.current = adminId; }, [adminId]);
+
+  // computeSummary needs the chart to tell an input-VAT account from an output
+  // one, but it must not re-run every time the chart's identity changes — a ref
+  // gives it the live value without becoming a dependency.
+  const chartRef = useRef([]);
+  useEffect(() => { chartRef.current = chartOfAccounts; }, [chartOfAccounts]);
 
   // ── Resolve admin ID ─────────────────────────────────────────────────────────
   const resolveAdminId = useCallback(async () => {
@@ -440,13 +413,24 @@ export const useFinanceHub = () => {
     } catch { setInvoices([]); return []; }
   }, [fetchManualInvoices, fetchSalePlans]);
 
+  /**
+   * The whole ledger, not the newest 500 rows.
+   *
+   * This capped at 500 while the balance sheet and trial balance are CUMULATIVE
+   * — they count every entry since inception. A cap on a newest-first query
+   * drops the OLDEST history, so the opening position silently walks away as a
+   * tenant posts more entries, and the sheet stops balancing for a reason
+   * nothing on screen could explain. fetchAllRows exists for exactly this: it
+   * pages to completion and throws rather than returning a partial set that
+   * would look whole.
+   */
   const fetchJournalEntries = useCallback(async (aId) => {
     try {
-      const { data } = await supabase
-        .from('journal_entries').select('*').eq('admin_id', aId)
-        .order('entry_date', { ascending: false })
-        .order('created_at',  { ascending: false }).limit(500);
-      const all = data || [];
+      const all = await fetchAllRows(() =>
+        supabase
+          .from('journal_entries').select('*').eq('admin_id', aId)
+          .order('entry_date', { ascending: false })
+          .order('created_at',  { ascending: false }));
       setJournalEntries(all.filter(j => !j.is_automated));
       setAutomatedEntries(all.filter(j =>  j.is_automated));
       return all;
@@ -492,56 +476,68 @@ export const useFinanceHub = () => {
 
   const fetchEmployees = useCallback(async (aId) => {
     try {
-      const { data } = await supabase
+      // Compensation and the statutory profile are selected here because the
+      // payroll form defaults every figure off the employee record. Without
+      // them `selectedEmp.basic_salary` was always undefined, so "leave the
+      // field blank to use the employee's salary" silently meant zero.
+      const BASE = 'id, full_name, email, role, department, phone, is_active, basic_salary, housing_allowance, transport_allowance';
+      const FULL = `${BASE}, pension_contribution, mortgage_interest, post_retirement_medical, insurance_premiums, has_disability_exemption`;
+
+      const run = (cols) => supabase
         .from('user_profiles')
-        .select('id, full_name, email, role, department, phone, is_active')
+        .select(cols)
         .eq('admin_id', aId).eq('is_active', true)
         .not('role', 'in', '("client","admin","super_admin")');
+
+      // The statutory columns land in migration 20260829120000; fall back so a
+      // frontend deployed ahead of it still lists staff.
+      let { data, error } = await run(FULL);
+      if (error) ({ data } = await run(BASE));
       setEmployees(data || []);
     } catch { setEmployees([]); }
   }, []);
 
+  /**
+   * The all-time headline figures behind the KPI strip.
+   *
+   * Delegates to the same engines the Financial Statements tab uses, so the
+   * header and the statements cannot disagree. It previously summed accounts by
+   * NAME regex (`/^6/` for revenue, `/^7|^8|Expense|Cost/` for expenses) while
+   * the statements went by account TYPE — two ways of deciding what an account
+   * is, quietly producing two different profits.
+   *
+   * The fabricated fields that used to live here are gone rather than left for
+   * something to pick up again: totalAssets was `netCash + revenue * 0.3`,
+   * totalLiabilities `expenses * 0.25`, cashFromOperations
+   * `netProfit + COGS * 0.05`, openingCash `netCash * 0.6`. The balance sheet
+   * and cash flow now come off real account balances — see
+   * src/utils/financialStatements.js.
+   *
+   * No period is passed: this strip is a running total, not a statement.
+   */
   const computeSummary = useCallback((journals, invoiceList) => {
-    const posted = journals.filter(j => j.status === 'posted');
-
-    const sum = (fn) => posted.filter(fn).reduce((s, j) => s + parseFloat(j.amount || 0), 0);
-
-    const totalRevenue        = sum(j => (j.credit_account||'').match(/Sales Revenue|Interest Income|Penalty|Commission Income|Other Income|^6/));
-    const totalInterestIncome = sum(j => (j.credit_account||'').includes('Interest Income'));
-    const totalPenaltyIncome  = sum(j => (j.credit_account||'').includes('Penalty'));
-    const totalCOGS           = sum(j => (j.debit_account||'').match(/Cost of Assets|COGS|^7/));
-    const totalSalaries       = sum(j => (j.debit_account||'').match(/Salari|^8000/));
-    const totalExpenses       = sum(j => (j.debit_account||'').match(/^7|^8|Expense|Cost/));
-    const outputVAT           = sum(j => (j.credit_account||'').includes('VAT') || j.trigger_event === 'vat_on_cash_sale');
-
-    const grossProfit  = totalRevenue - totalCOGS;
-    const grossMargin  = totalRevenue > 0 ? parseFloat(((grossProfit / totalRevenue) * 100).toFixed(1)) : 0;
-    const netProfit    = totalRevenue - totalExpenses;
-    const inputVAT     = outputVAT * 0.4;
-    const netVAT       = outputVAT - inputVAT;
-
-    const cashDebits  = sum(j => (j.debit_account||'').match(/Cash|M-Pesa|Bank/));
-    const cashCredits = sum(j => (j.credit_account||'').match(/Cash|M-Pesa|Bank/));
-    const netCash     = Math.max(cashDebits - cashCredits, 0);
-
-    const totalAssets      = Math.max(netCash + totalRevenue * 0.3, 0);
-    const totalLiabilities = Math.max(totalExpenses * 0.25, 0);
-    const equity           = totalAssets - totalLiabilities;
-    const cashFromOperations = netProfit + totalCOGS * 0.05;
-    const cashFromInvesting  = -(totalAssets * 0.1);
-    const openingCash        = Math.max(netCash * 0.6, 0);
-    const closingCash        = openingCash + cashFromOperations + cashFromInvesting;
+    const chartOfAccounts = chartRef.current;
+    const pl  = buildIncomeStatement({ journals, chartOfAccounts });
+    const vat = computeVatReturn({ journals, chartOfAccounts });
 
     setFinancialSummary({
-      totalRevenue, totalExpenses, netProfit,
-      totalAssets, totalLiabilities, equity,
-      totalInterestIncome, totalPenaltyIncome,
-      totalCOGS, grossProfit, grossMargin, totalSalaries,
-      pendingInvoices: (invoiceList||[]).filter(i => i.status === 'pending').length,
-      overdueInvoices: (invoiceList||[]).filter(i => i.status === 'overdue').length,
-      outputVAT, inputVAT, netVAT,
-      cashFromOperations, cashFromInvesting, cashFromFinancing: 0,
-      openingCash, closingCash,
+      totalRevenue:        pl.revenue,
+      totalExpenses:       pl.expenses,
+      netProfit:           pl.netProfit,
+      totalCOGS:           pl.cogs,
+      grossProfit:         pl.grossProfit,
+      grossMargin:         pl.grossMargin,
+      totalSalaries:       pl.salaries,
+      totalInterestIncome: pl.interestIncome,
+      totalPenaltyIncome:  pl.penaltyIncome,
+      pendingInvoices: (invoiceList || []).filter(i => i.status === 'pending').length,
+      overdueInvoices: (invoiceList || []).filter(i => i.status === 'overdue').length,
+      outputVAT: vat.outputVAT,
+      inputVAT:  vat.inputVAT,
+      netVAT:    vat.netVAT,
+      // Carried through so the VAT panel can say WHY input VAT is what it is —
+      // no account set up, or an account with nothing posted to it.
+      vatDiagnostics: vat.diagnostics,
     });
   }, []);
 
@@ -590,13 +586,10 @@ export const useFinanceHub = () => {
     setChartOfAccounts([]);
     setFinancialSummary({
       totalRevenue: 0, totalExpenses: 0, netProfit: 0,
-      totalAssets: 0, totalLiabilities: 0, equity: 0,
       totalInterestIncome: 0, totalPenaltyIncome: 0,
       totalCOGS: 0, grossProfit: 0, grossMargin: 0,
       totalSalaries: 0, pendingInvoices: 0, overdueInvoices: 0,
-      outputVAT: 0, inputVAT: 0, netVAT: 0,
-      cashFromOperations: 0, cashFromInvesting: 0, cashFromFinancing: 0,
-      openingCash: 0, closingCash: 0,
+      outputVAT: 0, inputVAT: 0, netVAT: 0, vatDiagnostics: null,
     });
     setLoading(true);
     setError(null);
@@ -868,28 +861,34 @@ const { data, error: err } = await supabase
     computeSummary(await fetchJournalEntries(aId), invs);
   }, [fetchInvoices, fetchJournalEntries, computeSummary]);
 
-  const runPayroll = useCallback(async (employeeId, grossSalary, payMonth) => {
+  /**
+   * Run payroll for one employee.
+   *
+   * Takes the engine input the caller previewed rather than a bare gross
+   * figure: the previous signature accepted allowances as a fourth argument it
+   * never read, so the preview showed basic + housing + transport while the
+   * row that got saved was taxed on basic alone. Handing the same input object
+   * to the same engine that drew the preview is what keeps the two identical.
+   */
+  const runPayroll = useCallback(async (employeeId, payMonth, payrollInput) => {
     const aId = adminIdRef.current;
     if (!aId) throw new Error('Not ready');
-    const tax = calcKenyaTax(parseFloat(grossSalary));
+    const result = computePayroll({ ...payrollInput, payMonth });
     const { data, error: err } = await supabase
       .from('payroll_records')
-      .insert({
-        admin_id:         aId,
-        employee_id:      employeeId,
-        pay_month:        payMonth,
-        gross_salary:     tax.gross,
-        paye:             tax.paye,
-        nssf:             tax.nssf,
-        shif:             tax.shif,
-        total_deductions: tax.totalDeductions,
-        net_salary:       tax.net,
-        status:           'pending',
-      })
+      // Upsert, not insert: (employee_id, pay_month) is unique, so correcting a
+      // month re-prices it instead of failing on a duplicate-key error.
+      .upsert({
+        admin_id:    aId,
+        employee_id: employeeId,
+        pay_month:   payMonth,
+        ...payrollRecordFrom(result),
+        status:      'pending',
+      }, { onConflict: 'employee_id,pay_month' })
       .select().maybeSingle();
     if (err) throw err;
     await fetchPayrollRecords(aId);
-    return { ...data, ...tax };
+    return { ...data, ...result };
   }, [fetchPayrollRecords]);
 
   const approvePayroll = useCallback(async (payrollId) => {

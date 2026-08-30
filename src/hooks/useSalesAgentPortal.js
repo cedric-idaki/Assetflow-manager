@@ -12,6 +12,8 @@ import { sendAssistRequest, sendAssistUpdate } from '../services/emailService';
 import {
   helpTypeLabel, declineReasonLabel, isHelpType, isDeclineReason,
 } from '../utils/assistReasons';
+import { toFollowUpChannel, channelMeta } from '../config/crmVocabulary';
+import { summariseOpportunities } from '../utils/pipelineValue';
 
 // What a gold agent earns for taking an admin through onboarding on a bronze
 // agent's behalf. Paid on completion, not on request.
@@ -518,6 +520,16 @@ export const useSalesAgentPortal = () => {
     totalEarned: walletTransactions.filter(t => t.tx_type === 'credit').reduce((s, t) => s + parseFloat(t.total_earned || 0), 0),
     totalWithdrawn: walletTransactions.filter(t => t.tx_type === 'withdrawal').reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0),
     totalExpenses: expenses.reduce((s, e) => s + parseFloat(e.amount || 0), 0),
+
+    /**
+     * The pipeline measured in money rather than headcount.
+     *
+     * `leadsInPipeline` above counts deals, which is the number that made an
+     * agent working one KES 12M deal look identical to one working forty KES
+     * 200k deals. Derived here rather than in the panel so the KPI card, the
+     * opportunities panel and anything added later all read the same figure.
+     */
+    pipeline: summariseOpportunities(leads),
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -532,6 +544,15 @@ export const useSalesAgentPortal = () => {
         email:                  formData.email,
         asset_interest:         formData.assetInterest,
         budget_range:           formData.budgetRange            || null,
+        // The deal, as opposed to the person. budget_range stays what it always
+        // was — the buyer's own words about what they can spend — while
+        // deal_value is the agent's figure for what this is worth if it lands.
+        // Both nullable: a lead taken over the phone in thirty seconds should
+        // not require a price before it can be saved.
+        deal_value:             formData.dealValue === '' || formData.dealValue === undefined || formData.dealValue === null
+                                  ? null
+                                  : Number(formData.dealValue),
+        expected_close_date:    formData.expectedCloseDate      || null,
         priority:               formData.priority || 'medium',
         stage:                  'new_lead',
         source:                 formData.source,
@@ -593,6 +614,121 @@ export const useSalesAgentPortal = () => {
     );
   }, [user?.id, agentProfile]);
 
+  /**
+   * Record or correct why a deal was lost, after the fact.
+   *
+   * The close-time prompt is skippable on purpose, so without this there is no
+   * way back: a skipped reason stayed blank forever and a mistaken one stayed
+   * wrong. The agent owns their own leads under RLS, so no new policy is needed.
+   *
+   * Only meaningful on a lead that IS lost — trg_leads_stamp_lost wipes the
+   * whole lost_* set the moment a lead is revived or converted, so a reason
+   * written against a live lead would simply vanish. The panel only offers this
+   * on closed-not-won leads.
+   */
+  const updateLeadLostReason = useCallback(async (leadId, { reason, notes } = {}) => {
+    const patch = {
+      lost_reason: reason || null,
+      lost_notes:  notes?.trim() || null,
+      updated_at:  new Date().toISOString(),
+    };
+    const { error: err } = await supabase.from('leads').update(patch).eq('id', leadId);
+    if (err) throw err;
+    setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, ...patch } : l)));
+    await auditLogsService.log(
+      'update',
+      'leads',
+      `Lost reason ${reason ? `set to "${reason}"` : 'cleared'} by agent ${agentProfile?.agent_code || ''}`,
+      leadId,
+      null,
+      { lost_reason: patch.lost_reason, agent_code: agentProfile?.agent_code }
+    );
+  }, [user?.id, agentProfile]);
+
+  /**
+   * Price a deal: what it is worth, when it lands, and the odds it does.
+   *
+   * Separate from updateLeadStage because it is a different action with a
+   * different rhythm — a stage moves one deal at a time by dragging a card,
+   * while pricing is a batch an agent does down a list of forty. Folding the
+   * two together would mean every value edit also wrote a stage and every drag
+   * had to carry a value it does not know.
+   *
+   * Every field is nullable and null is MEANINGFUL: clearing a deal value says
+   * "I do not know what this is worth", which is a different and more honest
+   * state than zero. So `undefined` (field not supplied) and `null` (field
+   * deliberately cleared) are kept apart — only what the caller actually passed
+   * is written, and a caller that sends nothing gets no write at all rather
+   * than a row of blanks.
+   */
+  const updateLeadDeal = useCallback(async (leadId, { dealValue, expectedCloseDate, winProbability } = {}) => {
+    const patch = { updated_at: new Date().toISOString() };
+
+    if (dealValue !== undefined) {
+      const n = dealValue === null || dealValue === '' ? null : Number(dealValue);
+      if (n !== null && (!Number.isFinite(n) || n < 0)) {
+        throw new Error('Deal value must be zero or more.');
+      }
+      patch.deal_value = n;
+    }
+
+    if (expectedCloseDate !== undefined) {
+      patch.expected_close_date = expectedCloseDate || null;
+    }
+
+    if (winProbability !== undefined) {
+      const p = winProbability === null || winProbability === '' ? null : Number(winProbability);
+      if (p !== null && (!Number.isFinite(p) || p < 0 || p > 100)) {
+        throw new Error('Chance of winning must be between 0 and 100.');
+      }
+      patch.win_probability = p === null ? null : Math.round(p);
+    }
+
+    // Nothing but the timestamp — the caller opened the editor and saved
+    // without touching anything. Writing would only churn updated_at.
+    if (Object.keys(patch).length === 1) return;
+
+    const { error: err } = await supabase.from('leads').update(patch).eq('id', leadId);
+    if (err) throw err;
+    setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, ...patch } : l)));
+
+    // Money on a lead is commission-adjacent, so the change is logged like any
+    // other figure that feeds a payout conversation.
+    // Only describe the fields that were actually written — an entry reading
+    // "value set to KES NaN" on an edit that only moved a date is worse than
+    // no entry, because somebody will one day read it as evidence.
+    const changed = [];
+    if ('deal_value' in patch) {
+      changed.push(patch.deal_value === null
+        ? 'deal value cleared'
+        : `deal value KES ${Number(patch.deal_value).toLocaleString()}`);
+    }
+    if ('expected_close_date' in patch) {
+      changed.push(patch.expected_close_date
+        ? `expected close ${patch.expected_close_date}`
+        : 'expected close cleared');
+    }
+    if ('win_probability' in patch) {
+      changed.push(patch.win_probability === null
+        ? 'win chance back to the stage default'
+        : `win chance ${patch.win_probability}%`);
+    }
+
+    await auditLogsService.log(
+      'update',
+      'leads',
+      `Lead deal updated — ${changed.join(', ')} — by agent ${agentProfile?.agent_code || ''}`,
+      leadId,
+      null,
+      {
+        deal_value:          patch.deal_value ?? null,
+        expected_close_date: patch.expected_close_date ?? null,
+        win_probability:     patch.win_probability ?? null,
+        agent_code:          agentProfile?.agent_code,
+      },
+    );
+  }, [user?.id, agentProfile]);
+
   const requestWithdrawal = useCallback(async (amount, description) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready.');
     const { data, error: err } = await supabase
@@ -650,10 +786,17 @@ export const useSalesAgentPortal = () => {
   // badge and the reminder email sent by the agent-followup-reminders worker;
   // the DB trigger defaults it to an hour before the appointment when omitted.
   const scheduleFollowUp = useCallback(async ({
-    leadId, leadName, appointmentType, scheduledAt, remindAt, location, notes,
+    leadId, leadName, appointmentType, channel, scheduledAt, remindAt, location, notes,
+    sourceInteractionId,
   }) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready. Please refresh the page.');
     if (!scheduledAt) throw new Error('Pick a date and time for the appointment.');
+
+    // follow_ups.appointment_type is CHECK-constrained to the shared channel
+    // set (20260829140000). The database normalises too, but doing it here
+    // means the row we insert is the row we get back — no silent difference
+    // between what the optimistic UI shows and what was stored.
+    const followUpChannel = toFollowUpChannel(channel ?? appointmentType);
 
     const { data, error: err } = await supabase
       .from('follow_ups')
@@ -661,12 +804,15 @@ export const useSalesAgentPortal = () => {
         agent_id:         agentProfile.id,
         lead_id:          leadId   || null,
         lead_name:        leadName || null,
-        appointment_type: appointmentType || 'follow_up',
+        appointment_type: followUpChannel,
         scheduled_at:     new Date(scheduledAt).toISOString(),
         remind_at:        remindAt ? new Date(remindAt).toISOString() : null,
         location:         location || null,
         notes:            notes    || null,
         is_completed:     false,
+        // Set when the follow-up was booked from a logged contact, so the
+        // appointment can be traced back to the conversation that caused it.
+        source_interaction_id: sourceInteractionId || null,
       })
       .select()
       .maybeSingle();
@@ -677,16 +823,19 @@ export const useSalesAgentPortal = () => {
     await auditLogsService.log(
       'create',
       'follow_ups',
-      `Follow-up scheduled with ${leadName || 'a lead'} on ${new Date(scheduledAt).toLocaleString('en-GB')}${location ? ` at ${location}` : ''}`,
+      `${channelMeta(followUpChannel).label} follow-up scheduled with ${leadName || 'a lead'} on ${new Date(scheduledAt).toLocaleString('en-GB')}${location ? ` at ${location}` : ''}`,
       data?.id,
       null,
       {
         lead_id: leadId, lead_name: leadName, scheduled_at: scheduledAt,
-        appointment_type: appointmentType, agent_code: agentProfile?.agent_code,
+        appointment_type: followUpChannel, agent_code: agentProfile?.agent_code,
+        source_interaction_id: sourceInteractionId || null,
       }
     );
+
+    await fetchFollowUps(agentProfile.id);
     return data;
-  }, [agentProfile?.id, agentProfile?.agent_code]);
+  }, [agentProfile?.id, agentProfile?.agent_code, fetchFollowUps]);
 
   const rescheduleFollowUp = useCallback(async (followUpId, newScheduledAt, newRemindAt) => {
     // The DB trigger clears reminder_sent_at when scheduled_at moves, so a
@@ -1017,6 +1166,8 @@ export const useSalesAgentPortal = () => {
     error,
     registerLead,
     updateLeadStage,
+    updateLeadLostReason,
+    updateLeadDeal,
     markLeadConverted,
     scheduleFollowUp,
     rescheduleFollowUp,

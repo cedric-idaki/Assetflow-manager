@@ -6,6 +6,7 @@ import {
 } from '../../hooks/useCrmOversight';
 import { typeMeta, outcomeMeta, STALE_CONTACT_DAYS } from '../../hooks/useCrmInteractions';
 import CustomerRecord from './CustomerRecord';
+import { lostReasonMeta, isLostLead } from '../../config/crmVocabulary';
 
 /**
  * CRM oversight, shared by the admin and super-admin dashboards.
@@ -570,6 +571,10 @@ const AgentScorecards = ({ scorecards, onSelect, selectedId, onExport }) => {
         open_leads:         c.pipeline.open,
         qualified:          c.pipeline.qualified,
         opportunities:      c.pipeline.opportunities,
+        open_pipeline_value: c.pipeline.openValue,
+        weighted_forecast:   Math.round(c.pipeline.weightedValue),
+        opportunity_value:   c.pipeline.opportunityValue,
+        unpriced_open_deals: c.pipeline.unvaluedOpen,
         deals_won:          c.pipeline.won,
         deals_lost:         c.pipeline.lost,
         converted:          c.pipeline.converted,
@@ -668,6 +673,7 @@ const AgentScorecards = ({ scorecards, onSelect, selectedId, onExport }) => {
                 <th className={`text-right font-medium px-3 py-2.5 ${hl('open')}`} title="Leads still open, at any stage before closed">Open</th>
                 <th className="text-right font-medium px-3 py-2.5" title="Leads at the qualified stage">Qualified</th>
                 <th className="text-right font-medium px-3 py-2.5" title="Qualified leads plus those with a proposal out">Opps</th>
+                <th className="text-right font-medium px-3 py-2.5" title="Open pipeline value, and the weighted forecast behind it. Deals nobody has priced count as zero — the Opportunities tile says how many.">Pipeline</th>
                 <th className={`text-right font-medium px-3 py-2.5 ${hl('won')}`} title="Leads that converted">Won</th>
                 <th className="text-right font-medium px-3 py-2.5" title="Leads closed without converting">Lost</th>
                 <th className="text-right font-medium px-3 py-2.5" title="Share of closed leads that converted">Conv.</th>
@@ -708,6 +714,16 @@ const AgentScorecards = ({ scorecards, onSelect, selectedId, onExport }) => {
                   <td className={`px-3 py-3 text-right font-semibold text-foreground ${hl('open')}`}>{c.pipeline.open}</td>
                   <td className="px-3 py-3 text-right text-foreground">{c.pipeline.qualified}</td>
                   <td className="px-3 py-3 text-right text-foreground">{c.pipeline.opportunities}</td>
+                  <td className="px-3 py-3 text-right whitespace-nowrap">
+                    {c.pipeline.openValue > 0 ? (
+                      <>
+                        <span className="font-semibold text-foreground">{fmtCompact(c.pipeline.openValue)}</span>
+                        <span className="text-muted-foreground"> · {fmtCompact(c.pipeline.weightedValue)}</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
                   <td className={`px-3 py-3 text-right font-semibold text-emerald-600 ${hl('won')}`}>{c.pipeline.won}</td>
                   <td className={`px-3 py-3 text-right ${c.pipeline.lost > 0 ? 'text-red-600' : 'text-muted-foreground'}`}>
                     {c.pipeline.lost}
@@ -849,8 +865,77 @@ const AgentDetail = ({ card, leads, interactions, onClose, onOpenLead }) => (
         )}
       </div>
     </div>
+
+    {/* Their lost deals.
+        The counts above say HOW MANY this agent lost; this says why, in their
+        own words. It is the half of the drill-down an admin actually coaches
+        from — "you have lost four on financing this month" is a conversation,
+        "you lost four" is not. Read-only, like the rest of oversight: the
+        agent records the reason, the admin reads it. */}
+    <AgentLostDeals leads={leads} onOpenLead={onOpenLead} />
   </div>
 );
+
+/** Lost deals for one agent, grouped by reason, biggest group first. */
+const AgentLostDeals = ({ leads, onOpenLead }) => {
+  const lost = leads.filter(isLostLead);
+  if (lost.length === 0) return null;
+
+  const groups = new Map();
+  for (const l of lost) {
+    const meta = lostReasonMeta(l.lost_reason);
+    const key = meta.value ?? '__none__';
+    if (!groups.has(key)) groups.set(key, { label: meta.label, known: meta.known, rows: [] });
+    groups.get(key).rows.push(l);
+  }
+  const ordered = [...groups.values()].sort((a, b) => b.rows.length - a.rows.length);
+  const unexplained = lost.filter(l => !l.lost_reason).length;
+
+  return (
+    <div className="px-5 py-4 border-t border-border">
+      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+        Lost deals ({lost.length})
+        {unexplained > 0 && (
+          <span className="ml-1.5 font-normal normal-case text-amber-700">
+            · {unexplained} with no reason given
+          </span>
+        )}
+      </h4>
+
+      <div className="space-y-3 max-h-72 overflow-y-auto">
+        {ordered.map((g, i) => (
+          <div key={i}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`text-xs font-medium ${g.known ? 'text-foreground' : 'text-amber-700'}`}>
+                {g.label}
+              </span>
+              <span className="text-xs text-muted-foreground">({g.rows.length})</span>
+            </div>
+            <ul className="divide-y divide-border">
+              {g.rows.map(l => (
+                <li
+                  key={l.id}
+                  onClick={() => onOpenLead?.(l)}
+                  className="py-1.5 flex items-center gap-3 cursor-pointer hover:bg-muted/40 -mx-2 px-2 rounded-lg transition-colors"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-foreground truncate">{l.full_name || 'Unnamed lead'}</p>
+                    {l.lost_notes && (
+                      <p className="text-xs text-muted-foreground italic truncate">“{l.lost_notes}”</p>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
+                    {fmtDate(l.lost_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 // ── Main ────────────────────────────────────────────────────────────────────
 const CrmOversightTab = ({ onExport }) => {
@@ -1071,8 +1156,8 @@ const CrmOversightTab = ({ onExport }) => {
           label="Opportunities"
           onClick={() => setOpenKpi(openKpi === 'opportunities' ? null : 'opportunities')}
           active={openKpi === 'opportunities'}
-          value={totals.opportunities}
-          subtitle={`${totals.qualified} qualified · ${totals.opportunities - totals.qualified} with a proposal out`}
+          value={fmtCompact(totals.opportunityValue)}
+          subtitle={`${totals.opportunities} deals · ${totals.qualified} qualified · ${totals.opportunities - totals.qualified} with a proposal out`}
           icon="Briefcase"
           iconColor="#d97706"
         />

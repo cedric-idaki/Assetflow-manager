@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../../components/AppIcon';
 import { INTERACTION_TYPES, INTERACTION_OUTCOMES } from '../../../hooks/useCrmInteractions';
+import { SCHEDULABLE_CHANNELS, channelMeta, toFollowUpChannel } from '../../../config/crmVocabulary';
 
 // ── Input class helper (matches ScheduleFollowUpModal / CreateClientModal) ───
 const ic = (err) =>
@@ -18,6 +19,23 @@ const QUICK_WHEN = [
 ];
 
 const DURATIONS = [5, 15, 30, 60];
+
+// "Check me next week" — the whole reason the next-follow-up block is here and
+// not behind a second modal. Same offsets ScheduleFollowUpModal offers.
+const QUICK_NEXT = [
+  { label: 'Tomorrow',   days: 1 },
+  { label: 'In 3 days',  days: 3 },
+  { label: 'Next week',  days: 7 },
+  { label: 'In 2 weeks', days: 14 },
+  { label: 'Next month', days: 30 },
+];
+
+const REMINDER_OFFSETS = [
+  { label: '1 hr before',  minutes: 60 },
+  { label: '3 hrs before', minutes: 180 },
+  { label: 'Morning of',   minutes: 'morning' },
+  { label: 'A day before', minutes: 1440 },
+];
 
 // <input type="datetime-local"> wants local wall-clock time, not an ISO string.
 const toLocalInput = (date) => {
@@ -54,6 +72,11 @@ const LogInteractionModal = ({
     occurredAt:  toLocalInput(new Date()),
     summary:     '',
     nextStep:    '',
+    // The next follow-up, booked in the same breath. Empty means none: an agent
+    // logging a note that needs no chase must not be forced to invent a date.
+    followUpAt:      '',
+    followUpChannel: '',
+    followUpReminder: 60,
   });
   const [errors, setErrors]     = useState({});
   const [saving, setSaving]     = useState(false);
@@ -96,6 +119,34 @@ const LogInteractionModal = ({
     setErrors(p => ({ ...p, contactName: '' }));
   };
 
+  // Until the agent says otherwise, the next touch is on the channel this one
+  // was on — an email thread continues by email far more often than it turns
+  // into a site visit. One tap changes it.
+  const followUpChannel = form.followUpChannel || toFollowUpChannel(form.type);
+  const followUpMeta    = channelMeta(followUpChannel);
+  const hasFollowUp     = Boolean(form.followUpAt);
+
+  const applyNext = (days) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    d.setHours(10, 0, 0, 0);
+    set('followUpAt', toLocalInput(d));
+  };
+
+  // Turn the chosen offset into an absolute reminder time — the same arithmetic
+  // ScheduleFollowUpModal does, because it feeds the same remind_at column.
+  const computeRemindAt = () => {
+    if (!form.followUpAt) return null;
+    const appt = new Date(form.followUpAt);
+    if (form.followUpReminder === 'morning') {
+      const m = new Date(appt);
+      m.setHours(8, 0, 0, 0);
+      // An 8am appointment would otherwise "remind" after the fact.
+      return m < appt ? m : new Date(appt.getTime() - 60 * 60 * 1000);
+    }
+    return new Date(appt.getTime() - Number(form.followUpReminder) * 60 * 1000);
+  };
+
   const applyQuick = (minutesAgo) => {
     const d = new Date();
     if (minutesAgo === 'morning') d.setHours(9, 0, 0, 0);
@@ -114,6 +165,9 @@ const LogInteractionModal = ({
       e.occurredAt = 'That is in the future — schedule a follow-up instead';
     }
     if (!form.summary.trim()) e.summary = 'Write down what was said — that is the point of logging it';
+    if (form.followUpAt && new Date(form.followUpAt) <= new Date()) {
+      e.followUpAt = 'A follow-up has to be in the future';
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -134,12 +188,22 @@ const LogInteractionModal = ({
         occurredAt:  new Date(form.occurredAt).toISOString(),
         summary:     form.summary.trim(),
         nextStep:    form.nextStep.trim(),
+        // The commitment, dated. Without this the promise lives only in
+        // nextStep — a sentence nobody is ever reminded about.
+        followUp: hasFollowUp ? {
+          channel:     followUpChannel,
+          scheduledAt: new Date(form.followUpAt).toISOString(),
+          remindAt:    computeRemindAt(),
+          // What to do when the reminder lands. The agent has just written it
+          // in "what happens next"; asking twice is how a form gets abandoned.
+          notes:       form.nextStep.trim(),
+        } : null,
       });
       if (result?.error) { setApiError(result.error); return; }
 
       if (alsoSchedule && onScheduleFollowUp) {
         const lead = (leads || []).find(l => l.id === form.leadId) || null;
-        onScheduleFollowUp(lead);
+        onScheduleFollowUp(lead, followUpChannel);
       }
       onClose();
     } catch (err) {
@@ -376,6 +440,121 @@ const LogInteractionModal = ({
             />
           </div>
 
+          {/* Next follow-up — the promise, with a date on it */}
+          <div className="rounded-xl border border-border bg-muted/20 p-4">
+            <div className="flex items-center justify-between gap-2 mb-2.5">
+              <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                When will you follow up
+                {!hasFollowUp && (
+                  <span className="text-muted-foreground/60 font-normal normal-case"> (optional)</span>
+                )}
+              </label>
+              {hasFollowUp && (
+                <button
+                  type="button"
+                  onClick={() => set('followUpAt', '')}
+                  className="text-xs font-medium text-muted-foreground hover:text-red-600"
+                >
+                  No follow-up
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {QUICK_NEXT.map(q => (
+                <button
+                  key={q.label}
+                  type="button"
+                  onClick={() => applyNext(q.days)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-card border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+                >
+                  {q.label}
+                </button>
+              ))}
+            </div>
+
+            {!hasFollowUp && (
+              <p className="mt-2 text-xs text-muted-foreground/80">
+                Pick a date and it becomes a real appointment with an email reminder —
+                not just a note you have to remember to read.
+              </p>
+            )}
+
+            {hasFollowUp && (
+              <div className="mt-3 space-y-3">
+                <input
+                  type="datetime-local"
+                  value={form.followUpAt}
+                  onChange={e => set('followUpAt', e.target.value)}
+                  className={ic(errors.followUpAt)}
+                />
+                {errors.followUpAt && <p className="text-xs text-red-500">{errors.followUpAt}</p>}
+
+                {/* Channel — the thing the old flow could not record at all */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wide">
+                    How you'll reach them
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {SCHEDULABLE_CHANNELS.map(c => (
+                      <button
+                        key={c.value}
+                        type="button"
+                        onClick={() => set('followUpChannel', c.value)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                          followUpChannel === c.value
+                            ? 'border-primary bg-primary/5 text-primary'
+                            : 'border-border bg-card text-muted-foreground hover:border-primary/40'
+                        }`}
+                      >
+                        <Icon name={c.icon} size={12} color="currentColor" />
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Reminder */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wide">Remind me</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {REMINDER_OFFSETS.map(r => (
+                      <button
+                        key={r.label}
+                        type="button"
+                        onClick={() => set('followUpReminder', r.minutes)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                          form.followUpReminder === r.minutes
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                  <Icon name={followUpMeta.icon} size={12} color="currentColor" />
+                  <span>
+                    {followUpMeta.label} on{' '}
+                    <strong className="text-foreground">
+                      {new Date(form.followUpAt).toLocaleString('en-GB', {
+                        weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </strong>
+                    {computeRemindAt() && (
+                      <> · reminder {computeRemindAt().toLocaleString('en-GB', {
+                        weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                      })}</>
+                    )}
+                  </span>
+                </p>
+              </div>
+            )}
+          </div>
+
           {apiError && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-700 flex items-center gap-2">
               <Icon name="AlertCircle" size={14} color="#dc2626" />
@@ -393,14 +572,16 @@ const LogInteractionModal = ({
           >
             Cancel
           </button>
-          {onScheduleFollowUp && (
+          {/* The long form — a location, a separate agenda. Hidden once a date is
+              set above, or clicking it would book the same follow-up twice. */}
+          {onScheduleFollowUp && !hasFollowUp && (
             <button
               onClick={() => handleSubmit(true)}
               disabled={saving}
               className="px-4 py-2.5 border border-border text-sm font-medium rounded-xl text-muted-foreground hover:text-primary hover:border-primary/40 disabled:opacity-50 transition-all"
-              title="Save this contact, then schedule the next one"
+              title="Save this contact, then open the full appointment form"
             >
-              Save &amp; schedule follow-up
+              More follow-up options
             </button>
           )}
           <button
@@ -417,7 +598,10 @@ const LogInteractionModal = ({
                 Saving...
               </>
             ) : (
-              <><Icon name="Check" size={15} color="currentColor" /> Save Contact</>
+              <>
+                <Icon name="Check" size={15} color="currentColor" />
+                {hasFollowUp ? 'Save & Schedule' : 'Save Contact'}
+              </>
             )}
           </button>
         </div>

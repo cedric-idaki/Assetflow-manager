@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import Icon from '../../../components/AppIcon';
+import { SCHEDULABLE_CHANNELS, channelMeta, toFollowUpChannel } from '../../../config/crmVocabulary';
 
 // ── Input class helper (matches CreateClientModal) ──────────────────────────
 const ic = (err) =>
@@ -7,12 +8,15 @@ const ic = (err) =>
     err ? 'border-red-400 bg-red-50' : 'border-border'
   }`;
 
-const APPOINTMENT_TYPES = [
-  { value: 'follow_up',      label: 'Follow-up',      icon: 'PhoneCall',  hint: 'Check back in' },
-  { value: 'phone_call',     label: 'Phone Call',     icon: 'Phone',      hint: 'Scheduled call' },
-  { value: 'office_meeting', label: 'Office Meeting', icon: 'Briefcase',  hint: 'They come in' },
-  { value: 'site_visit',     label: 'Site Visit',     icon: 'MapPin',     hint: 'You go to them' },
-];
+// The channels come from the shared CRM vocabulary, not a list invented here.
+// This modal used to offer four: follow_up, phone_call, office_meeting,
+// site_visit — no email, no WhatsApp, no SMS. An agent who was going to email
+// the payment plan on Friday had to file it as a generic "follow-up", so the
+// reminder could not say how, and no report could count it.
+
+// Which channels happen in a place. Asking where an email will be sent is noise
+// on the form and an empty column in the reminder.
+const HAS_PLACE = ['meeting', 'site_visit', 'follow_up', 'other'];
 
 // "Check me next week" shortcuts — the whole point of the segment.
 const QUICK_WHEN = [
@@ -37,7 +41,9 @@ const toLocalInput = (date) => {
   return d.toISOString().slice(0, 16);
 };
 
-const ScheduleFollowUpModal = ({ isOpen, onClose, onSubmit, leads = [], prefillLead = null }) => {
+const ScheduleFollowUpModal = ({
+  isOpen, onClose, onSubmit, leads = [], prefillLead = null, prefillChannel = null,
+}) => {
   const defaultWhen = useMemo(() => {
     // Default to a week out at 10:00 — the most common "check me next week".
     const d = new Date();
@@ -49,7 +55,7 @@ const ScheduleFollowUpModal = ({ isOpen, onClose, onSubmit, leads = [], prefillL
   const [form, setForm] = useState({
     leadId:          prefillLead?.id || '',
     leadName:        prefillLead?.full_name || '',
-    appointmentType: 'follow_up',
+    appointmentType: toFollowUpChannel(prefillChannel),
     scheduledAt:     defaultWhen,
     reminderOffset:  60,
     location:        '',
@@ -64,6 +70,9 @@ const ScheduleFollowUpModal = ({ isOpen, onClose, onSubmit, leads = [], prefillL
     setErrors(p => ({ ...p, [k]: '' }));
     setApiError('');
   };
+
+  const channel      = channelMeta(form.appointmentType);
+  const asksLocation = HAS_PLACE.includes(form.appointmentType);
 
   const openLeads = (leads || []).filter(l => l.stage !== 'closed');
 
@@ -113,7 +122,7 @@ const ScheduleFollowUpModal = ({ isOpen, onClose, onSubmit, leads = [], prefillL
         appointmentType: form.appointmentType,
         scheduledAt:     form.scheduledAt,
         remindAt:        computeRemindAt(),
-        location:        form.location.trim(),
+        location:        asksLocation ? form.location.trim() : '',
         notes:           form.notes.trim(),
       });
       onClose();
@@ -136,7 +145,7 @@ const ScheduleFollowUpModal = ({ isOpen, onClose, onSubmit, leads = [], prefillL
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Icon name="CalendarPlus" size={18} color="var(--color-primary)" />
+              <Icon name={channel.icon || 'CalendarPlus'} size={18} color="var(--color-primary)" />
             </div>
             <div>
               <h2 className="text-base font-bold text-foreground">Schedule Follow-up</h2>
@@ -178,29 +187,29 @@ const ScheduleFollowUpModal = ({ isOpen, onClose, onSubmit, leads = [], prefillL
             {errors.leadName && <p className="mt-1 text-xs text-red-500">{errors.leadName}</p>}
           </div>
 
-          {/* Type */}
+          {/* Channel */}
           <div>
-            <label className="block text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Type</label>
-            <div className="grid grid-cols-2 gap-2">
-              {APPOINTMENT_TYPES.map(t => (
+            <label className="block text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
+              How you'll reach them
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {SCHEDULABLE_CHANNELS.map(t => (
                 <button
                   key={t.value}
                   type="button"
                   onClick={() => set('appointmentType', t.value)}
-                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
                     form.appointmentType === t.value
                       ? 'border-primary bg-primary/5 text-primary'
                       : 'border-border text-muted-foreground hover:border-primary/40 hover:bg-muted/30'
                   }`}
                 >
-                  <Icon name={t.icon} size={14} color="currentColor" />
-                  <span className="text-left leading-tight">
-                    {t.label}
-                    <span className="block text-xs opacity-60 font-normal">{t.hint}</span>
-                  </span>
+                  <Icon name={t.icon} size={13} color="currentColor" />
+                  {t.label}
                 </button>
               ))}
             </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">{channel.hint}</p>
           </div>
 
           {/* When */}
@@ -256,19 +265,21 @@ const ScheduleFollowUpModal = ({ isOpen, onClose, onSubmit, leads = [], prefillL
             )}
           </div>
 
-          {/* Location */}
-          <div>
-            <label className="block text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wide">
-              Location <span className="text-muted-foreground/60 font-normal normal-case">(optional)</span>
-            </label>
-            <input
-              type="text"
-              value={form.location}
-              onChange={e => set('location', e.target.value)}
-              placeholder="e.g. Their office, Westlands · or 'Phone'"
-              className={ic(false)}
-            />
-          </div>
+          {/* Location — only for the channels that happen somewhere */}
+          {asksLocation && (
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wide">
+                Where <span className="text-muted-foreground/60 font-normal normal-case">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={form.location}
+                onChange={e => set('location', e.target.value)}
+                placeholder="e.g. Their office, Westlands"
+                className={ic(false)}
+              />
+            </div>
+          )}
 
           {/* Notes */}
           <div>
