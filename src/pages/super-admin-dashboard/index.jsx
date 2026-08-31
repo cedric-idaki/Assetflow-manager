@@ -23,7 +23,7 @@ import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 import KYCReviewTab from './components/KYCReviewTab';
 import MpesaSettingsTab from './components/MpesaSettingsTab';
-import CrmOversightTab from '../../components/crm/CrmOversightTab';
+import SuperAdminCrmTab from '../../components/crm/SuperAdminCrmTab';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -325,7 +325,7 @@ const SuperAdminDashboard = () => {
         {/* CRM TAB — every agent on the platform. Reads its own data through
             the supervisor policies rather than useSuperAdminDashboard, and has
             its own loading state, so it is not gated on `loading` here. */}
-        {activeTab === 'crm' && <CrmOversightTab onExport={exportCSV} />}
+        {activeTab === 'crm' && <SuperAdminCrmTab onExport={exportCSV} />}
 
         {/* WITHDRAWAL REQUESTS TAB */}
         {activeTab === 'withdrawals' && (

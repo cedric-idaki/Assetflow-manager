@@ -14,11 +14,21 @@
 // re-charge it.
 export const INSTALLATION_FEE = 4000; // KES
 
+// Flat monthly platform fee, charged on top of the per-user rate. The corporate
+// line prices entirely per-seat, so this is 0 on every tier today and the
+// invoice suppresses the line — but src/config/systemBilling.js reads
+// `plan.baseFee` for both product lines (the sacco tiers have a real one), so
+// introducing a corporate base fee is a number here and nothing else. Change it
+// together with pricePerUser: the two are one price, and
+// supabase/functions/_shared/plans.ts must be updated to match or every signup
+// fails the server-side amount check.
+
 export const COMPANY_PLANS = [
   {
     id: 'silver',
     name: 'Silver',
     pricePerUser: 305,
+    baseFee: 0,
     minUsers: 1,
     maxUsers: 5,
     storageGb: 5,
@@ -32,6 +42,7 @@ export const COMPANY_PLANS = [
     id: 'bronze',
     name: 'Bronze',
     pricePerUser: 360,
+    baseFee: 0,
     minUsers: 6,
     maxUsers: 16,
     storageGb: 10,
@@ -46,6 +57,7 @@ export const COMPANY_PLANS = [
     id: 'gold',
     name: 'Gold',
     pricePerUser: 267,
+    baseFee: 0,
     minUsers: 17,
     maxUsers: null,
     storageGb: 15,

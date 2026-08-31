@@ -5,10 +5,17 @@ import Icon from '../../components/AppIcon';
 import BrandPreviewPanel from '../../components/BrandPreviewPanel';
 import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
-import { COMPANY_PLANS as PLANS, planForUsers, INSTALLATION_FEE } from '../../config/companyPlans';
-import { tierForMembers, SACCO_TIERS, INSTALLATION_FEE as SACCO_INSTALLATION_FEE } from '../../config/saccoTiers';
+import { COMPANY_PLANS as PLANS, planForUsers } from '../../config/companyPlans';
+import { tierForMembers, SACCO_TIERS } from '../../config/saccoTiers';
 import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../config/kenyaCounties';
 import { PRESETS, PRESET_LABELS, modulesForScope, dependenciesOf } from '../../config/modules';
+import { buildSystemInvoice } from '../../config/systemBilling';
+
+// PostgREST reports an unknown column as PGRST204; Postgres itself as 42703.
+// Either means the billing breakdown migration has not been applied here.
+const isMissingBreakdownColumn = (err) =>
+  !!err && (err.code === 'PGRST204' || err.code === '42703'
+    || /column .* does not exist/i.test(err.message || ''));
 import { getPasswordError } from '../../utils/validation';
 import { sendAdminRegistrationConfirmation } from '../../services/emailService';
 
@@ -111,20 +118,7 @@ const AdminRegistration = () => {
         userRange: saccoTier.memberRange,
       })
     : planForUsers(userCount);
-  // Registration is always a first-time signup, so the one-time installation
-  // fee always applies here. Renewals (handled elsewhere) must NOT re-charge it.
-  const subscriptionPrice = isSacco
-    ? (saccoTier ? saccoTier.baseFee + userCount * saccoTier.perMemberFee : 0)
-    : (activePlan ? userCount * activePlan.pricePerUser : 0);
-  const installationFee = activePlan ? (isSacco ? SACCO_INSTALLATION_FEE : INSTALLATION_FEE) : 0;
-  const totalPrice = subscriptionPrice + installationFee;
-  // Itemised monthly lines (installation fee is rendered separately).
-  const billLines = isSacco && saccoTier ? [
-    { label: `Monthly base fee · ${saccoTier.name} tier`, amount: saccoTier.baseFee },
-    { label: `Members · ${userCount} × KES ${saccoTier.perMemberFee}`, amount: userCount * saccoTier.perMemberFee },
-  ] : activePlan ? [
-    { label: `Monthly subscription · ${userCount} × KES ${activePlan.pricePerUser}`, amount: subscriptionPrice },
-  ] : [];
+  // Pricing is computed below, once the chosen modules are known.
 
   // Step 4 - Payment
   const [mpesaPhone, setMpesaPhone] = useState('');
@@ -197,6 +191,30 @@ const AdminRegistration = () => {
   const withCore = (keys) => Array.from(new Set([...keys, ...coreModuleKeys]));
 
   const presetOptions = isSacco ? ['sacco', 'chama', 'custom'] : ['company', 'custom'];
+
+  // ── What this registration costs ──────────────────────────────────────────
+  // Priced by src/config/systemBilling.js, the same engine that itemises the
+  // invoice the tenant downloads later and that mpesa-stk-push re-runs
+  // server-side before it will raise a push. One engine is the point: the
+  // quote, the charge and the invoice cannot disagree.
+  //
+  // Registration is always a first-time signup, so the one-time installation
+  // fee always applies here. Renewals (handled elsewhere) must NOT re-charge it.
+  const quote = buildSystemInvoice({
+    productLine: isSacco ? modulePreset : 'company',
+    seats: userCount,
+    modules: selectedModules,
+    chargeInstallation: true,
+  });
+  const totalPrice = activePlan ? Math.round(quote.total) : 0;
+  const installationFee = activePlan ? quote.installationFee : 0;
+  // Itemised lines for the plan card. The installation fee is rendered
+  // separately, so it is dropped from the recurring list here.
+  const billLines = activePlan
+    ? quote.lines
+        .filter((l) => !l.label.startsWith('Installation'))
+        .map((l) => ({ label: l.label, amount: l.gross }))
+    : [];
 
   const applyPreset = (preset) => {
     setModulePreset(preset);
@@ -370,20 +388,50 @@ const AdminRegistration = () => {
         .eq('name', activePlan.id)
         .single();
 
-      const { data: subscriptionData, error: subscriptionError } = await supabase
+      const subscriptionRow = {
+        admin_id: userId,
+        plan_id: planData?.id,
+        plan_name: activePlan.id,
+        status: 'pending',
+        price_paid: totalPrice,
+        max_users: userCount, // seats the admin paid for
+        start_date: new Date().toISOString(),
+        end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      };
+      // Freeze the quote's breakdown onto the row so the invoice prints what was
+      // charged rather than re-deriving it from a price list that may have moved
+      // by the time anyone downloads it. See
+      // 20260831160000_system_billing_breakdown.sql.
+      const breakdown = {
+        base_fee: quote.baseFee,
+        user_fee: quote.usageFee,
+        module_fee: quote.moduleFee,
+        installation_fee: quote.installationFee,
+        subtotal: quote.subtotal,
+        vat_rate: quote.vatRate,
+        vat_amount: quote.vatAmount,
+      };
+
+      const insertSubscription = (row) => supabase
         .from('company_subscriptions')
-        .insert({
-          admin_id: userId,
-          plan_id: planData?.id,
-          plan_name: activePlan.id,
-          status: 'pending',
-          price_paid: totalPrice,
-          max_users: userCount, // seats the admin paid for
-          start_date: new Date().toISOString(),
-          end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        })
+        .insert(row)
         .select('id')
         .maybeSingle();
+
+      let { data: subscriptionData, error: subscriptionError } =
+        await insertSubscription({ ...subscriptionRow, ...breakdown });
+
+      // The breakdown columns are newer than this code path is guaranteed to
+      // run against. A tenant must still be able to register on a database
+      // where the migration has not landed — they lose the itemisation, not
+      // the account, and the invoice falls back to deriving it.
+      if (subscriptionError && isMissingBreakdownColumn(subscriptionError)) {
+        console.warn(
+          'company_subscriptions has no billing breakdown columns — apply '
+          + '20260831160000_system_billing_breakdown.sql. Registering without it.',
+        );
+        ({ data: subscriptionData, error: subscriptionError } = await insertSubscription(subscriptionRow));
+      }
       if (subscriptionError) throw subscriptionError;
       // mpesa-stk-push now REFUSES a subscription push it cannot price, and it
       // prices it from this row. Without an id the payment step would fail with
@@ -1070,6 +1118,14 @@ const AdminRegistration = () => {
                         KES {installationFee.toLocaleString()}
                       </span>
                     </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span style={{ color: C.textMuted }}>
+                        VAT ({quote.vatRate}%) · included above
+                      </span>
+                      <span className="font-medium" style={{ color: C.textMuted }}>
+                        KES {quote.vatAmount.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
                     <div className="flex items-center justify-between pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
                       <span className="text-sm font-bold" style={{ color: C.navy }}>Total due today</span>
                       <span className="text-2xl font-bold" style={{ color: C.navy }}>
@@ -1163,6 +1219,14 @@ const AdminRegistration = () => {
                       <span style={{ color: C.textMuted }}>Installation fee · one-time</span>
                       <span className="font-semibold" style={{ color: C.navy }}>
                         KES {installationFee.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span style={{ color: C.textMuted }}>
+                        VAT ({quote.vatRate}%) · included above
+                      </span>
+                      <span className="font-medium" style={{ color: C.textMuted }}>
+                        KES {quote.vatAmount.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div className="flex items-center justify-between pt-2" style={{ borderTop: `1px solid ${C.border}` }}>

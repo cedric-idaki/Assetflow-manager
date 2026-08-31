@@ -1,9 +1,14 @@
 /**
  * Pricing lives in three places and they must agree:
  *
- *   src/config/companyPlans.js              — the company registration wizard
- *   src/config/saccoTiers.js                — the sacco registration wizard
+ *   src/config/companyPlans.js              — the company catalogue
+ *   src/config/saccoTiers.js                — the sacco catalogue
  *   supabase/functions/_shared/plans.ts     — the server-side price check
+ *
+ * src/config/systemBilling.js is the fourth file but not a fourth copy: it
+ * reads the two catalogues above and is what the wizard, both invoice
+ * renderers and the quote all price through. plans.ts mirrors ITS rules —
+ * VAT treatment, module fees, what each plan bundles — as well as the numbers.
  *
  * The third copy exists because mpesa-stk-push has to verify that the amount a
  * browser posted is actually what the plan costs, and a Deno edge function
@@ -22,6 +27,14 @@ import { describe, it, expect } from 'vitest';
 import { COMPANY_PLANS, INSTALLATION_FEE as COMPANY_INSTALLATION_FEE, planForUsers } from './companyPlans';
 import { SACCO_TIERS, INSTALLATION_FEE as SACCO_INSTALLATION_FEE, tierForMembers } from './saccoTiers';
 import { expectedSubscriptionPrice } from '../../supabase/functions/_shared/plans.ts';
+import {
+  registrationTotal,
+  VAT_RATE,
+  VAT_INCLUSIVE_PRICES,
+  DEFAULT_MODULE_FEE,
+  MODULE_FEES,
+} from './systemBilling';
+import { PRESETS } from './modules';
 
 const SERVER_CATALOG = resolve(process.cwd(), 'supabase/functions/_shared/plans.ts');
 
@@ -63,6 +76,9 @@ describe('server price catalog matches the frontend catalogs', () => {
     server.forEach((row, i) => {
       expect(row.pricePerUser, `${row.id} pricePerUser`).toBe(COMPANY_PLANS[i].pricePerUser);
       expect(row.minUsers, `${row.id} minUsers`).toBe(COMPANY_PLANS[i].minUsers);
+      // 0 today — the corporate line is purely per-seat. It is asserted anyway
+      // so that giving the plans a base fee cannot land on one side only.
+      expect(row.baseFee, `${row.id} baseFee`).toBe(COMPANY_PLANS[i].baseFee);
     });
   });
 
@@ -98,19 +114,13 @@ describe('server price catalog matches the frontend catalogs', () => {
  * and require it to equal the server's figure at every seat count.
  */
 describe('wizard total equals the server expected price', () => {
-  /** Mirrors the totalPrice computation in src/pages/admin-registration/index.jsx. */
-  const wizardTotal = (isSacco, seats) => {
-    const userCount = parseInt(seats, 10) || 0;
-    const saccoTier = isSacco && userCount >= 1 ? tierForMembers(userCount) : null;
-    const activePlan = isSacco ? saccoTier : planForUsers(userCount);
-    const subscriptionPrice = isSacco
-      ? (saccoTier ? saccoTier.baseFee + userCount * saccoTier.perMemberFee : 0)
-      : (activePlan ? userCount * activePlan.pricePerUser : 0);
-    const installationFee = activePlan
-      ? (isSacco ? SACCO_INSTALLATION_FEE : COMPANY_INSTALLATION_FEE)
-      : 0;
-    return Math.round(subscriptionPrice + installationFee);
-  };
+  /**
+   * The wizard no longer does its own arithmetic — it calls the engine, so the
+   * test calls the same entry point rather than re-deriving the formula and
+   * hoping the copy stays faithful.
+   */
+  const wizardTotal = (isSacco, seats) =>
+    registrationTotal({ productLine: isSacco ? 'sacco' : 'company', seats });
 
   const seatCounts = Array.from({ length: 200 }, (_, i) => i + 1);
 
@@ -162,5 +172,44 @@ describe('wizard total equals the server expected price', () => {
       expect(expectedSubscriptionPrice({ isSacco: false, seats: n }), `seats=${n}`).toBeNull();
       expect(expectedSubscriptionPrice({ isSacco: true, seats: n }), `seats=${n}`).toBeNull();
     });
+  });
+});
+
+/**
+ * The catalogues agree on PRICE. These check the two sides agree on the RULES
+ * that turn a price into an amount — the VAT treatment, what a module costs,
+ * and what a plan already bundles. Any one of them drifting moves the total on
+ * exactly one side of the wire, and mpesa-stk-push then refuses every signup
+ * with a PRICE MISMATCH that names no cause.
+ */
+describe('server mirrors the billing rules, not just the numbers', () => {
+  it('agrees on the VAT rate and whether prices include it', () => {
+    const rate = Number(/VAT_RATE\s*=\s*(\d+)/.exec(source)[1]);
+    const inclusive = /VAT_INCLUSIVE_PRICES\s*=\s*(true|false)/.exec(source)[1] === 'true';
+    expect(rate).toBe(VAT_RATE);
+    expect(inclusive).toBe(VAT_INCLUSIVE_PRICES);
+  });
+
+  it('agrees on the default module fee', () => {
+    const fee = Number(/DEFAULT_MODULE_FEE\s*=\s*(\d+)/.exec(source)[1]);
+    expect(fee).toBe(DEFAULT_MODULE_FEE);
+  });
+
+  it('agrees on what each product line already bundles', () => {
+    const block = source.slice(source.indexOf('export const PRESETS'));
+    Object.entries(PRESETS).forEach(([line, keys]) => {
+      const hit = new RegExp(`${line}:\\s*\\[([^\\]]*)\\]`).exec(block);
+      expect(hit, `plans.ts has no PRESETS.${line}`).not.toBeNull();
+      const serverKeys = [...hit[1].matchAll(/'([\w_]+)'/g)].map((m) => m[1]);
+      expect(serverKeys, `PRESETS.${line}`).toEqual(keys);
+    });
+  });
+
+  it('prices every module at zero on both sides — modules are bundled today', () => {
+    // The engine computes the line whatever the fee is; this records that no
+    // module is chargeable yet, so pricing one is a deliberate, visible change
+    // on BOTH sides rather than a silent bill increase on one.
+    expect(Object.values(MODULE_FEES).every((f) => f === 0)).toBe(true);
+    expect(/export const MODULE_FEES: Record<string, number> = \{\};/.test(source)).toBe(true);
   });
 });

@@ -2,6 +2,7 @@ import React from 'react';
 import Icon from '../../../components/AppIcon';
 import { Card, StatCard, Table, Badge, KES, fmtDate } from './_shared';
 import { html, rawHtml } from '../../../utils/htmlEscape';
+import { invoiceForSaccoInvoice } from '../../../utils/systemInvoice';
 
 // ── Invoice download ─────────────────────────────────────────────────────────
 const invoiceNo = (row) => {
@@ -12,9 +13,21 @@ const invoiceNo = (row) => {
 
 const fmtPeriod = (d) => (d ? new Date(d).toLocaleDateString('en-KE', { month: 'long', year: 'numeric' }) : '—');
 
-const buildInvoiceHtml = (row, sacco) => {
+// Invoice money keeps its cents — backing VAT out of a gross rarely lands on a
+// whole shilling, and a tax invoice whose lines do not add up to its total is
+// the one document that must never be approximated.
+const KES2 = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// Exported so the printed document itself is testable — a tax invoice whose
+// columns do not add up is the one page a customer always checks.
+export const buildInvoiceHtml = (row, sacco) => {
   const statusColor = row.status === 'paid' ? '#15803d' : row.status === 'overdue' ? '#b91c1c' : '#b45309';
   const tierLabel = String(row.tier || '—');
+  // Itemised by src/config/systemBilling.js: base system price, active members,
+  // storage excess, additional modules, installation, then VAT. Rows raised
+  // before the breakdown columns existed have the tax backed out of the total
+  // they already carry, so the amount billed is disclosed, never changed.
+  const bill = invoiceForSaccoInvoice(row);
   // Escaped by default — the sacco name / reg no / email / phone below are
   // tenant-entered and land in a print window that shares this app's origin.
   return html`<!doctype html><html><head><meta charset="utf-8"><title>${invoiceNo(row)}</title>
@@ -34,10 +47,14 @@ const buildInvoiceHtml = (row, sacco) => {
   .total{font-size:18px;font-weight:800;color:#1da8c5;}
   .badge{display:inline-block;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase;color:${statusColor};background:${statusColor}1a;}
   .tier{text-transform:capitalize;}
+  .totals{width:300px;margin-left:auto;margin-top:16px;}
+  .totals tr td{border:0;padding:6px 12px;}
+  .totals .lbl{color:#5a7185;}
+  .totals .sum td{border-top:2px solid #1da8c5;padding-top:10px;}
   .foot{margin-top:40px;font-size:11px;color:#9aa7b4;text-align:center;border-top:1px solid #e5ebf1;padding-top:16px;}
 </style></head><body>
   <div class="head">
-    <div><div class="brand">Asset<span>Flow</span></div><div class="muted">Sacco Platform Subscription</div></div>
+    <div><div class="brand">Asset<span>Flow</span></div><div class="muted">Sacco Platform Subscription — Tax Invoice</div></div>
     <div class="right"><div style="font-size:20px;font-weight:800;">INVOICE</div><div class="muted">${invoiceNo(row)}</div></div>
   </div>
   <div class="grid">
@@ -55,29 +72,21 @@ const buildInvoiceHtml = (row, sacco) => {
     </div>
   </div>
   <table>
-    <thead><tr><th>Description</th><th class="right">Qty</th><th class="right">Amount</th></tr></thead>
+    <thead><tr><th>Description</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Amount</th></tr></thead>
     <tbody>
-      <tr>
-        <td>Base fee — <span class="tier">${tierLabel}</span> tier</td>
-        <td class="right">1</td>
-        <td class="right">${KES(row.base_fee)}</td>
-      </tr>
-      <tr>
-        <td>Per-member fee — active members</td>
-        <td class="right">${row.active_members ?? 0}</td>
-        <td class="right">${KES(row.per_member_fee_total)}</td>
-      </tr>
-      <tr>
-        <td>Storage excess</td>
-        <td class="right">—</td>
-        <td class="right">${KES(row.storage_fee)}</td>
-      </tr>
+      ${rawHtml(bill.lines.map((l) => html`<tr>
+        <td>${l.label}</td>
+        <td class="right">${l.qty || '—'}</td>
+        <td class="right">${l.unit ? KES2(l.unit) : '—'}</td>
+        <td class="right">${KES2(l.amount)}</td>
+      </tr>`).join(''))}
     </tbody>
   </table>
-  <div class="grid" style="margin-top:8px;">
-    <div></div>
-    <div class="right">Total<br><span class="total">${KES(row.total)}</span></div>
-  </div>
+  <table class="totals">
+    <tr><td class="lbl">Subtotal (excl. VAT)</td><td class="right">${KES2(bill.subtotal)}</td></tr>
+    <tr><td class="lbl">VAT @ ${bill.vatRate}%</td><td class="right">${KES2(bill.vatAmount)}</td></tr>
+    <tr class="sum"><td class="lbl"><strong>Total</strong></td><td class="right"><span class="total">${KES2(bill.total)}</span></td></tr>
+  </table>
   <div class="foot">Thank you for using Ararat. Generated on ${new Date().toLocaleDateString('en-GB')}.</div>
   <script>window.onload=function(){window.print();}</script>
 </body></html>`;
@@ -99,7 +108,7 @@ const BillingTab = ({ ctx }) => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard label="Current tier" value={stats.tier?.name} hint={stats.tier?.memberRange} icon="Layers" />
         <StatCard label="Active members" value={stats.activeMembers} hint="Billed members" icon="Users" />
-        <StatCard label="Estimated monthly bill" value={KES(bill.total)} icon="Receipt" tone="success" />
+        <StatCard label="Estimated monthly bill" value={KES(bill.total)} hint="Base + members + storage, VAT inclusive" icon="Receipt" tone="success" />
       </div>
 
       {/* Invoices */}
@@ -110,8 +119,10 @@ const BillingTab = ({ ctx }) => {
             <p className="text-xs text-muted-foreground mt-1">Monthly invoices run on the 1st (automated billing is a Phase 2 enhancement).</p>
           </div>
         ) : (
-          <Table columns={['Invoice', 'Period', 'Tier', 'Members', 'Base', 'Per-member', 'Storage', 'Total', 'Status', '']}>
-            {invoices.map((inv) => (
+          <Table columns={['Invoice', 'Period', 'Tier', 'Members', 'Base', 'Member fee', 'Storage', 'Modules', 'Install', 'VAT', 'Total', 'Status', '']}>
+            {invoices.map((inv) => {
+              const bill = invoiceForSaccoInvoice(inv);
+              return (
               <tr key={inv.id} className="border-b border-border/60">
                 <td className="py-2.5 pr-4 font-medium text-foreground whitespace-nowrap">{invoiceNo(inv)}</td>
                 <td className="py-2.5 pr-4 text-foreground">{fmtDate(inv.period)}</td>
@@ -120,7 +131,10 @@ const BillingTab = ({ ctx }) => {
                 <td className="py-2.5 pr-4 text-muted-foreground">{KES(inv.base_fee)}</td>
                 <td className="py-2.5 pr-4 text-muted-foreground">{KES(inv.per_member_fee_total)}</td>
                 <td className="py-2.5 pr-4 text-muted-foreground">{KES(inv.storage_fee)}</td>
-                <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(inv.total)}</td>
+                <td className="py-2.5 pr-4 text-muted-foreground">{KES(inv.module_fee)}</td>
+                <td className="py-2.5 pr-4 text-muted-foreground">{KES(inv.installation_fee)}</td>
+                <td className="py-2.5 pr-4 text-muted-foreground">{KES(bill.vatAmount)}</td>
+                <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(bill.total)}</td>
                 <td className="py-2.5 pr-4"><Badge status={inv.status} /></td>
                 <td className="py-2.5 pr-0 text-right">
                   <button
@@ -132,7 +146,8 @@ const BillingTab = ({ ctx }) => {
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </Table>
         )}
       </Card>

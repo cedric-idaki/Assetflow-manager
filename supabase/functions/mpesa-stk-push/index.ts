@@ -419,9 +419,23 @@ async function verifySubscriptionPrice(
       .eq('admin_id', adminId)
       .maybeSingle();
 
+    // Additional modules are part of the price now, so the check has to know
+    // which ones this tenant runs. Reading them here rather than trusting a
+    // posted list keeps the rule intact: the amount is verified against what
+    // the account actually holds. Every module fee is 0 today, so this cannot
+    // change any current total — it is what stops the check going stale the
+    // day one of them is priced.
+    const { data: enabledModules } = await admin
+      .from('tenant_modules')
+      .select('module_key')
+      .eq('admin_id', adminId)
+      .eq('status', 'enabled');
+
     const expected = expectedSubscriptionPrice({
       isSacco: Boolean(sacco),
       seats: Number(sub.max_users),
+      productLine: sacco ? 'sacco' : 'company',
+      modules: (enabledModules ?? []).map((m: { module_key: string }) => m.module_key),
     });
 
     // Only reachable when max_users is absent or below 1, which the wizard
