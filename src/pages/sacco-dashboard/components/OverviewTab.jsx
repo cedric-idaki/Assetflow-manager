@@ -1,11 +1,31 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../../../components/AppIcon';
+import { useModules } from '../../../contexts/TenantModulesContext';
+import { useAssetValuation } from '../../../hooks/useAssetValuation';
+import { valuationCoverage } from '../../../config/assetRegister';
 import { Card, StatCard, KES } from './_shared';
 
 const OverviewTab = ({ ctx, onNavigate }) => {
   const navigate = useNavigate();
   const { stats, sacco, members, motions } = ctx;
+
+  /**
+   * What the SACCO's assets are worth, beside what its members have saved.
+   *
+   * Its own aggregate rather than a field on sacco_dashboard_stats(): the
+   * asset register is an optional module, and a tenant who has never switched
+   * it on should not pay for the scan on every dashboard load. `categories:
+   * false` skips the breakdown this tile does not draw.
+   *
+   * The figure is the same coalesce(current_value, book_value) the register
+   * reports, so the tile and the Assets tab can never quote different numbers.
+   */
+  const { isEnabled } = useModules();
+  const showAssets = isEnabled('fixed_assets');
+  const { totals: assets, loading: assetsLoading } =
+    useAssetValuation({ enabled: showAssets, categories: false });
+  const assetCoverage = valuationCoverage(assets);
   const bill = stats.billing;
   const freeGb = stats.tier?.storageGb || 0;
   const usedGb = Number(sacco?.storage_used_gb || 0);
@@ -20,11 +40,26 @@ const OverviewTab = ({ ctx, onNavigate }) => {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${showAssets ? 'lg:grid-cols-3 xl:grid-cols-5' : 'lg:grid-cols-4'}`}>
         <StatCard label="Total members" value={stats.totalMembers} hint={`${stats.activeMembers} active`} icon="Users" />
         <StatCard label="Total savings" value={KES(stats.totalSavings)} hint="Paid contributions" icon="PiggyBank" tone="success" />
         <StatCard label="Active loans" value={stats.activeLoans} hint={`${(stats.totalLoans ?? 0).toLocaleString('en-KE')} total`} icon="Banknote" tone="warning" />
         <StatCard label="Share value" value={KES(stats.totalShareValue)} hint="Across members" icon="PieChart" />
+        {showAssets && (
+          <StatCard
+            label="Asset value"
+            /* A dash, not KES 0, while it loads: a zero here reads as "the
+               SACCO owns nothing", which is the most alarming way to be slow. */
+            value={assetsLoading ? '—' : KES(assets.totalCurrentValue)}
+            icon="Package"
+            tone="muted"
+            hint={assetsLoading
+              ? 'Valuing the register…'
+              : assets.valuedAssets > 0
+                ? `${assets.heldAssets} held · ${assetCoverage.value.toFixed(0)}% valued`
+                : `${assets.heldAssets} held, at book value`}
+          />
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

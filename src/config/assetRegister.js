@@ -91,6 +91,17 @@ export const VALUATION_BASES = [
   { value: 'internal',     label: 'Internal estimate' },
 ];
 
+const BASIS_BY_VALUE = VALUATION_BASES.reduce((acc, b) => { acc[b.value] = b; return acc; }, {});
+
+/**
+ * A recorded valuation with no basis is an internal estimate — that is what
+ * the form defaults to, and what sacco_asset_valuation_totals() folds a blank
+ * into. Saying "unknown" here instead would make the report's basis breakdown
+ * disagree with the server's.
+ */
+export const valuationBasisLabel = (value) =>
+  (BASIS_BY_VALUE[value] || BASIS_BY_VALUE.internal).label;
+
 export const DEPRECIATION_METHODS = [
   { value: 'straight_line', label: 'Straight line' },
   { value: 'reducing',      label: 'Reducing balance' },
@@ -298,3 +309,105 @@ export const buildAssetExport = (assets = []) => (assets || []).map((a) => {
     'Method':                    a.method || '',
   };
 });
+
+// ── Valuation ───────────────────────────────────────────────────────────────
+// The register reports what an asset is worth as coalesce(current_value,
+// book_value) — see reportedValue above. That single number is the right thing
+// to show on a row and the wrong thing to hand a board without saying what is
+// underneath it, so everything below exists to keep the two apart: how much of
+// the book has actually been valued, and how much of the headline is book value
+// wearing a valuation's clothes.
+//
+// The figures come from public.sacco_asset_valuation_totals() and
+// public.sacco_asset_valuation_by_category(); nothing here re-derives them from
+// a list of assets, because any list the browser holds is a page.
+
+/** Zero-safe percentage, to one decimal. */
+const share = (part, whole) => (num(whole) > 0 ? Math.round((num(part) / num(whole)) * 1000) / 10 : 0);
+
+/**
+ * How much of the valuation is real.
+ *
+ * `assets` — the share of held assets carrying a recorded valuation.
+ * `value`  — the share of the reported total that rests on one.
+ *
+ * The two differ, and the difference is the point: a SACCO that has valued its
+ * one office block and none of its ninety chairs has valued 1% of its assets
+ * and 85% of its money. Reporting only the first understates the coverage;
+ * reporting only the second hides that almost nothing was looked at.
+ */
+export const valuationCoverage = (totals = {}) => ({
+  assets: share(totals.valuedAssets, totals.heldAssets),
+  value:  share(totals.valuedCurrentValue, totals.totalCurrentValue),
+});
+
+/**
+ * Is the revaluation gap a surplus, a deficit, or nothing worth a word?
+ *
+ * Returns null when no asset carries a valuation — there is no gap to report,
+ * and rendering "KES 0" would read as "we valued everything and it came to
+ * exactly book value", which is the opposite of the truth.
+ */
+export const revaluationStance = (totals = {}) => {
+  if (!Number(totals.valuedAssets)) return null;
+  const delta = round2(totals.revaluationDelta);
+  if (Math.abs(delta) < 0.01) return { delta: 0, tone: 'muted', label: 'In line with book value' };
+  return delta > 0
+    ? { delta, tone: 'success', label: 'Revaluation surplus' }
+    : { delta, tone: 'warning', label: 'Revaluation deficit' };
+};
+
+/** Column order for the valuation report's CSV. See ASSET_EXPORT_COLUMNS. */
+export const VALUATION_EXPORT_COLUMNS = [
+  'Category', 'Assets', 'At cost', 'Accumulated depreciation', 'Net book value',
+  'Current value', 'Share of value (%)', 'Valued assets', 'Value of valued assets',
+  'Book value of valued assets', 'Revaluation surplus/(deficit)', 'Stale valuations',
+];
+
+/**
+ * The by-category valuation as rows for downloadCSV.
+ *
+ * Raw numbers in the money columns for the same reason as buildAssetExport: a
+ * treasurer opening this in a spreadsheet needs to sum and cross-foot it, and
+ * "KES 1,200,000" does neither.
+ *
+ * A TOTAL ROW IS APPENDED, and it comes from `totals` — the server's whole-book
+ * aggregate — rather than from adding the rows above it. They should agree; if
+ * they ever do not, the total that is right is the one Postgres computed over
+ * every asset, not the one the browser computed over what it was sent.
+ */
+export const buildValuationExport = (rows = [], totals = null) => {
+  const out = (rows || []).map((r) => ({
+    'Category':                     categoryLabel(r.category),
+    'Assets':                       Number(r.assetCount) || 0,
+    'At cost':                      round2(r.totalCost),
+    'Accumulated depreciation':     round2(r.totalDepreciation),
+    'Net book value':               round2(r.totalBookValue),
+    'Current value':                round2(r.totalCurrentValue),
+    'Share of value (%)':           share(r.totalCurrentValue, totals?.totalCurrentValue),
+    'Valued assets':                Number(r.valuedCount) || 0,
+    'Value of valued assets':       round2(r.valuedCurrentValue),
+    'Book value of valued assets':  round2(r.valuedBookValue),
+    'Revaluation surplus/(deficit)': round2(r.revaluationDelta),
+    'Stale valuations':             Number(r.staleCount) || 0,
+  }));
+
+  if (totals) {
+    out.push({
+      'Category':                     'TOTAL',
+      'Assets':                       Number(totals.heldAssets) || 0,
+      'At cost':                      round2(totals.totalCost),
+      'Accumulated depreciation':     round2(totals.totalDepreciation),
+      'Net book value':               round2(totals.totalBookValue),
+      'Current value':                round2(totals.totalCurrentValue),
+      'Share of value (%)':           100,
+      'Valued assets':                Number(totals.valuedAssets) || 0,
+      'Value of valued assets':       round2(totals.valuedCurrentValue),
+      'Book value of valued assets':  round2(totals.valuedBookValue),
+      'Revaluation surplus/(deficit)': round2(totals.revaluationDelta),
+      'Stale valuations':             Number(totals.staleValuations) || 0,
+    });
+  }
+
+  return out;
+};

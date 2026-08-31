@@ -4,6 +4,8 @@ import {
   categoryMeta, statusMeta, isTerminalStatus, docTypeMeta,
   bookValue, reportedValue, ageInYears, depreciationProgress, isFullyDepreciated,
   valuationAge, expiringDocuments, validateAsset, buildAssetExport, ASSET_EXPORT_COLUMNS,
+  valuationBasisLabel, valuationCoverage, revaluationStance,
+  buildValuationExport, VALUATION_EXPORT_COLUMNS,
 } from './assetRegister';
 
 const NOW = new Date('2026-08-30T12:00:00.000Z');
@@ -255,5 +257,129 @@ describe('status list', () => {
     ASSET_STATUSES.forEach((s) => {
       expect(['success', 'warning', 'danger', 'muted']).toContain(s.tone);
     });
+  });
+});
+
+// ── Valuation ───────────────────────────────────────────────────────────────
+// These figures come from public.sacco_asset_valuation_totals() and
+// public.sacco_asset_valuation_by_category(); the helpers below only interpret
+// them. What is being held to account here is the interpretation — a book that
+// has barely been valued must never present itself as one that has.
+
+const totals = (o = {}) => ({
+  heldAssets: 400,
+  valuedAssets: 4,
+  unvaluedAssets: 396,
+  staleValuations: 0,
+  totalCost: 88000000,
+  totalDepreciation: 31000000,
+  totalBookValue: 57000000,
+  totalCurrentValue: 63500000,
+  valuedCurrentValue: 54000000,
+  valuedBookValue: 47500000,
+  unvaluedBookValue: 9500000,
+  revaluationDelta: 6500000,
+  byBasis: {},
+  lastValuedOn: '2026-06-01',
+  ...o,
+});
+
+describe('valuationBasisLabel', () => {
+  it('names each basis the register offers', () => {
+    expect(valuationBasisLabel('professional')).toBe('Professional valuer');
+    expect(valuationBasisLabel('market')).toBe('Market / open market value');
+  });
+
+  it('reads a blank basis as an internal estimate, matching the server', () => {
+    // sacco_asset_valuation_totals() folds a null basis into 'internal'. Calling
+    // it "unknown" here would make the report's basis breakdown disagree with
+    // the totals it sits underneath.
+    expect(valuationBasisLabel(null)).toBe('Internal estimate');
+    expect(valuationBasisLabel('nonsense')).toBe('Internal estimate');
+  });
+});
+
+describe('valuationCoverage', () => {
+  it('separates the share of ASSETS valued from the share of MONEY valued', () => {
+    // The gap between these two numbers is the whole point: 1% of the assets
+    // carry 85% of the value. Reporting either alone misleads.
+    const c = valuationCoverage(totals());
+    expect(c.assets).toBe(1);
+    expect(c.value).toBe(85);
+  });
+
+  it('reports zero rather than NaN on an empty register', () => {
+    expect(valuationCoverage({})).toEqual({ assets: 0, value: 0 });
+    expect(valuationCoverage(totals({ heldAssets: 0, totalCurrentValue: 0 })))
+      .toEqual({ assets: 0, value: 0 });
+  });
+});
+
+describe('revaluationStance', () => {
+  it('calls a gap above book value a surplus and one below it a deficit', () => {
+    expect(revaluationStance(totals())).toMatchObject({ delta: 6500000, tone: 'success' });
+    expect(revaluationStance(totals({ revaluationDelta: -250000 })))
+      .toMatchObject({ delta: -250000, tone: 'warning' });
+  });
+
+  it('says nothing at all when no asset has been valued', () => {
+    // Not "KES 0" — that reads as "we valued everything and it came to exactly
+    // book value", which is the opposite of the truth.
+    expect(revaluationStance(totals({ valuedAssets: 0, revaluationDelta: 0 }))).toBeNull();
+  });
+
+  it('treats a sub-cent gap as agreement rather than a movement', () => {
+    expect(revaluationStance(totals({ revaluationDelta: 0.004 })))
+      .toMatchObject({ delta: 0, tone: 'muted' });
+  });
+});
+
+describe('buildValuationExport', () => {
+  const rows = [
+    { category: 'land_buildings', assetCount: 2, valuedCount: 2, staleCount: 1,
+      totalCost: 60000000, totalDepreciation: 12000000, totalBookValue: 48000000,
+      totalCurrentValue: 54000000, valuedCurrentValue: 54000000, valuedBookValue: 48000000,
+      revaluationDelta: 6000000 },
+    { category: 'motor_vehicles', assetCount: 9, valuedCount: 0, staleCount: 0,
+      totalCost: 28000000, totalDepreciation: 19000000, totalBookValue: 9000000,
+      totalCurrentValue: 9000000, valuedCurrentValue: 0, valuedBookValue: 0,
+      revaluationDelta: 0 },
+  ];
+
+  it('emits every declared column, so the CSV header order is honoured', () => {
+    const [row] = buildValuationExport(rows, totals());
+    expect(Object.keys(row).sort()).toEqual([...VALUATION_EXPORT_COLUMNS].sort());
+  });
+
+  it('writes raw numbers, not display strings, in the money columns', () => {
+    const [row] = buildValuationExport(rows, totals());
+    expect(row['At cost']).toBe(60000000);
+    expect(row['Net book value']).toBe(48000000);
+  });
+
+  it('renders category labels, not raw enum values', () => {
+    expect(buildValuationExport(rows, totals())[0].Category).toBe('Land & Buildings');
+  });
+
+  it('takes the total row from the server aggregate, not from the rows above it', () => {
+    // Deliberately inconsistent input: the rows add to 88,000,000 at cost while
+    // the whole-book total says 90,000,000. The exported total must be the
+    // server's — the browser only ever holds what it was sent.
+    const out = buildValuationExport(rows, totals({ totalCost: 90000000 }));
+    const total = out[out.length - 1];
+    expect(total.Category).toBe('TOTAL');
+    expect(total['At cost']).toBe(90000000);
+    expect(total['Assets']).toBe(400);
+  });
+
+  it('omits the total row when there are no whole-book figures to trust', () => {
+    const out = buildValuationExport(rows);
+    expect(out).toHaveLength(2);
+    expect(out.some((r) => r.Category === 'TOTAL')).toBe(false);
+  });
+
+  it('survives an empty register', () => {
+    expect(buildValuationExport([], null)).toEqual([]);
+    expect(buildValuationExport()).toEqual([]);
   });
 });

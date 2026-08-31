@@ -15,6 +15,14 @@
  * The default filter is "in the SACCO's hands", not "everything". A register
  * that opens on a list dominated by vehicles sold in 2019 is a register nobody
  * uses; the disposed assets are one click away and never deleted.
+ *
+ * TWO VIEWS, ONE TAB. The register lists and maintains; the VALUATION view
+ * reports. They are separated because they are read by different people for
+ * different reasons — an operations officer looking for a laptop's serial
+ * number and a treasurer answering "what are our assets worth" want opposite
+ * screens — and because the valuation report has to carry a caveat the register
+ * does not: how much of the "current value" column is a recorded valuation and
+ * how much is book value standing in for one. See ValuationReport.jsx.
  */
 import React, { useMemo, useState } from 'react';
 import Icon from '../../../../components/AppIcon';
@@ -31,8 +39,30 @@ import {
 } from '../_shared';
 import AssetFormModal from './AssetFormModal';
 import AssetDrawer, { StatusPill } from './AssetDrawer';
+import ValuationReport from './ValuationReport';
 
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-lg ${className}`} />;
+
+/** The two views this tab offers. Same control as the Shares tab's sub-tabs. */
+const VIEWS = [
+  { id: 'register',  label: 'Register',  icon: 'Package'   },
+  { id: 'valuation', label: 'Valuation', icon: 'LineChart' },
+];
+
+const ViewTab = ({ active, label, icon, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-pressed={active}
+    className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all border ${
+      active ? 'border-primary/40 text-primary' : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted'
+    }`}
+    style={active ? { background: 'rgba(52,193,221,0.10)' } : {}}
+  >
+    <Icon name={icon} size={14} color="currentColor" />
+    {label}
+  </button>
+);
 
 /**
  * The category breakdown, as a bar per category.
@@ -119,6 +149,7 @@ const AssetRegisterTab = ({ ctx }) => {
   const toast = useToast();
   const { sacco } = ctx;
 
+  const [view, setView] = useState('register');
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [status, setStatus] = useState('active');
@@ -182,174 +213,186 @@ const AssetRegisterTab = ({ ctx }) => {
 
   return (
     <div className="space-y-5">
-      {/* Whole-register totals */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {summaryLoading ? [1, 2, 3, 4].map((i) => (
-          <div key={i} className="bg-card border border-border rounded-xl p-5 space-y-3">
-            <Sk className="h-4 w-24" /><Sk className="h-8 w-32" /><Sk className="h-3 w-20" />
-          </div>
-        )) : <>
-          <StatCard
-            label="Assets held" value={summary.inService + summary.needsAttention} icon="Package"
-            hint={summary.disposed > 0 ? `${summary.disposed} disposed or written off` : 'None disposed'}
+      {/* The register lists; the valuation reports. Two audiences, two views. */}
+      <div className="flex gap-1 flex-wrap border-b border-border pb-3">
+        {VIEWS.map((v) => (
+          <ViewTab
+            key={v.id} label={v.label} icon={v.icon}
+            active={view === v.id} onClick={() => setView(v.id)}
           />
-          <StatCard
-            label="At cost" value={KES(summary.totalCost)} icon="Receipt" tone="muted"
-            hint="What was paid, across everything still held"
-          />
-          <StatCard
-            label="Net book value" value={KES(summary.totalBookValue)} icon="TrendingDown" tone="warning"
-            hint={`Less ${KES(summary.totalDepreciation)} depreciation`}
-          />
-          <StatCard
-            label="Current value" value={KES(summary.totalCurrentValue)} icon="LineChart" tone="success"
-            hint={summary.valuedAssets > 0
-              ? `${summary.valuedAssets} valued; the rest at book value`
-              : 'Nothing valued yet — this is book value'}
-          />
-        </>}
+        ))}
       </div>
 
-      {/* Things the register knows are wrong. Shown as one line rather than a
-          banner per problem: a register nags once, or it gets ignored. */}
-      {!summaryLoading && (summary.undocumented > 0 || summary.expiringDocuments > 0 || summary.needsAttention > 0) && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
-          <Icon name="AlertTriangle" size={16} color="#ca8a04" />
-          {summary.undocumented > 0 && (
-            <span className="text-xs text-amber-800">
-              <strong>{summary.undocumented}</strong> asset{summary.undocumented === 1 ? ' has' : 's have'} no supporting document
-            </span>
-          )}
-          {summary.expiringDocuments > 0 && (
-            <span className="text-xs text-amber-800">
-              <strong>{summary.expiringDocuments}</strong> document{summary.expiringDocuments === 1 ? '' : 's'} expired or expiring within 60 days
-            </span>
-          )}
-          {summary.needsAttention > 0 && (
-            <span className="text-xs text-amber-800">
-              <strong>{summary.needsAttention}</strong> under maintenance or impaired
-            </span>
-          )}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 space-y-5">
-          <Card
-            title="Asset register"
-            subtitle={`${summary.totalAssets} record${summary.totalAssets === 1 ? '' : 's'} · the same register the Balance Sheet and the depreciation job read`}
-            actions={<div className="flex items-center gap-2">
-              <GhostButton icon="Download" onClick={exportRegister} disabled={exporting}>
-                {exporting ? 'Exporting…' : 'Export'}
-              </GhostButton>
-              <PrimaryButton icon="Plus" onClick={openNew}>Register asset</PrimaryButton>
-            </div>}
-          >
-            {/* Filters */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
-              <div className="col-span-2 lg:col-span-1 relative">
-                <Icon name="Search" size={14} color="currentColor"
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                <TextInput
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Name, tag, serial, location…"
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:border-primary"
-                />
-              </div>
-              <Select value={category} onChange={(e) => setCategory(e.target.value)}>
-                <option value="all">All categories</option>
-                {ASSET_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </Select>
-              <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="active">In the SACCO's hands</option>
-                <option value="all">Every record</option>
-                <option value="disposed">Disposed, written off or lost</option>
-                {ASSET_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </Select>
-              <Select value={sort} onChange={(e) => setSort(e.target.value)}>
-                {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </Select>
+      {view === 'valuation' ? <ValuationReport /> : (<>
+        {/* Whole-register totals */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {summaryLoading ? [1, 2, 3, 4].map((i) => (
+            <div key={i} className="bg-card border border-border rounded-xl p-5 space-y-3">
+              <Sk className="h-4 w-24" /><Sk className="h-8 w-32" /><Sk className="h-3 w-20" />
             </div>
-
-            {register.error && (
-              <div className="flex items-center gap-2 p-3 mb-3 rounded-xl bg-red-50 border border-red-200">
-                <Icon name="AlertCircle" size={15} color="#dc2626" />
-                <p className="text-xs text-red-700">{register.error}</p>
-              </div>
-            )}
-
-            {pager.loading && pager.rows.length === 0 ? (
-              <div className="space-y-2">{[1, 2, 3, 4, 5].map((i) => <Sk key={i} className="h-12" />)}</div>
-            ) : pager.rows.length === 0 ? (
-              <EmptyState
-                icon="Package"
-                title={filtered ? 'Nothing matches those filters' : 'The register is empty'}
-                hint={filtered
-                  ? 'Widen the search, or switch the status filter to "Every record".'
-                  : 'Add the premises, vehicles, computers, furniture and software the SACCO owns. Everything registered here feeds the depreciation job and the Balance Sheet.'}
-              />
-            ) : (
-              <>
-                <Table columns={['Asset', 'Category', 'Location', 'Acquired', 'Cost', 'Book value', 'Current value', 'Status', '']}>
-                  {pager.rows.map((a) => <AssetRow key={a.id} asset={a} onOpen={setSelected} />)}
-                </Table>
-                <Pagination
-                  page={pager.page}
-                  pageCount={pager.pageCount}
-                  from={pager.from}
-                  to={pager.to}
-                  total={pager.total}
-                  onPageChange={pager.setPage}
-                  loading={pager.loading}
-                  noun={filtered ? 'matching assets' : 'assets'}
-                />
-              </>
-            )}
-          </Card>
+          )) : <>
+            <StatCard
+              label="Assets held" value={summary.inService + summary.needsAttention} icon="Package"
+              hint={summary.disposed > 0 ? `${summary.disposed} disposed or written off` : 'None disposed'}
+            />
+            <StatCard
+              label="At cost" value={KES(summary.totalCost)} icon="Receipt" tone="muted"
+              hint="What was paid, across everything still held"
+            />
+            <StatCard
+              label="Net book value" value={KES(summary.totalBookValue)} icon="TrendingDown" tone="warning"
+              hint={`Less ${KES(summary.totalDepreciation)} depreciation`}
+            />
+            <StatCard
+              label="Current value" value={KES(summary.totalCurrentValue)} icon="LineChart" tone="success"
+              hint={summary.valuedAssets > 0
+                ? `${summary.valuedAssets} valued; the rest at book value`
+                : 'Nothing valued yet — this is book value'}
+            />
+          </>}
         </div>
 
-        <div className="space-y-5">
-          <Card title="What we own" subtitle="By category, across the whole register">
-            {summaryLoading ? <Sk className="h-40" /> : <CategoryBreakdown byCategory={summary.byCategory} />}
-          </Card>
-
-          <Card title="Where things stand">
-            {summaryLoading ? <Sk className="h-32" /> : (
-              <div className="space-y-2">
-                {ASSET_STATUSES.map((s) => {
-                  const n = Number(summary.byStatus?.[s.value] || 0);
-                  if (n === 0) return null;
-                  return (
-                    <div key={s.value} className="flex items-center justify-between gap-3">
-                      <StatusPill status={s.value} />
-                      <span className="font-mono text-sm text-foreground">{n}</span>
-                    </div>
-                  );
-                })}
-                {Object.keys(summary.byStatus || {}).length === 0 && (
-                  <p className="text-xs text-muted-foreground text-center py-2">Nothing registered yet.</p>
-                )}
-              </div>
+        {/* Things the register knows are wrong. Shown as one line rather than a
+            banner per problem: a register nags once, or it gets ignored. */}
+        {!summaryLoading && (summary.undocumented > 0 || summary.expiringDocuments > 0 || summary.needsAttention > 0) && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+            <Icon name="AlertTriangle" size={16} color="#ca8a04" />
+            {summary.undocumented > 0 && (
+              <span className="text-xs text-amber-800">
+                <strong>{summary.undocumented}</strong> asset{summary.undocumented === 1 ? ' has' : 's have'} no supporting document
+              </span>
             )}
-          </Card>
+            {summary.expiringDocuments > 0 && (
+              <span className="text-xs text-amber-800">
+                <strong>{summary.expiringDocuments}</strong> document{summary.expiringDocuments === 1 ? '' : 's'} expired or expiring within 60 days
+              </span>
+            )}
+            {summary.needsAttention > 0 && (
+              <span className="text-xs text-amber-800">
+                <strong>{summary.needsAttention}</strong> under maintenance or impaired
+              </span>
+            )}
+          </div>
+        )}
 
-          <div className="rounded-xl border border-border p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Icon name="Info" size={14} color="#1da8c5" />
-              <h4 className="text-xs font-bold uppercase tracking-wide text-foreground">Cost, book value, current value</h4>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          <div className="lg:col-span-2 space-y-5">
+            <Card
+              title="Asset register"
+              subtitle={`${summary.totalAssets} record${summary.totalAssets === 1 ? '' : 's'} · the same register the Balance Sheet and the depreciation job read`}
+              actions={<div className="flex items-center gap-2">
+                <GhostButton icon="Download" onClick={exportRegister} disabled={exporting}>
+                  {exporting ? 'Exporting…' : 'Export'}
+                </GhostButton>
+                <PrimaryButton icon="Plus" onClick={openNew}>Register asset</PrimaryButton>
+              </div>}
+            >
+              {/* Filters */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+                <div className="col-span-2 lg:col-span-1 relative">
+                  <Icon name="Search" size={14} color="currentColor"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                  <TextInput
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Name, tag, serial, location…"
+                    className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:border-primary"
+                  />
+                </div>
+                <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+                  <option value="all">All categories</option>
+                  {ASSET_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </Select>
+                <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="active">In the SACCO's hands</option>
+                  <option value="all">Every record</option>
+                  <option value="disposed">Disposed, written off or lost</option>
+                  {ASSET_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </Select>
+                <Select value={sort} onChange={(e) => setSort(e.target.value)}>
+                  {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </Select>
+              </div>
+
+              {register.error && (
+                <div className="flex items-center gap-2 p-3 mb-3 rounded-xl bg-red-50 border border-red-200">
+                  <Icon name="AlertCircle" size={15} color="#dc2626" />
+                  <p className="text-xs text-red-700">{register.error}</p>
+                </div>
+              )}
+
+              {pager.loading && pager.rows.length === 0 ? (
+                <div className="space-y-2">{[1, 2, 3, 4, 5].map((i) => <Sk key={i} className="h-12" />)}</div>
+              ) : pager.rows.length === 0 ? (
+                <EmptyState
+                  icon="Package"
+                  title={filtered ? 'Nothing matches those filters' : 'The register is empty'}
+                  hint={filtered
+                    ? 'Widen the search, or switch the status filter to "Every record".'
+                    : 'Add the premises, vehicles, computers, furniture and software the SACCO owns. Everything registered here feeds the depreciation job and the Balance Sheet.'}
+                />
+              ) : (
+                <>
+                  <Table columns={['Asset', 'Category', 'Location', 'Acquired', 'Cost', 'Book value', 'Current value', 'Status', '']}>
+                    {pager.rows.map((a) => <AssetRow key={a.id} asset={a} onOpen={setSelected} />)}
+                  </Table>
+                  <Pagination
+                    page={pager.page}
+                    pageCount={pager.pageCount}
+                    from={pager.from}
+                    to={pager.to}
+                    total={pager.total}
+                    onPageChange={pager.setPage}
+                    loading={pager.loading}
+                    noun={filtered ? 'matching assets' : 'assets'}
+                  />
+                </>
+              )}
+            </Card>
+          </div>
+
+          <div className="space-y-5">
+            <Card title="What we own" subtitle="By category, across the whole register">
+              {summaryLoading ? <Sk className="h-40" /> : <CategoryBreakdown byCategory={summary.byCategory} />}
+            </Card>
+
+            <Card title="Where things stand">
+              {summaryLoading ? <Sk className="h-32" /> : (
+                <div className="space-y-2">
+                  {ASSET_STATUSES.map((s) => {
+                    const n = Number(summary.byStatus?.[s.value] || 0);
+                    if (n === 0) return null;
+                    return (
+                      <div key={s.value} className="flex items-center justify-between gap-3">
+                        <StatusPill status={s.value} />
+                        <span className="font-mono text-sm text-foreground">{n}</span>
+                      </div>
+                    );
+                  })}
+                  {Object.keys(summary.byStatus || {}).length === 0 && (
+                    <p className="text-xs text-muted-foreground text-center py-2">Nothing registered yet.</p>
+                  )}
+                </div>
+              )}
+            </Card>
+
+            <div className="rounded-xl border border-border p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Icon name="Info" size={14} color="#1da8c5" />
+                <h4 className="text-xs font-bold uppercase tracking-wide text-foreground">Cost, book value, current value</h4>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                <strong className="text-foreground">Cost</strong> is what was paid and never changes.{' '}
+                <strong className="text-foreground">Book value</strong> is cost less the depreciation the period-end job has
+                charged — the figure the Balance Sheet defends.{' '}
+                <strong className="text-foreground">Current value</strong> is a valuation you record; where none exists the
+                register shows book value and says so. Recording a valuation does not post to the ledger — a revaluation is
+                an equity movement and needs its own journal.
+              </p>
             </div>
-            <p className="text-[11px] text-muted-foreground leading-relaxed">
-              <strong className="text-foreground">Cost</strong> is what was paid and never changes.{' '}
-              <strong className="text-foreground">Book value</strong> is cost less the depreciation the period-end job has
-              charged — the figure the Balance Sheet defends.{' '}
-              <strong className="text-foreground">Current value</strong> is a valuation you record; where none exists the
-              register shows book value and says so. Recording a valuation does not post to the ledger — a revaluation is
-              an equity movement and needs its own journal.
-            </p>
           </div>
         </div>
-      </div>
+      </>)}
 
       <AssetFormModal
         open={formOpen}
