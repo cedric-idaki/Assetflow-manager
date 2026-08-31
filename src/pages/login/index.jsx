@@ -7,7 +7,7 @@ import BrandPreviewPanel from '../../components/BrandPreviewPanel';
 import { isAndroidAppContext } from '../../utils/androidApp';
 
 const STEPS = [
-  'Sign in with the account your team set up for you.',
+  'Sign in, or register directly as a client — no agent needed.',
   ['Land on ', 'your', ' portal — client, member, or admin.'],
   'Apply, vote, sign, and track balances — same day.',
 ];
@@ -494,6 +494,32 @@ const LoginPage = () => {
                   )}
                 </button>
               </form>
+
+              {/* Client self-registration. Deliberately OUTSIDE the web-only
+                  block below: that block is hidden in the Play Store app
+                  because it sells a subscription, and this one takes no
+                  payment at all — the same reason Routes.jsx keeps
+                  /user-registration-screen available in the app. A client who
+                  downloaded the app and has no account yet would otherwise
+                  have nowhere to go. */}
+              <div
+                className="mt-5 pt-4 text-center"
+                style={{ borderTop: '1px solid ' + C.border }}
+              >
+                <p className="text-sm" style={{ color: C.textMuted }}>
+                  Don't have a client account?{' '}
+                  <button
+                    onClick={function() { navigate('/user-registration-screen'); }}
+                    className="font-semibold hover:underline"
+                    style={{ color: C.accentDeep }}
+                  >
+                    Register with your company
+                  </button>
+                </p>
+                <p className="text-xs mt-1" style={{ color: C.textMuted }}>
+                  You'll need their registration code. A sales agent's code is optional.
+                </p>
+              </div>
 
               {/* Register CTA — web only. In the Play Store app this whole block
                   is gone: it advertises subscription plans and leads to the

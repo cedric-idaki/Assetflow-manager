@@ -68,7 +68,7 @@ const AdminDashboard = () => {
     contracts, payments, auditLogs, subscription, companyProfile,
     salesAnalytics, loading, connectionStatus,
     refetch, inviteClient, createAgent, inviteStaff, toggleStaffActive,
-    uploadContract, exportCSV,
+    uploadContract, exportCSV, setSelfSignupEnabled, rotateSignupCode,
   } = useAdminDashboardContext();
 
   // Tab state lives in the URL so it survives navigation and page refresh
@@ -213,6 +213,9 @@ const AdminDashboard = () => {
                 agents={agents}
                 onInvite={inviteClient}
                 onExport={exportCSV}
+                companyProfile={companyProfile}
+                onSetSelfSignup={setSelfSignupEnabled}
+                onRotateSignupCode={rotateSignupCode}
               />
             )}
 

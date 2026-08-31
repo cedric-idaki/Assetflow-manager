@@ -51,6 +51,9 @@
 
 import { MODULE_KEYS } from './modules';
 import { LEAD_SOURCES, LOST_REASONS, CONTACT_CHANNELS, SCHEDULABLE_CHANNELS } from './crmVocabulary';
+import {
+  ACQUISITION_CHANNEL_VALUES, REGISTRATION_SOURCE_VALUES,
+} from './clientAcquisition';
 
 // ─── FIELD TYPES ─────────────────────────────────────────────────────────────
 /**
@@ -265,7 +268,16 @@ export const REPORT_SOURCES = [
       { key: 'notes',               label: 'Notes',       type: 'text',     column: 'notes' },
       { key: 'created_at',          label: 'Registered',  type: 'datetime', column: 'created_at' },
       { key: 'updated_at',          label: 'Last updated', type: 'datetime', column: 'updated_at' },
+      { key: 'acquisition_channel', label: 'Acquired via', type: 'enum',
+        column: 'acquisition_channel', options: enumOptions(ACQUISITION_CHANNEL_VALUES) },
+      { key: 'registration_source', label: 'Registered by', type: 'enum',
+        column: 'registration_source', options: enumOptions(REGISTRATION_SOURCE_VALUES) },
       joined('agent_name', 'Signed up by', 'agent', 'agents', 'full_name'),
+      // acquisition_channel rather than agent_name is what a commission split
+      // should be counted off: agents.agent_id is ON DELETE SET NULL, so the
+      // joined name goes blank the day an agent leaves and every client they
+      // ever signed silently reads as a walk-in.
+      //
       // national_id is deliberately absent: it identifies a person and answers
       // no reporting question that account_number does not answer better.
     ],

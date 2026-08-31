@@ -45,6 +45,29 @@ const ClientPortal = () => {
   return (
     <MainLayout>
       <div className="space-y-5 p-1">
+        {/* Awaiting activation. A client who registered themselves is a
+            stranger to the company until staff activate them, so their portal
+            is legitimately empty -- this says so, rather than leaving them to
+            conclude the system is broken. KYC is the one thing they CAN get on
+            with while they wait, which is what the banner points at. */}
+        {!loading && clientProfile && clientProfile.client_status === 'pending' && (
+          <div className="flex items-center justify-between gap-3 p-4 rounded-xl bg-blue-50 border border-blue-200 dark:bg-blue-900/20 dark:border-blue-800">
+            <div className="flex items-center gap-3">
+              <Icon name="Clock" size={18} color="#2563eb" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">Account awaiting activation</p>
+                <p className="text-xs text-muted-foreground">
+                  Your registration is with the company for review. Uploading your KYC documents
+                  now is the fastest way through it.
+                </p>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex-shrink-0">
+              Pending
+            </span>
+          </div>
+        )}
+
         {/* KYC warning */}
         {!loading && clientProfile && clientProfile.kyc_status !== 'verified' && (
           <div className="flex items-center justify-between p-4 rounded-xl bg-yellow-50 border border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800">

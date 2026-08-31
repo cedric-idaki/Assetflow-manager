@@ -146,3 +146,15 @@ entrypoint = "./functions/esign-api/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/listing-public/index.ts"
+
+# Direct client registration (/user-registration-screen) — the public signup a
+# client uses to join a company without going through a sales agent. The
+# registrant has no account yet, so verify_jwt MUST be false; the company's
+# signup code is what gates it. The function is the whole boundary: it refuses
+# to mint a login until the code resolves, and every attribution decision —
+# which tenant, which agent, direct or agent-acquired — is made inside
+# register_direct_client(), which is granted to service_role alone.
+[functions.register-client]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/register-client/index.ts"
