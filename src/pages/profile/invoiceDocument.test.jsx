@@ -39,6 +39,15 @@ describe('company platform invoice', () => {
     expect(doc).toContain('INVOICE');
   });
 
+  it('carries the Ararat wordmark, not the retired AssetFlow one', () => {
+    // The letterhead is the PLATFORM billing the tenant, so the brand is ours
+    // and hardcoded — unlike payslips or tenant invoices, which take the
+    // tenant's own company_name. It had been left on the old name while the
+    // footer of the same page already said Ararat.
+    expect(doc).toContain('>Ararat<');
+    expect(doc).not.toMatch(/AssetFlow|Asset<span>Flow/);
+  });
+
   it('itemises the user charge and the one-time installation separately', () => {
     expect(doc).toContain('Licensed user charges');
     expect(doc).toContain('Installation &amp; onboarding (one-time)');
@@ -46,10 +55,10 @@ describe('company platform invoice', () => {
     expect(rowCount(doc)).toBe(2);
   });
 
-  it('shows a subtotal, a VAT line at the standard rate, and a total', () => {
-    expect(doc).toContain('Subtotal (excl. VAT)');
+  it('discloses the taxable value, the rate and the tax', () => {
+    expect(doc).toContain('Taxable value (excl. VAT)');
     expect(doc).toContain('VAT @ 16%');
-    expect(doc).toContain('<strong>Total</strong>');
+    expect(doc).toContain('<strong>Total (incl. VAT)</strong>');
   });
 
   it('totals to exactly what the tenant paid', () => {
@@ -57,14 +66,15 @@ describe('company platform invoice', () => {
     expect(figures[figures.length - 1]).toBe(paid);
   });
 
-  it('has an item table that adds up to the subtotal, and subtotal + VAT = total', () => {
-    // [unit, amount] per row, then subtotal, VAT, total.
+  it('has an item table that adds up to the total, and taxable value + VAT = total', () => {
+    // [unit, amount] per row, then taxable value, VAT, total. The item column
+    // is VAT-inclusive, so it sums to the TOTAL — which is the figure the page
+    // states beside it.
     const figures = amounts(doc);
-    const totals = figures.slice(-3);
+    const [taxable, vat, total] = figures.slice(-3);
     const lineAmounts = figures.slice(0, -3).filter((_, i) => i % 2 === 1);
-    const [subtotal, vat, total] = totals;
-    expect(Math.round(lineAmounts.reduce((a, b) => a + b, 0) * 100) / 100).toBe(subtotal);
-    expect(Math.round((subtotal + vat) * 100) / 100).toBe(total);
+    expect(Math.round(lineAmounts.reduce((a, b) => a + b, 0) * 100) / 100).toBe(total);
+    expect(Math.round((taxable + vat) * 100) / 100).toBe(total);
   });
 
   it('states the seat count and plan in the footer', () => {
@@ -88,6 +98,9 @@ describe('company platform invoice', () => {
     expect(withModules).toContain('Additional modules');
     expect(rowCount(withModules)).toBe(3);
     expect(amounts(withModules).slice(-3)).toEqual([5000, 775, 5775]);
+    // The item column is inclusive, so it sums to the total, not the taxable value.
+    const items = amounts(withModules).slice(0, -3).filter((_, i) => i % 2 === 1);
+    expect(Math.round(items.reduce((a, b) => a + b, 0) * 100) / 100).toBe(5775);
   });
 
   it('escapes a tenant-supplied name rather than letting it run as script', () => {
@@ -113,6 +126,11 @@ describe('sacco platform invoice', () => {
 
   const doc = buildSaccoInvoice(row, sacco);
 
+  it('carries the Ararat wordmark, not the retired AssetFlow one', () => {
+    expect(doc).toContain('>Ararat<');
+    expect(doc).not.toMatch(/AssetFlow|Asset<span>Flow/);
+  });
+
   it('itemises base, members and storage as separate lines', () => {
     expect(doc).toContain('Base system price');
     expect(doc).toContain('Active member charges');
@@ -121,18 +139,18 @@ describe('sacco platform invoice', () => {
   });
 
   it('shows the VAT block and totals to the amount billed', () => {
-    expect(doc).toContain('Subtotal (excl. VAT)');
+    expect(doc).toContain('Taxable value (excl. VAT)');
     expect(doc).toContain('VAT @ 16%');
     const figures = amounts(doc);
     expect(figures[figures.length - 1]).toBe(row.total);
   });
 
-  it('has an item table that adds up to the subtotal, and subtotal + VAT = total', () => {
+  it('has an item table that adds up to the total, and taxable value + VAT = total', () => {
     const figures = amounts(doc);
-    const [subtotal, vat, total] = figures.slice(-3);
+    const [taxable, vat, total] = figures.slice(-3);
     const lineAmounts = figures.slice(0, -3).filter((_, i) => i % 2 === 1);
-    expect(Math.round(lineAmounts.reduce((a, b) => a + b, 0) * 100) / 100).toBe(subtotal);
-    expect(Math.round((subtotal + vat) * 100) / 100).toBe(total);
+    expect(Math.round(lineAmounts.reduce((a, b) => a + b, 0) * 100) / 100).toBe(total);
+    expect(Math.round((taxable + vat) * 100) / 100).toBe(total);
   });
 
   it('shows the per-member unit rate so the charge can be checked by hand', () => {

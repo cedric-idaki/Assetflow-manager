@@ -137,9 +137,14 @@ const distributeNet = (taxableLines, netTotal, rate) => {
  * @param {number}   [opts.vatRate]            percent; pass 0 for exempt / not registered
  * @param {boolean}  [opts.vatInclusive]       are the catalogue prices tax-inclusive?
  *
- * @returns {object} `lines[].amount` is NET (VAT-exclusive) so subtotal + VAT
- *   === total, and `lines[].gross` is the tax-inclusive cost of that line.
- *   Callers print `amount` in the item table with the VAT line underneath.
+ * @returns {object} Each line carries both figures, and they are for different
+ *   jobs. `gross` is what the line costs at the ADVERTISED rate — qty x unit,
+ *   exactly, which is what a customer checks by hand, so it is what the item
+ *   table prints. `amount` is the same line VAT-exclusive; the amounts sum to
+ *   `subtotal` to the cent, which is what an accounting export needs. A net
+ *   amount cannot always be written as qty x a 2dp unit price (60 members at a
+ *   net 31.034 is out by 0.27), so the printed table stays inclusive and the
+ *   tax is disclosed beneath it instead.
  */
 export function buildSystemInvoice({
   productLine = 'company',

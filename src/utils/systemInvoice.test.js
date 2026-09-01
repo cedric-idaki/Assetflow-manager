@@ -47,7 +47,8 @@ describe('a row with a stored breakdown is printed verbatim', () => {
   it('states the per-user rate the stored charge implies', () => {
     const users = lineFor(invoiceForSubscription(row), 'Licensed user charges');
     expect(users.qty).toBe(5);
-    expect(users.unit).toBe(305);
+    expect(users.unit).toBe(305);                    // the advertised rate
+    expect(users.qty * users.unit).toBe(users.gross); // and it multiplies out
   });
 
   it('nets the lines down so they add up to the stored subtotal', () => {

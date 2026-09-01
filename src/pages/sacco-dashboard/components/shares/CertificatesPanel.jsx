@@ -6,13 +6,18 @@ import {
   Select, EmptyState, KES, fmtDate,
 } from '../_shared';
 import { int, num, printCertificate } from './_util';
+import CertificateVerifier from '../../../../components/CertificateVerifier';
+import { formatSerial } from '../../../../utils/certificateSerial';
 
 /**
  * Share certificates. One live certificate per holder, reissued automatically
  * whenever a holding changes — the superseded ones stay on file as history.
  */
 const CertificatesPanel = ({ ctx, ov }) => {
-  const { certificates = [], members = [], shares = [], sacco, reissueCertificate, exportCSV } = ctx;
+  const {
+    certificates = [], members = [], shares = [], sacco,
+    reissueCertificate, ensureCertificateSerial, exportCSV,
+  } = ctx;
   const toast = useToast();
 
   const [showSuperseded, setShowSuperseded] = useState(false);
@@ -30,7 +35,8 @@ const CertificatesPanel = ({ ctx, ov }) => {
       .filter((c) => {
         if (!term) return true;
         const m = c.member || memberOf(c.member_id);
-        return `${c.certificate_no} ${m.full_name || ''} ${m.member_no || ''}`.toLowerCase().includes(term);
+        return `${c.certificate_no} ${c.serial || ''} ${m.full_name || ''} ${m.member_no || ''}`
+          .toLowerCase().includes(term);
       });
   }, [certificates, showSuperseded, q, members]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -41,9 +47,18 @@ const CertificatesPanel = ({ ctx, ov }) => {
     && !active.some((c) => c.member_id === r.member_id));
 
   // Deliberately not called `print` — that shadows window.print().
-  const downloadCert = (c) => {
+  // A certificate must not leave the system without the serial that makes it
+  // checkable, so an unserialised one is minted before the window opens.
+  const downloadCert = async (c) => {
     const m = c.member || memberOf(c.member_id);
-    const ok = printCertificate(c, {
+    let cert = c;
+    if (!cert.serial) {
+      try {
+        const serial = await ensureCertificateSerial(cert.id);
+        if (serial) cert = { ...cert, serial };
+      } catch (_) { /* print it anyway — a missing serial must not block the paper */ }
+    }
+    const ok = printCertificate(cert, {
       saccoName: sacco?.name, memberName: m.full_name, memberNo: m.member_no, marketValue: ov.price,
     });
     if (!ok) toast.error('Allow pop-ups for this site to print certificates.');
@@ -102,6 +117,7 @@ const CertificatesPanel = ({ ctx, ov }) => {
               <GhostButton icon="Download" onClick={() => exportCSV(rows.map((c) => {
                 const m = c.member || memberOf(c.member_id);
                 return {
+                  serial: c.serial || '',
                   certificate_no: c.certificate_no, member: m.full_name || '', member_no: m.member_no || '',
                   shares: c.shares, par_value: c.par_value,
                   issue_date: String(c.issue_date || c.created_at).slice(0, 10), status: c.status,
@@ -117,7 +133,7 @@ const CertificatesPanel = ({ ctx, ov }) => {
             <span className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
               <Icon name="Search" size={15} color="var(--color-muted-foreground)" />
             </span>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by certificate no. or member"
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by serial, certificate no. or member"
               className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:border-primary" />
           </div>
           <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border text-sm text-muted-foreground cursor-pointer">
@@ -130,12 +146,17 @@ const CertificatesPanel = ({ ctx, ov }) => {
           <EmptyState icon="Award" title={q ? 'No certificate matches that search' : 'No certificates issued yet'}
             hint={q ? 'Try a certificate number or member name.' : 'The first time a member acquires shares, their certificate is generated automatically.'} />
         ) : (
-          <Table columns={['Certificate no.', 'Member', 'Shares', 'Par value', 'Value today', 'Issued', 'Status', '']}>
+          <Table columns={['Serial', 'Certificate no.', 'Member', 'Shares', 'Par value', 'Value today', 'Issued', 'Status', '']}>
             {rows.map((c) => {
               const m = c.member || memberOf(c.member_id);
               return (
                 <tr key={c.id} className="border-b border-border/60">
-                  <td className="py-2.5 pr-4 font-mono text-xs text-foreground">{c.certificate_no}</td>
+                  <td className="py-2.5 pr-4 font-mono text-xs text-foreground whitespace-nowrap">
+                    {c.serial
+                      ? formatSerial(c.serial)
+                      : <span className="text-muted-foreground italic font-sans">on download</span>}
+                  </td>
+                  <td className="py-2.5 pr-4 font-mono text-xs text-muted-foreground">{c.certificate_no}</td>
                   <td className="py-2.5 pr-4">
                     <p className="font-medium text-foreground">{m.full_name || '—'}</p>
                     <p className="text-xs text-muted-foreground">{m.member_no || '—'}</p>
@@ -155,6 +176,13 @@ const CertificatesPanel = ({ ctx, ov }) => {
             })}
           </Table>
         )}
+      </Card>
+
+      <Card
+        title="Verify a certificate"
+        subtitle="Type the serial from any certificate this platform issued — share, settlement or e-signature — to confirm it is genuine and current"
+      >
+        <CertificateVerifier />
       </Card>
 
       <Modal open={reissueOpen} onClose={() => setReissueOpen(false)} title="Issue a share certificate"

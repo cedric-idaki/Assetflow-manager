@@ -281,6 +281,8 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
   .sub{font-size:11px;text-transform:uppercase;letter-spacing:3px;color:#5c7c88;margin-top:4px;}
   .certno{text-align:right;font-size:12px;color:#5c7c88;}
   .certno b{display:block;font-size:18px;color:#0f2733;letter-spacing:1px;}
+  .certno .serial{display:block;margin-top:8px;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;}
+  .certno .serial b{font-size:13px;letter-spacing:1px;font-family:'Courier New',monospace;}
   h1{text-align:center;font-size:30px;letter-spacing:6px;margin:26px 0 4px;text-transform:uppercase;}
   .rule{width:120px;height:2px;background:#1da8c5;margin:0 auto 26px;}
   .body{text-align:center;font-size:15px;line-height:2.1;}
@@ -306,7 +308,10 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
         <div class="sacco">${esc(saccoName || 'Sacco Society')}</div>
         <div class="sub">Share Certificate</div>
       </div>
-      <div class="certno">Certificate No.<b>${esc(cert.certificate_no)}</b></div>
+      <div class="certno">
+        Certificate No.<b>${esc(cert.certificate_no)}</b>
+        ${cert.serial ? `<span class="serial">Serial <b>${esc(cert.serial)}</b></span>` : ''}
+      </div>
     </div>
 
     <h1>Certificate of Shares</h1>
@@ -336,7 +341,10 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
     </div>
 
     <div class="foot">
-      Generated ${new Date().toLocaleString('en-KE')} · Reference ${esc(String(cert.id || '').slice(0, 8))}
+      Generated ${new Date().toLocaleString('en-KE')}
+      ${cert.serial
+        ? `· Verify serial <strong>${esc(cert.serial)}</strong> in the Ararat certificate register to confirm this document is genuine.`
+        : `· Reference ${esc(String(cert.id || '').slice(0, 8))}`}
       · This certificate is superseded automatically whenever the holding changes.
     </div>
   </div></div>

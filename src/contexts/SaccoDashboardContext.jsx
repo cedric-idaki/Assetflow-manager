@@ -1183,6 +1183,22 @@ export const SaccoDashboardProvider = ({ children }) => {
     return data;
   }, [rpc, saccoId, fetchCertificates]);
 
+  /**
+   * The platform-wide serial for a certificate, minting one if it has none.
+   *
+   * Every certificate issued since 20260901140000 gets its serial from the
+   * engine, and that migration backfilled the register — but a society whose
+   * rows were written some other way (a restore, a hand-inserted holding) can
+   * still turn up without one, and a certificate cannot go out unverifiable.
+   * The RPC is idempotent, so calling it on a serialised certificate is free.
+   */
+  const ensureCertificateSerial = useCallback(async (certificateId) => {
+    if (!certificateId) return null;
+    const serial = await rpc('sacco_share_certificate_serial', { p_certificate_id: certificateId });
+    if (serial) await fetchCertificates();
+    return serial;
+  }, [rpc, fetchCertificates]);
+
   const expireOrders = useCallback(async () => {
     try {
       const n = await rpc('sacco_share_expire_orders');
@@ -1656,7 +1672,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     withholdShares, releaseWithholding, listWithheldShares, getWithholdingSummary,
     placeOrder, updateOrder, cancelOrder, executeOrder,
     approveShareTransfer, rejectShareTransfer, reverseTrade, directTransfer,
-    reissueCertificate, expireOrders,
+    reissueCertificate, ensureCertificateSerial, expireOrders,
     declareDividend, calculateDividend, payDividend, cancelDividend,
     getShareRegister, getShareAlerts,
     createMotion, secondMotion, openVoting, castVote, publishResults, notifyMotion,

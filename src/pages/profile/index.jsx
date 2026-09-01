@@ -521,8 +521,7 @@ export const buildInvoiceHtml = (row, billTo, modules = null) => {
   *{box-sizing:border-box;font-family:'Segoe UI',Arial,sans-serif;}
   body{margin:0;padding:40px;color:#0c2037;}
   .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1A56DB;padding-bottom:20px;}
-  .brand{font-size:24px;font-weight:800;color:#0c2037;}
-  .brand span{color:#1A56DB;}
+  .brand{font-family:Georgia,serif;font-size:24px;font-weight:700;letter-spacing:-0.01em;color:#0c2037;}
   .muted{color:#5a7185;font-size:12px;}
   .grid{display:flex;justify-content:space-between;margin:24px 0;}
   .grid div{font-size:13px;line-height:1.7;}
@@ -539,7 +538,7 @@ export const buildInvoiceHtml = (row, billTo, modules = null) => {
   .foot{margin-top:40px;font-size:11px;color:#9aa7b4;text-align:center;border-top:1px solid #e5ebf1;padding-top:16px;}
 </style></head><body>
   <div class="head">
-    <div><div class="brand">Asset<span>Flow</span></div><div class="muted">Platform Subscription — Tax Invoice</div></div>
+    <div><div class="brand">Ararat</div><div class="muted">Platform Subscription — Tax Invoice</div></div>
     <div class="right"><div style="font-size:20px;font-weight:800;">INVOICE</div><div class="muted">${invoiceNo(row)}</div></div>
   </div>
   <div class="grid">
@@ -557,14 +556,14 @@ export const buildInvoiceHtml = (row, billTo, modules = null) => {
         <td>${l.label}</td>
         <td class="right">${l.qty || '—'}</td>
         <td class="right">${l.unit ? fmtKES2(l.unit) : '—'}</td>
-        <td class="right">${fmtKES2(l.amount)}</td>
+        <td class="right">${fmtKES2(l.gross)}</td>
       </tr>`).join(''))}
     </tbody>
   </table>
   <table class="totals">
-    <tr><td class="lbl">Subtotal (excl. VAT)</td><td class="right">${fmtKES2(bill.subtotal)}</td></tr>
+    <tr><td class="lbl">Taxable value (excl. VAT)</td><td class="right">${fmtKES2(bill.subtotal)}</td></tr>
     <tr><td class="lbl">VAT @ ${bill.vatRate}%</td><td class="right">${fmtKES2(bill.vatAmount)}</td></tr>
-    <tr class="sum"><td class="lbl"><strong>Total</strong></td><td class="right"><span class="total">${fmtKES2(bill.total)}</span></td></tr>
+    <tr class="sum"><td class="lbl"><strong>Total (incl. VAT)</strong></td><td class="right"><span class="total">${fmtKES2(bill.total)}</span></td></tr>
   </table>
   <div class="foot">${meta.label} plan · ${row.max_users ?? '—'} licensed user(s). Thank you for using Ararat. Generated on ${new Date().toLocaleDateString('en-GB')}.</div>
   <script>window.onload=function(){window.print();}</script>

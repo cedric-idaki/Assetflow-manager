@@ -434,6 +434,18 @@ export const SaccoMemberProvider = ({ children }) => {
       fetchSaccoTotals, fetchShareTxns, fetchMyCertificates, fetchMyDividends,
       fetchMyWithholdings]);
 
+  /**
+   * The platform-wide serial for one of my certificates, minting one if it has
+   * none. A certificate must not print without the serial that makes it
+   * checkable, and a member may serialise their own. Idempotent.
+   */
+  const ensureCertificateSerial = useCallback(async (certificateId) => {
+    if (!certificateId) return null;
+    const serial = await shareRpc('sacco_share_certificate_serial', { p_certificate_id: certificateId });
+    if (serial) await fetchMyCertificates();
+    return serial;
+  }, [shareRpc, fetchMyCertificates]);
+
   // Post a sell (or buy) order onto the book.
   const createListing = useCallback(async (form) => {
     const data = await shareRpc('sacco_share_place_order', {
@@ -704,6 +716,7 @@ export const SaccoMemberProvider = ({ children }) => {
     updateProfile, applyLoan,
     submitContribution, cancelContribution, payContributionByMpesa, checkMpesaContribution,
     createListing, cancelListing, updateListing, buyListing, transferShares, refreshMarket,
+    ensureCertificateSerial,
     proposeMotion, secondMotion, castVote, getMotionResults,
     nominateCandidate, withdrawCandidacy, castBallot,
     getElectionTally, getElectionTurnout, verifyReceipt,

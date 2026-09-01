@@ -219,10 +219,20 @@ describe('the printed lines add up', () => {
     expect(cents(bill.lines.reduce((s, l) => s + l.gross, 0))).toBe(bill.total);
   });
 
-  it('states each line’s unit price, so a reader can check the arithmetic', () => {
-    const bill = buildSystemInvoice({ productLine: 'sacco', seats: 60 });
-    const members = lineFor(bill, 'Active member charges');
-    expect(members.qty * members.unit).toBe(members.gross);
+  it('states a unit price that multiplies back to the printed line, exactly', () => {
+    // This is why the item table stays VAT-inclusive: qty x the advertised rate
+    // reproduces the printed amount with no residual. The net equivalent cannot
+    // — 60 members at a net 31.034 is out by 0.27 however it is rounded.
+    const bill = buildSystemInvoice({ productLine: 'sacco', seats: 60, storageGb: 20, chargeInstallation: true });
+    expect(bill.lines.length).toBeGreaterThan(0);
+    bill.lines.forEach((l) => {
+      expect(l.qty * l.unit, l.label).toBe(l.gross);
+    });
+  });
+
+  it('quotes the advertised rate, not a back-computed one', () => {
+    const members = lineFor(buildSystemInvoice({ productLine: 'sacco', seats: 60 }), 'Active member charges');
+    expect(members.unit).toBe(tierForMembers(60).perMemberFee);
   });
 });
 

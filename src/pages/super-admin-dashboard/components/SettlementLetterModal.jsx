@@ -1,14 +1,45 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { html } from '../../../utils/htmlEscape';
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 const fmt = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 
+/**
+ * The reference on this certificate used to be `SL-${Date.now().toString(36)}`,
+ * minted here in the browser and stored nowhere: a different number on every
+ * reprint of the same settlement, and not one of them could ever be looked up.
+ *
+ * It now comes from settlement_certificate_issue(), which mints ONE serial per
+ * plan — the same number however often the letter is reprinted, from either
+ * portal — records it in the platform certificate register, and refuses to mint
+ * at all unless the plan really is settled. Printing waits for it: a settlement
+ * certificate nobody can verify is the thing this replaced.
+ */
 const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose }) => {
-  const [letterRef] = useState(`SL-${Date.now().toString(36).toUpperCase()}`);
+  const [letterRef, setLetterRef] = useState(null);
+  const [serialErr, setSerialErr] = useState('');
+  const [minting,   setMinting]   = useState(true);
+
+  const mintSerial = useCallback(async () => {
+    if (!plan?.id) { setMinting(false); setSerialErr('This plan has no id to certify.'); return; }
+    setMinting(true); setSerialErr('');
+    try {
+      const { data, error } = await supabase.rpc('settlement_certificate_issue', { p_plan_id: plan.id });
+      if (error) throw error;
+      if (!data) throw new Error('The register returned no serial.');
+      setLetterRef(data);
+    } catch (e) {
+      setSerialErr(e.message || 'Could not reach the certificate register.');
+    } finally {
+      setMinting(false);
+    }
+  }, [plan?.id]);
+
+  useEffect(() => { mintSerial(); }, [mintSerial]);
 
   const handlePrint = () => {
+    if (!letterRef) return;
     const co = companyProfile || {};
     // `html` tagged template: every ${...} below is escaped, so a tenant-supplied
     // name or address cannot inject script into the print window (which shares
@@ -52,7 +83,8 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
           </div>
           <div style="text-align:right">
             <div style="font-size:11px; color:#555">Date: ${fmtDate(new Date().toISOString())}</div>
-            <div style="font-size:11px; color:#555">Ref: <strong>${letterRef}</strong></div>
+            <div style="font-size:11px; color:#555">Certificate Serial</div>
+            <div style="font-size:13px; font-family:'Courier New',monospace; font-weight:bold; letter-spacing:0.5px">${letterRef}</div>
           </div>
         </div>
 
@@ -144,7 +176,8 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
         </div>
 
         <div class="footer">
-          <p>This is an official document issued by ${co.company_name || 'Ararat'}. Letter Reference: ${letterRef}</p>
+          <p>This is an official document issued by ${co.company_name || 'Ararat'}.</p>
+          <p>Certificate Serial <strong>${letterRef}</strong> — verify it against the Ararat certificate register to confirm this document is genuine.</p>
           <p>Generated on ${fmtDate(new Date().toISOString())} | ${co.email || ''} | ${co.phone || ''}</p>
         </div>
       </body>
@@ -188,7 +221,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
               { label: 'Plan',            value: plan?.plan_name || '—' },
               { label: 'Total Settled',   value: fmt(plan?.total_amount) },
               { label: 'Installments',    value: `${plan?.total_installments} × ${fmt(plan?.installment_amount)}` },
-              { label: 'Letter Ref',      value: letterRef },
+              { label: 'Certificate Serial', value: letterRef || (minting ? 'Registering…' : '—') },
             ].map(({ label, value }) => (
               <div key={label} className="flex justify-between text-sm">
                 <span className="text-muted-foreground">{label}</span>
@@ -197,9 +230,28 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
             ))}
           </div>
 
-          <p className="text-xs text-muted-foreground">
-            Clicking <strong>Generate & Print</strong> will open a printable PDF-ready settlement letter confirming full ownership transfer to the client.
-          </p>
+          {serialErr ? (
+            <div className="flex items-start gap-3 p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-900/20 dark:border-red-800">
+              <span className="text-lg leading-none">⚠️</span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-red-700 dark:text-red-400">
+                  No serial could be issued for this settlement.
+                </p>
+                <p className="text-xs text-red-600 dark:text-red-500 mt-0.5 break-words">{serialErr}</p>
+                <button onClick={mintSerial}
+                  className="mt-2 text-xs font-semibold text-red-700 dark:text-red-400 hover:underline">
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Clicking <strong>Generate &amp; Print</strong> will open a printable PDF-ready settlement letter
+              confirming full ownership transfer to the client. It carries certificate serial{' '}
+              <strong className="font-mono">{letterRef || '…'}</strong>, which anyone can check against the
+              register to confirm the document is genuine.
+            </p>
+          )}
         </div>
 
         {/* Actions */}
@@ -208,9 +260,9 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
             className="flex-1 px-4 py-2 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
             Cancel
           </button>
-          <button onClick={handlePrint}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-            🖨️ Generate & Print
+          <button onClick={handlePrint} disabled={!letterRef}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+            {minting ? 'Registering serial…' : '🖨️ Generate & Print'}
           </button>
         </div>
       </div>

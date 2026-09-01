@@ -13,6 +13,7 @@ import {
   marketIsOpen, memberPosition, TXN_LABELS, printCertificate,
   memberWithholding, reasonLabel, outstanding, onMarket,
 } from '../../sacco-dashboard/components/shares/_util';
+import { formatSerial } from '../../../utils/certificateSerial';
 
 const SUB_TABS = [
   { id: 'portfolio', label: 'Portfolio',    icon: 'PieChart' },
@@ -39,6 +40,7 @@ const SharesTab = ({ ctx }) => {
     shareSettings, shareTxns = [], certificates = [], dividends = [],
     dividendAllocations = [], treasury, myWithholdings = [],
     createListing, cancelListing, updateListing, buyListing, transferShares, exportCSV,
+    ensureCertificateSerial,
   } = ctx;
   const toast = useToast();
   const s = withDefaults(shareSettings);
@@ -180,8 +182,17 @@ const SharesTab = ({ ctx }) => {
     } catch (e) { toast.error(e.message || 'The transfer was refused.'); } finally { setSaving(false); }
   };
 
-  const download = (c) => {
-    const ok = printCertificate(c, {
+  // The serial is what makes a downloaded certificate checkable by whoever the
+  // member shows it to, so mint one first if this certificate predates them.
+  const download = async (c) => {
+    let cert = c;
+    if (!cert.serial) {
+      try {
+        const serial = await ensureCertificateSerial(cert.id);
+        if (serial) cert = { ...cert, serial };
+      } catch (_) { /* print it anyway rather than deny the member their paper */ }
+    }
+    const ok = printCertificate(cert, {
       saccoName: sacco?.name, memberName: me?.full_name, memberNo: me?.member_no, marketValue: currentMarketValue,
     });
     if (!ok) toast.error('Allow pop-ups to download your certificate.');
@@ -293,6 +304,7 @@ const SharesTab = ({ ctx }) => {
                 <Row k="Ownership" v={pct(pos.ownership, 3)} />
                 <Row k="Voting rights" v={num(s.votes_per_share) > 0 ? `${votes.toLocaleString()} vote${votes === 1 ? '' : 's'}` : 'One member, one vote'} />
                 <Row k="Certificate" v={activeCert?.certificate_no || 'None yet'} />
+                {activeCert?.serial && <Row k="Serial" v={formatSerial(activeCert.serial)} />}
               </dl>
               <div className="flex flex-wrap gap-2 mt-4">
                 <PrimaryButton icon="ShoppingCart" onClick={() => setTab('market')}>Buy shares</PrimaryButton>
@@ -515,15 +527,20 @@ const SharesTab = ({ ctx }) => {
       {/* ── Certificates ── */}
       {tab === 'certs' && (
         <Card title="My share certificates"
-          subtitle="Reissued automatically whenever your holding changes — download any of them">
+          subtitle="Reissued automatically whenever your holding changes. Each carries a serial anyone can check against the register to confirm it is genuine.">
           {certificates.length === 0 ? (
             <EmptyState icon="Award" title="No certificates yet"
               hint="Your first certificate is generated the moment you acquire shares." />
           ) : (
-            <Table columns={['Certificate no.', 'Shares', 'Par value', 'Value today', 'Issued', 'Status', '']}>
+            <Table columns={['Serial', 'Certificate no.', 'Shares', 'Par value', 'Value today', 'Issued', 'Status', '']}>
               {certificates.map((c) => (
                 <tr key={c.id} className="border-b border-border/60">
-                  <td className="py-2.5 pr-4 font-mono text-xs text-foreground">{c.certificate_no}</td>
+                  <td className="py-2.5 pr-4 font-mono text-xs text-foreground whitespace-nowrap">
+                    {c.serial
+                      ? formatSerial(c.serial)
+                      : <span className="text-muted-foreground italic font-sans">on download</span>}
+                  </td>
+                  <td className="py-2.5 pr-4 font-mono text-xs text-muted-foreground">{c.certificate_no}</td>
                   <td className="py-2.5 pr-4 text-foreground">{int(c.shares).toLocaleString()}</td>
                   <td className="py-2.5 pr-4 text-muted-foreground">{KES(c.par_value)}</td>
                   <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(int(c.shares) * (price || num(c.par_value)))}</td>

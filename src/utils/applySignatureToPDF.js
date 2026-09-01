@@ -11,7 +11,15 @@
  * Usage:
  *   const blob = await applySignatureToPDF(fileUrl, {
  *     signatureType, signatureData, font, signerName, role, signedAt, hash, ip, device,
+ *     serial,
  *   });
+ *
+ * `serial` is the platform certificate serial, minted by
+ * esign_certificate_serial() before the document is sealed. It is the only
+ * thing on the certificate page that can be looked up: `hash` is derived from
+ * the signer's own inputs and identifies nothing on its own. Callers pass it in
+ * rather than minting here, because this module has no Supabase client and is
+ * driven from four different signing flows.
  */
 
 // ── Load pdf-lib dynamically (UMD global: window.PDFLib) ────────────────────────
@@ -43,7 +51,11 @@ const stampPageFooters = (pages, { helv, helvB, rgb }, meta = {}) => {
   // (incl. the certificate) reads e.g. "Page 4 of 5".
   const total = meta.totalPages || pages.length;
   const name = meta.documentName ? String(meta.documentName) : '';
-  const hash = meta.hash ? String(meta.hash) : '';
+  // The serial is what a reader can actually check, so it wins the footer slot
+  // when there is one; the hash stays as the fallback for documents sealed
+  // before serials existed.
+  const mark = meta.serial ? `Certificate ${meta.serial}`
+    : (meta.hash ? `Verified ${meta.hash}` : '');
   const M = 40;
   pages.forEach((page, i) => {
     const { width: pw } = page.getSize();
@@ -57,9 +69,8 @@ const stampPageFooters = (pages, { helv, helvB, rgb }, meta = {}) => {
       const clipped = name.length > 74 ? name.slice(0, 73) + '…' : name;
       page.drawText(clipped, { x: M, y: 13, size: 6, font: helv, color: rgb(0.5, 0.54, 0.6) });
     }
-    if (hash) {
-      const vt = `Verified ${hash}`;
-      page.drawText(vt, { x: right - helv.widthOfTextAtSize(vt, 6), y: 13, size: 6, font: helv, color: rgb(0.5, 0.54, 0.6) });
+    if (mark) {
+      page.drawText(mark, { x: right - helv.widthOfTextAtSize(mark, 6), y: 13, size: 6, font: helv, color: rgb(0.5, 0.54, 0.6) });
     }
   });
 };
