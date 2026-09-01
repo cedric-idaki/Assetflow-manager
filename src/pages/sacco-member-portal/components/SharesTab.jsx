@@ -11,6 +11,7 @@ import {
 import {
   KESshort, pct, int, num, gainTone, gainSign, remaining, withDefaults,
   marketIsOpen, memberPosition, TXN_LABELS, printCertificate,
+  memberWithholding, reasonLabel, outstanding, onMarket,
 } from '../../sacco-dashboard/components/shares/_util';
 
 const SUB_TABS = [
@@ -36,7 +37,7 @@ const SharesTab = ({ ctx }) => {
     me, sacco, shares, sharePrices = [], currentMarketValue = 0,
     saccoTotals = { totalShares: 0 }, listings = [], transfers = [], members = [],
     shareSettings, shareTxns = [], certificates = [], dividends = [],
-    dividendAllocations = [], treasury,
+    dividendAllocations = [], treasury, myWithholdings = [],
     createListing, cancelListing, updateListing, buyListing, transferShares, exportCSV,
   } = ctx;
   const toast = useToast();
@@ -62,6 +63,10 @@ const SharesTab = ({ ctx }) => {
   const price = currentMarketValue > 0 ? currentMarketValue : par;
   const pos = memberPosition(shares, price, totalIssued || saccoTotals.totalShares);
   const open = marketIsOpen(shareSettings);
+  // Shares the society is holding back from me. Already excluded from pos.free
+  // by memberPosition — this is so the member can see WHY, rather than finding
+  // out when a sell is refused.
+  const withheld = memberWithholding(myWithholdings, me?.id);
   const asOf = sharePrices[0]?.effective_date;
 
   const priceSeries = useMemo(() => [...sharePrices].reverse().map((p) => ({
@@ -110,7 +115,8 @@ const SharesTab = ({ ctx }) => {
     const qty = int(orderForm.shares);
     if (qty <= 0) { toast.error('Enter how many shares.'); return; }
     if (orderForm.side === 'sell' && qty > pos.free) {
-      toast.error(`You have ${pos.free.toLocaleString()} shares free (${pos.locked.toLocaleString()} are already listed).`);
+      toast.error(`You have ${pos.free.toLocaleString()} shares free`
+        + ` (${pos.locked.toLocaleString()} listed, ${pos.withheld.toLocaleString()} withheld by the society).`);
       return;
     }
     if (s.price_floor_is_par && num(orderForm.price_per_share) < num(s.par_value)) {
@@ -160,7 +166,11 @@ const SharesTab = ({ ctx }) => {
   const submitTransfer = async () => {
     const qty = int(xferForm.shares);
     if (!xferForm.to_member) { toast.error('Choose who receives the shares.'); return; }
-    if (qty <= 0 || qty > pos.free) { toast.error(`You have ${pos.free.toLocaleString()} shares free to transfer.`); return; }
+    if (qty <= 0 || qty > pos.free) {
+      toast.error(`You have ${pos.free.toLocaleString()} shares free to transfer`
+        + (pos.withheld > 0 ? ` — ${pos.withheld.toLocaleString()} are withheld by the society.` : '.'));
+      return;
+    }
     setSaving(true);
     try {
       await transferShares(xferForm);
@@ -231,12 +241,45 @@ const SharesTab = ({ ctx }) => {
             </div>
           )}
 
+          {/* Withheld shares stay yours and keep earning dividends, but you
+              cannot sell or transfer them. Saying so here — with the reason and
+              the reference — is better than the member discovering it when a
+              sell order is refused. */}
+          {withheld.live.length > 0 && (
+            <div className="flex gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200">
+              <Icon name="Lock" size={18} color="#ca8a04" />
+              <div className="text-sm text-foreground min-w-0">
+                <p>
+                  <strong>{withheld.outstanding.toLocaleString()} of your shares
+                  {' '}({KES(withheld.outstanding * price)}) are being held by the society.</strong>
+                  {' '}They still earn dividends and count towards your ownership, but you cannot
+                  sell or transfer them until they are released.
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {withheld.live.map((w) => (
+                    <li key={w.id} className="text-xs text-muted-foreground">
+                      <span className="font-mono font-semibold text-foreground">{w.ref_no}</span>
+                      {' · '}{outstanding(w).toLocaleString()} share{outstanding(w) === 1 ? '' : 's'}
+                      {' · '}{reasonLabel(w.reason_type)}
+                      {w.reference ? ` (${w.reference})` : ''}
+                      {' · since '}{fmtDate(w.withheld_on)}
+                      {onMarket(w) > 0 && ` — ${onMarket(w).toLocaleString()} offered for sale by the society`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card title="Your position" className="lg:col-span-1">
               <dl className="space-y-2 text-sm">
                 <Row k="Shares held" v={pos.held.toLocaleString()} />
                 <Row k="Free to trade" v={pos.free.toLocaleString()} />
                 <Row k="Reserved in orders" v={pos.locked.toLocaleString()} />
+                {withheld.outstanding > 0 && (
+                  <Row k="Withheld by the society" v={withheld.outstanding.toLocaleString()} tone="text-amber-600" />
+                )}
                 <Row k="Market price" v={price > 0 ? KES(price) : '—'} />
                 <Row k="Total value" v={KES(pos.value)} bold />
                 <div className="pt-2 border-t border-border" />

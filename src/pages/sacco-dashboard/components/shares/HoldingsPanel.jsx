@@ -128,7 +128,7 @@ const HoldingsPanel = ({ ctx, ov }) => {
     const m = r.member || memberOf(r.member_id) || {};
     return {
       member_no: m.member_no || '', member: m.full_name || '', kyc: m.kyc_status || '',
-      shares: p.held, locked: p.locked, avg_buy_price: p.avg.toFixed(2),
+      shares: p.held, locked: p.locked, withheld: p.withheld, avg_buy_price: p.avg.toFixed(2),
       total_invested: p.invested.toFixed(2), market_value: p.value.toFixed(2),
       unrealized_gain: p.unrealized.toFixed(2), realized_gain: p.realized.toFixed(2),
       dividends_earned: p.dividends.toFixed(2), ownership_percent: p.ownership.toFixed(3),
@@ -208,6 +208,7 @@ const HoldingsPanel = ({ ctx, ov }) => {
                   <td className="py-2.5 pr-4 text-foreground">
                     {p.held.toLocaleString()}
                     {p.locked > 0 && <span className="block text-xs text-amber-600">{p.locked.toLocaleString()} listed</span>}
+                    {p.withheld > 0 && <span className="block text-xs text-amber-600">{p.withheld.toLocaleString()} withheld</span>}
                   </td>
                   <td className="py-2.5 pr-4 text-muted-foreground">{p.avg > 0 ? KES(p.avg) : '—'}</td>
                   <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(p.value)}</td>
@@ -414,6 +415,8 @@ const MemberPortfolio = ({
                   <Row k="KYC status" v={member.kyc_status || 'pending'} />
                   <Row k="Free to trade" v={`${p.free.toLocaleString()} shares`} />
                   <Row k="Locked in open orders" v={`${p.locked.toLocaleString()} shares`} />
+                  <Row k="Withheld by the society" v={`${p.withheld.toLocaleString()} shares`}
+                    tone={p.withheld > 0 ? 'text-amber-600' : 'text-foreground'} />
                   <Row k="Voting rights" v={num(settings.votes_per_share) > 0
                     ? `${votes.toLocaleString()} vote${votes === 1 ? '' : 's'} (${settings.votes_per_share}/share)`
                     : 'One member, one vote'} />

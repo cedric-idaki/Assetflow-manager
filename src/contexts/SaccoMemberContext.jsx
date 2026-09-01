@@ -51,6 +51,9 @@ export const SaccoMemberProvider = ({ children }) => {
   const [shareSettings, setShareSettings] = useState(null);
   const [shareTxns,     setShareTxns]     = useState([]);
   const [certificates,  setCertificates]  = useState([]);
+  // Shares the society is holding back from me (20260901120000_sacco_share_withholding)
+  const [myWithholdings, setMyWithholdings] = useState([]);
+  const [myWithholdingEvents, setMyWithholdingEvents] = useState([]);
   const [dividends,     setDividends]     = useState([]);
   const [dividendAllocations, setDividendAllocations] = useState([]);
   const [treasury,      setTreasury]      = useState(null);
@@ -176,6 +179,18 @@ export const SaccoMemberProvider = ({ children }) => {
     setCertificates(data || []);
   }, []);
 
+  // Shares the society is holding back from me, and why. RLS narrows both
+  // tables to my own member_id, so no filter is needed here — and a member is
+  // entitled to see a restriction placed on their own stake.
+  const fetchMyWithholdings = useCallback(async () => {
+    const [{ data: rows }, { data: events }] = await Promise.all([
+      supabase.from('sacco_share_withholdings').select('*').order('created_at', { ascending: false }),
+      supabase.from('sacco_share_withholding_events').select('*').order('created_at', { ascending: false }),
+    ]);
+    setMyWithholdings(rows || []);
+    setMyWithholdingEvents(events || []);
+  }, []);
+
   // Declarations are sacco-wide news; allocations are strictly mine.
   const fetchMyDividends = useCallback(async () => {
     const [{ data: decls }, { data: allocs }] = await Promise.all([
@@ -264,6 +279,7 @@ export const SaccoMemberProvider = ({ children }) => {
       fetchMotions(), fetchVotes(), fetchDocuments(), fetchContracts(meRow?.id),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(), fetchMyVoterRows(),
       fetchShareSettings(), fetchShareTxns(), fetchMyCertificates(), fetchMyDividends(), fetchTreasury(),
+      fetchMyWithholdings(),
     ]);
     setLoading(false);
   }, [
@@ -272,6 +288,7 @@ export const SaccoMemberProvider = ({ children }) => {
     fetchMotions, fetchVotes, fetchDocuments, fetchContracts,
     fetchElections, fetchElectionPositions, fetchElectionCandidates, fetchMyVoterRows,
     fetchShareSettings, fetchShareTxns, fetchMyCertificates, fetchMyDividends, fetchTreasury,
+    fetchMyWithholdings,
   ]);
 
   // ── Derived stats (portal home mini-cards, BRS 5.1) ───────────────────────
@@ -411,9 +428,11 @@ export const SaccoMemberProvider = ({ children }) => {
     await Promise.all([
       fetchShares(), fetchListings(), fetchTransfers(), fetchSharePrices(),
       fetchSaccoTotals(), fetchShareTxns(), fetchMyCertificates(), fetchMyDividends(),
+      fetchMyWithholdings(),
     ]);
   }, [fetchShares, fetchListings, fetchTransfers, fetchSharePrices,
-      fetchSaccoTotals, fetchShareTxns, fetchMyCertificates, fetchMyDividends]);
+      fetchSaccoTotals, fetchShareTxns, fetchMyCertificates, fetchMyDividends,
+      fetchMyWithholdings]);
 
   // Post a sell (or buy) order onto the book.
   const createListing = useCallback(async (form) => {
@@ -609,6 +628,8 @@ export const SaccoMemberProvider = ({ children }) => {
     setShareSettings(null);
     setShareTxns([]);
     setCertificates([]);
+    setMyWithholdings([]);
+    setMyWithholdingEvents([]);
     setDividends([]);
     setDividendAllocations([]);
     setTreasury(null);
@@ -677,6 +698,7 @@ export const SaccoMemberProvider = ({ children }) => {
     shares: myShares, sharePrices, currentMarketValue, saccoTotals, listings, transfers, motions, votes, documents, contracts,
     elections, electionPositions, electionCandidates, myVoterRows,
     shareSettings, shareTxns, certificates, dividends, dividendAllocations, treasury,
+    myWithholdings, myWithholdingEvents,
     stats, loading,
     refetch: fetchAll,
     updateProfile, applyLoan,

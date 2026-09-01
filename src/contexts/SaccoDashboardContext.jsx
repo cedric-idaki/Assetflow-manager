@@ -105,6 +105,13 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [dividends,     setDividends]     = useState([]);
   const [dividendAllocations, setDividendAllocations] = useState([]);
   const [shareAudit,    setShareAudit]    = useState([]);
+  // Share withholding register (20260901120000_sacco_share_withholding)
+  const [withholdings,  setWithholdings]  = useState([]);
+  const [withholdingEvents, setWithholdingEvents] = useState([]);
+  // Supabase caps an unbounded select at 1,000 rows. The stat cards read the
+  // engine's own totals instead of reducing this array, but the table would
+  // still be short, so the panel says so rather than quietly cutting.
+  const [withholdingsTruncated, setWithholdingsTruncated] = useState(false);
   const [motions,       setMotions]       = useState([]);
   const [votes,         setVotes]         = useState([]);
   const [elections,          setElections]          = useState([]);
@@ -348,6 +355,34 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  // ── Withholding register ──────────────────────────────────────────────────
+  // The register is a DIMENSION of the share book, not a ledger: the holdings
+  // table, the marketplace and the overview all resolve "is any of this
+  // member's stake withheld?" out of this array, so it is fetched whole. It is
+  // bounded by how many holds a society has open, which is small.
+  const fetchWithholdings = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data, count } = await supabase.from('sacco_share_withholdings')
+        .select(`*, ${MEMBER_JOIN}`, { count: 'exact' }).eq('admin_id', adminId)
+        .order('created_at', { ascending: false }).limit(ROSTER_CEILING);
+      setWithholdings(data || []);
+      setWithholdingsTruncated((count || 0) > ROSTER_CEILING);
+    } catch (_) {}
+  }, []);
+
+  // The history behind the register. A ledger, so it is capped — the per-record
+  // timeline in the panel reads from this same array, newest first.
+  const fetchWithholdingEvents = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_share_withholding_events')
+        .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId)
+        .order('created_at', { ascending: false }).limit(1000);
+      setWithholdingEvents(data || []);
+    } catch (_) {}
+  }, []);
+
   // Daily market-value series the sacco_admin publishes (latest = current value).
   const fetchSharePrices = useCallback(async () => {
     try {
@@ -468,6 +503,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       fetchElectionVoters(), fetchElectionAudit(),
       fetchShareSettings(), fetchShareTxns(), fetchCertificates(),
       fetchDividends(), fetchDividendAllocations(), fetchShareAudit(),
+      fetchWithholdings(), fetchWithholdingEvents(),
     ]);
     hasLoaded.current = true;
     setLoading(false);
@@ -480,6 +516,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     fetchElectionVoters, fetchElectionAudit,
     fetchShareSettings, fetchShareTxns, fetchCertificates,
     fetchDividends, fetchDividendAllocations, fetchShareAudit,
+    fetchWithholdings, fetchWithholdingEvents,
   ]);
 
   // Everything the shares screens re-read after a trade. Kept off fetchAll so a
@@ -488,10 +525,11 @@ export const SaccoDashboardProvider = ({ children }) => {
     await Promise.all([
       fetchShares(), fetchListings(), fetchTransfers(), fetchTreasury(),
       fetchShareSettings(), fetchShareTxns(), fetchCertificates(), fetchShareAudit(),
-      fetchStatsRow(),
+      fetchWithholdings(), fetchWithholdingEvents(), fetchStatsRow(),
     ]);
   }, [fetchStatsRow, fetchShares, fetchListings, fetchTransfers, fetchTreasury,
-      fetchShareSettings, fetchShareTxns, fetchCertificates, fetchShareAudit]);
+      fetchShareSettings, fetchShareTxns, fetchCertificates, fetchShareAudit,
+      fetchWithholdings, fetchWithholdingEvents]);
 
   const refreshDividends = useCallback(async () => {
     await Promise.all([fetchDividends(), fetchDividendAllocations(), fetchShares(), fetchShareTxns()]);
@@ -1009,6 +1047,56 @@ export const SaccoDashboardProvider = ({ children }) => {
     return data;
   }, [rpc, refreshShares]);
 
+  // ── Withholding register ──
+  // The society holds a member's shares back, sells them on its own market to
+  // recover what is owed, or gives them back. The engine keeps the holding's
+  // withheld counter in step, so every refresh here goes through refreshShares
+  // rather than re-reading the register alone.
+  const withholdShares = useCallback(async ({ member_id, shares: qty, reason_type, reason, reference, notes }) => {
+    const data = await rpc('sacco_share_withhold', {
+      p_member_id: member_id,
+      p_shares: parseInt(qty, 10) || 0,
+      p_reason_type: reason_type || 'other',
+      p_reason: reason || null,
+      p_reference: reference || null,
+      p_notes: notes || null,
+    });
+    await refreshShares();
+    return data;
+  }, [rpc, refreshShares]);
+
+  // A blank quantity releases everything still held — the common case when a
+  // loan is cleared or a dispute ends.
+  const releaseWithholding = useCallback(async (withholding, { shares: qty, reason } = {}) => {
+    const data = await rpc('sacco_share_withholding_release', {
+      p_id: withholding.id,
+      p_shares: qty === '' || qty == null ? null : (parseInt(qty, 10) || 0),
+      p_reason: reason || null,
+    });
+    await refreshShares();
+    return data;
+  }, [rpc, refreshShares]);
+
+  // Put withheld shares on the internal market. A blank price takes the
+  // society's published market value; a blank quantity offers everything held.
+  const listWithheldShares = useCallback(async (withholding, { shares: qty, price, expiry_date } = {}) => {
+    const data = await rpc('sacco_share_withholding_list', {
+      p_id: withholding.id,
+      p_shares: qty === '' || qty == null ? null : (parseInt(qty, 10) || 0),
+      p_price: price === '' || price == null ? null : parseFloat(price),
+      p_expiry: expiry_date || null,
+    });
+    await refreshShares();
+    return data;
+  }, [rpc, refreshShares]);
+
+  // Totals straight from the database, so the stat cards agree with the
+  // register even when the browser is holding a capped or stale array.
+  const getWithholdingSummary = useCallback(async () => {
+    const data = await rpc('sacco_share_withholding_summary');
+    return Array.isArray(data) ? data[0] || null : data;
+  }, [rpc]);
+
   // ── Order book ──
   const placeOrder = useCallback(async ({ side, shares: qty, price_per_share, expiry_date, member_id, as_treasury }) => {
     const data = await rpc('sacco_share_place_order', {
@@ -1483,6 +1571,9 @@ export const SaccoDashboardProvider = ({ children }) => {
     setDividends([]);
     setDividendAllocations([]);
     setShareAudit([]);
+    setWithholdings([]);
+    setWithholdingEvents([]);
+    setWithholdingsTruncated(false);
     setMotions([]);
     setVotes([]);
     setElections([]);
@@ -1519,6 +1610,10 @@ export const SaccoDashboardProvider = ({ children }) => {
       mk('share_transfers', 'sacco_share_transfers', () => { fetchTransfers(); fetchShareTxns(); }),
       mk('share_treasury', 'sacco_share_treasury', fetchTreasury),
       mk('share_certs', 'sacco_share_certificates', fetchCertificates),
+      // Withheld shares are a live restriction on trading, so the register and
+      // its history follow the order book rather than waiting for a reload.
+      mk('withholdings', 'sacco_share_withholdings', () => { fetchWithholdings(); fetchShares(); }),
+      mk('withhold_events', 'sacco_share_withholding_events', fetchWithholdingEvents),
       mk('dividends', 'sacco_dividend_declarations', fetchDividends),
       mk('dividend_allocs', 'sacco_dividend_allocations', fetchDividendAllocations),
       mk('motions', 'sacco_motions', () => { fetchMotions(); fetchStatsRow(); }),
@@ -1540,6 +1635,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     shares, sharesTruncated, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
     currentMarketValue, marketCap, totalSharesHeld, totalSharesIssued, treasuryShares,
     shareSettings, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
+    withholdings, withholdingEvents, withholdingsTruncated,
     elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     stats, loading, connectionStatus,
     refetch: fetchAll,
@@ -1557,6 +1653,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     refreshShares, refreshDividends,
     saveShareSettings, setTradingSuspended,
     issueShares, retireShares, adjustTreasury, freezeMember,
+    withholdShares, releaseWithholding, listWithheldShares, getWithholdingSummary,
     placeOrder, updateOrder, cancelOrder, executeOrder,
     approveShareTransfer, rejectShareTransfer, reverseTrade, directTransfer,
     reissueCertificate, expireOrders,
