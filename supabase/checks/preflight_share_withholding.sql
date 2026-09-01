@@ -101,8 +101,11 @@ select 'sacco_share_listings.withholding_id column',
             then 'already present' else 'not present — first run' end
 union all
 select 'existing withholding records',
-       case when to_regclass('public.sacco_share_withholdings') is null then '0 (table absent)'
-            else (select count(*)::text from public.sacco_share_withholdings) end;
+       coalesce((select case when c.reltuples < 0 then 'unknown (table never analysed)'
+                             else c.reltuples::bigint::text || ' (estimate)' end
+                   from pg_class c
+                  where c.oid = to_regclass('public.sacco_share_withholdings')),
+                '0 (table absent)');
 
 -- ── 4. WHAT THE NEW TRIGGERS WILL SIT ON ────────────────────────────────────
 -- Three triggers are added. The sacco_shares one runs on EVERY update to the
