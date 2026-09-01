@@ -47,6 +47,7 @@ const SaccoMemberPortal         = lazy(() => import('./pages/sacco-member-portal
 const SaccoOversight            = lazy(() => import('./pages/sacco-oversight'));
 const ChoosePortal              = lazy(() => import('./pages/choose-portal'));
 const PublicListing             = lazy(() => import('./pages/public-listing'));
+const VerifyCertificate         = lazy(() => import('./pages/verify-certificate'));
 
 // Matches the splash ProtectedRoute shows while the session is restoring, so a
 // cold load that has to do both does not visibly change skin halfway through.
@@ -326,6 +327,23 @@ const Routes = () => {
           <Route path="/profile" element={
             <ProtectedRoute>
               <ProfilePage />
+            </ProtectedRoute>
+          } />
+
+          {/* ── Certificate verification desk — any authenticated user ───
+              Not role-gated and not tenant-scoped: whoever is handed a
+              certificate has to be able to check it, and they are usually not
+              of the organisation that issued it. system_certificate_verify()
+              returns only what is printed on the face they are holding, and
+              logs every check. The optional :serial makes a serial linkable. */}
+          <Route path="/verify-certificate" element={
+            <ProtectedRoute>
+              <VerifyCertificate />
+            </ProtectedRoute>
+          } />
+          <Route path="/verify-certificate/:serial" element={
+            <ProtectedRoute>
+              <VerifyCertificate />
             </ProtectedRoute>
           } />
 

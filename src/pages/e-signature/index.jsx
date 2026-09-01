@@ -13,6 +13,7 @@ import ApiEmbedPanel from "../../components/esign/ApiEmbedPanel";
 import TemplatesPanel from "../../components/esign/TemplatesPanel";
 import useDragReorder, { ReorderHandle, newRowUid } from "../../components/esign/useDragReorder";
 import { applySignatureToPDF, applyFieldsToPDF } from "../../utils/applySignatureToPDF";
+import { mintEsignSerial } from "../../utils/esignCertificateSerial";
 import { detectSignableAreas } from "../../utils/detectSignableAreas";
 import { sendSigningOtp, sendSignatureAlert, sendSigningInvite } from "../../services/emailService";
 import { sendSigningLinkSMS } from "../../services/smsService";
@@ -1479,8 +1480,9 @@ export default function ESignaturePage() {
             let fq = supabase.from("esign_fields").select("*");
             fq = source === "esign_doc" ? fq.eq("esign_document_id", contractId) : fq.eq("contract_id", contractId).eq("source_type", source);
             const { data: allFields } = await fq;
+            const serial = await mintEsignSerial(source, contractId);
             const blob = await applyFieldsToPDF(selectedContract.file_url, allFields || [], {
-              documentName: docName, hash,
+              documentName: docName, hash, serial,
               signers: (sibs || []).map(s => ({ name: s.name || s.email, role: s.role, signedAt: s.signed_at ? fmtDateTime(s.signed_at) : null, ip: s.ip })),
             });
             const bucket = source === "esign_doc" ? "esign-documents" : "contracts";
@@ -1521,17 +1523,18 @@ export default function ESignaturePage() {
       if (isPdfUrl(selectedContract.file_url)) {
         try {
           let blob;
+          const serial = await mintEsignSerial(source, contractId);
           if (fieldValues && signFields.length) {
             const valMap = Object.fromEntries(fieldValues.map(v => [v.id, v.value]));
             blob = await applyFieldsToPDF(selectedContract.file_url, signFields.map(f => ({ ...f, value: valMap[f.id] })), {
-              documentName: docName, hash,
+              documentName: docName, hash, serial,
               signers: [{ name: actor, role: "Authorized Officer", signedAt: fmtDateTime(signedAt), ip: otpData.ip, device: otpData.device }],
             });
           } else {
             blob = await applySignatureToPDF(selectedContract.file_url, {
               signatureType: signature.type, signatureData: signature.data, font: signature.font,
               signerName: actor, role: "Authorized Officer", documentName: docName,
-              signedAt: fmtDateTime(signedAt), hash, ip: otpData.ip, device: otpData.device,
+              signedAt: fmtDateTime(signedAt), hash, serial, ip: otpData.ip, device: otpData.device,
             });
           }
           const bucket = source === "esign_doc" ? "esign-documents" : "contracts";

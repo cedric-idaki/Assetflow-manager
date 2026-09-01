@@ -75,6 +75,25 @@ const stampPageFooters = (pages, { helv, helvB, rgb }, meta = {}) => {
   });
 };
 
+/**
+ * The serial, set out where a reader looks first, with the one sentence that
+ * tells them what to do with it. Both certificate pages draw the same block, so
+ * a document sealed through the single-signer flow and one sealed through the
+ * field flow carry an identical claim. Returns the new y cursor; draws nothing
+ * and moves nothing when a document has no serial (sealed before this existed).
+ */
+const drawSerialBanner = (page, { helv, helvB, rgb }, M, y, serial) => {
+  if (!serial) return y;
+  const W = 595.28 - M * 2;
+  page.drawRectangle({ x: M, y: y - 44, width: W, height: 44, color: rgb(0.94, 0.97, 1) });
+  page.drawRectangle({ x: M, y: y - 44, width: 3, height: 44, color: rgb(0.10, 0.34, 0.86) });
+  page.drawText('CERTIFICATE SERIAL', { x: M + 14, y: y - 16, size: 7, font: helvB, color: rgb(0.35, 0.42, 0.55) });
+  page.drawText(String(serial), { x: M + 14, y: y - 32, size: 13, font: helvB, color: rgb(0.06, 0.16, 0.35) });
+  page.drawText('Look this serial up in the Ararat certificate register to confirm this document is genuine.',
+    { x: M + 14, y: y - 41, size: 6.5, font: helv, color: rgb(0.45, 0.5, 0.58) });
+  return y - 58;
+};
+
 // Render a typed signature (name + script font) to a transparent PNG data URL so
 // it can be embedded as an image — preserving the handwriting-style look.
 const typedSignatureToPng = (text, font) => {
@@ -132,7 +151,8 @@ export const applySignatureToPDF = async (sourceUrl, sig) => {
 
   // ── 1b. Stamp the signing footer on every page (appendix on each page) ────────
   const totalPages = pages.length + 1; // + the certificate page appended below
-  stampPageFooters(pages, { helv, helvB, rgb }, { documentName: sig.documentName, hash: sig.hash, totalPages });
+  stampPageFooters(pages, { helv, helvB, rgb },
+    { documentName: sig.documentName, hash: sig.hash, serial: sig.serial, totalPages });
 
   // ── 2. Append an Electronic Signature Certificate page ────────────────────────
   const page = pdf.addPage([595.28, 841.89]); // A4
@@ -145,12 +165,15 @@ export const applySignatureToPDF = async (sourceUrl, sig) => {
     { x: M, y, size: 9, font: helv, color: rgb(0.3, 0.34, 0.4) });
   y -= 30;
 
+  y = drawSerialBanner(page, { helv, helvB, rgb }, M, y, sig.serial);
+
   const row = (label, value) => {
     page.drawText(label, { x: M, y, size: 9, font: helvB, color: rgb(0.25, 0.29, 0.35) });
     const lines = String(value == null || value === '' ? '—' : value).match(/.{1,60}/g) || ['—'];
     lines.forEach((ln, i) => page.drawText(ln, { x: M + 130, y: y - i * 12, size: 9, font: helv, color: rgb(0.12, 0.16, 0.22) }));
     y -= Math.max(20, lines.length * 12 + 8);
   };
+  if (sig.serial) row('Certificate Serial', sig.serial);
   row('Document', sig.documentName);
   row('Signer', sig.signerName);
   row('Role', sig.role);
@@ -298,7 +321,8 @@ export const applyFieldsToPDF = async (sourceUrl, fields = [], meta = {}) => {
 
   // ── 1b. Stamp the signing footer on every page (appendix on each page) ────────
   const totalPages = pages.length + 1; // + the certificate page appended below
-  stampPageFooters(pages, { helv, helvB, rgb }, { documentName: meta.documentName, hash: meta.hash, totalPages });
+  stampPageFooters(pages, { helv, helvB, rgb },
+    { documentName: meta.documentName, hash: meta.hash, serial: meta.serial, totalPages });
 
   // ── 2. Append an Electronic Signature Certificate page ────────────────────────
   const page = pdf.addPage([595.28, 841.89]); // A4
@@ -311,6 +335,8 @@ export const applyFieldsToPDF = async (sourceUrl, fields = [], meta = {}) => {
     { x: M, y, size: 9, font: helv, color: rgb(0.3, 0.34, 0.4) });
   y -= 26;
 
+  y = drawSerialBanner(page, { helv, helvB, rgb }, M, y, meta.serial);
+
   const row = (label, value) => {
     page.drawText(label, { x: M, y, size: 9, font: helvB, color: rgb(0.25, 0.29, 0.35) });
     const lines = String(value == null || value === '' ? '—' : value).match(/.{1,60}/g) || ['—'];
@@ -318,6 +344,7 @@ export const applyFieldsToPDF = async (sourceUrl, fields = [], meta = {}) => {
     y -= Math.max(20, lines.length * 12 + 6);
   };
 
+  if (meta.serial) row('Certificate Serial', meta.serial);
   row('Document', meta.documentName);
   if (meta.hash) row('Verification Hash', meta.hash);
   y -= 6;

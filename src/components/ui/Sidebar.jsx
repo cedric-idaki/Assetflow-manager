@@ -469,6 +469,37 @@ var Sidebar = function(props) {
           </div>
         )}
 
+        {/* Certificate verification desk. Lives here rather than in a role's
+            nav list because every role needs it and no role owns it: anyone
+            handed a certificate has to be able to check it. */}
+        <Link
+          to="/verify-certificate"
+          onClick={close}
+          title={isCollapsed ? 'Verify Certificate' : ''}
+          style={{
+            display: 'flex', alignItems: 'center', height: '36px',
+            padding: '0 10px', borderRadius: '7px', width: '100%',
+            gap: isCollapsed ? 0 : '10px',
+            justifyContent: isCollapsed ? 'center' : 'flex-start',
+            textDecoration: 'none',
+            background: location.pathname.startsWith('/verify-certificate') ? B.activeBg : 'transparent',
+            border: location.pathname.startsWith('/verify-certificate')
+              ? `1px solid ${B.borderSubtle}` : '1px solid transparent',
+          }}
+        >
+          <Icon name="ShieldCheck" size={17}
+            color={location.pathname.startsWith('/verify-certificate') ? B.accent : B.textDim} />
+          {!isCollapsed && (
+            <span style={{
+              fontSize: '13px',
+              color: location.pathname.startsWith('/verify-certificate') ? B.accent : B.textMid,
+              fontFamily: 'Open Sans, Arial, sans-serif',
+            }}>
+              Verify Certificate
+            </span>
+          )}
+        </Link>
+
         <button
           onClick={signout}
           title={isCollapsed ? 'Sign Out' : ''}
