@@ -482,7 +482,7 @@ BEGIN
   SELECT ip.id, ip.plan_name, ip.total_amount, ip.installment_amount,
          ip.total_installments, ip.installments_paid, ip.frequency::text AS frequency,
          ip.start_date, ip.end_date, ip.plan_status::text AS plan_status,
-         cl.admin_id       AS client_admin_id,
+         COALESCE(cl.admin_id, a.admin_id) AS plan_admin_id,
          cl.full_name      AS client_name,
          cl.account_number AS account_number,
          a.description     AS asset_description,
@@ -499,14 +499,24 @@ BEGIN
     RAISE EXCEPTION 'No such payment plan.';
   END IF;
 
-  v_admin := p.client_admin_id;
+  -- installment_plans carries no admin_id of its own, so the tenant comes from
+  -- the client, falling back to the asset. Both can still be NULL on rows that
+  -- predate 20260628120000_tenant_isolation and were never backfilled — and
+  -- there is a difference between "this plan belongs to another tenant" and
+  -- "nothing here says which tenant it belongs to". Only the first is a
+  -- violation; refusing the second would lock staff out of settled plans over a
+  -- missing column, so an untenanted plan is attributed to the caller.
+  IF NOT public.is_staff_member() AND NOT public.is_global_viewer() THEN
+    RAISE EXCEPTION 'Only staff may issue a settlement certificate.';
+  END IF;
 
-  IF NOT (
-    (v_admin IS NOT NULL AND v_admin = public.current_admin_id() AND public.is_staff_member())
-    OR public.is_global_viewer()
-  ) THEN
+  IF p.plan_admin_id IS NOT NULL
+     AND p.plan_admin_id <> public.current_admin_id()
+     AND NOT public.is_global_viewer() THEN
     RAISE EXCEPTION 'Not permitted to issue a settlement certificate for this plan.';
   END IF;
+
+  v_admin := COALESCE(p.plan_admin_id, public.current_admin_id());
 
   IF NOT (p.plan_status = 'completed'
           OR COALESCE(p.installments_paid, 0) >= COALESCE(p.total_installments, 0)) THEN
@@ -885,6 +895,22 @@ BEGIN
     PERFORM public.sacco_share_certificate_serial_internal(r.id);
   END LOOP;
 END $$;
+
+-- Link the backfilled history. The loop above runs oldest-first, so when an old
+-- certificate was serialised its successor had no serial yet and there was
+-- nothing to point at. Now that every row has one, join the chain the share
+-- register already records through sacco_share_certificates.superseded_by, so a
+-- reader who verifies a retired certificate is told which one replaced it
+-- rather than just that one did.
+UPDATE public.system_certificates old_c
+   SET superseded_by = new_reg.id, updated_at = now()
+  FROM public.sacco_share_certificates old_s
+  JOIN public.sacco_share_certificates new_s ON new_s.id = old_s.superseded_by
+  JOIN public.system_certificates new_reg
+    ON new_reg.source_table = 'sacco_share_certificates' AND new_reg.source_id = new_s.id
+ WHERE old_c.source_table = 'sacco_share_certificates'
+   AND old_c.source_id    = old_s.id
+   AND old_c.superseded_by IS NULL;
 
 -- ----------------------------------------------------------------------------
 -- 10. RLS AND GRANTS
