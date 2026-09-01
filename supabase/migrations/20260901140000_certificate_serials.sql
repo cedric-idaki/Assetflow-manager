@@ -939,5 +939,15 @@ CREATE POLICY "tenant_read_cert_verifications" ON public.system_certificate_veri
                        AND sc.admin_id = public.current_admin_id()
                        AND public.is_staff_member()));
 
+-- Supabase's default privileges hand every new table in `public` ALL to anon
+-- and authenticated, so a bare GRANT SELECT would only add to a grant of
+-- everything. RLS already refuses the writes — there is no INSERT/UPDATE/DELETE
+-- policy on either table — but the digest is only worth reading if nothing
+-- outside the SECURITY DEFINER functions above can write here, and that should
+-- be true at the grant layer too, not by RLS alone. Revoke first, then grant
+-- back exactly the read the app needs.
+REVOKE ALL ON public.system_certificates              FROM anon, authenticated;
+REVOKE ALL ON public.system_certificate_verifications FROM anon, authenticated;
+
 GRANT SELECT ON public.system_certificates              TO authenticated;
 GRANT SELECT ON public.system_certificate_verifications TO authenticated;
