@@ -40,6 +40,14 @@ export const KEY_NAMES = {
   mpesa: "MPESA_CRED_ENC_KEY",
   /** Employee payroll / identity PII on user_profiles. */
   pii: "PII_ENC_KEY",
+  /**
+   * A tenant's SignNow API credentials and webhook secret
+   * (signnow_connections). Held apart from the M-Pesa key because these
+   * authorise something different in kind: SignNow can send legally binding
+   * signature invites in the tenant's own name, so one leaked key must not
+   * open both.
+   */
+  signnow: "SIGNNOW_CRED_ENC_KEY",
 } as const;
 
 export type KeyPurpose = keyof typeof KEY_NAMES;

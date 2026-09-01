@@ -14,6 +14,7 @@ import TemplatesPanel from "../../components/esign/TemplatesPanel";
 import useDragReorder, { ReorderHandle, newRowUid } from "../../components/esign/useDragReorder";
 import { applySignatureToPDF, applyFieldsToPDF } from "../../utils/applySignatureToPDF";
 import { mintEsignSerial } from "../../utils/esignCertificateSerial";
+import SignNowTab from "../../components/signing/SignNowTab";
 import { detectSignableAreas } from "../../utils/detectSignableAreas";
 import { sendSigningOtp, sendSignatureAlert, sendSigningInvite } from "../../services/emailService";
 import { sendSigningLinkSMS } from "../../services/smsService";
@@ -1593,6 +1594,7 @@ export default function ESignaturePage() {
     { id: "upload",    icon: "Upload",          label: "New Document" },
     { id: "templates", icon: "Copy",            label: "Templates" },
     { id: "audit",     icon: "Search",          label: "Audit Trail" },
+    { id: "signnow",   icon: "BadgeCheck",      label: "SignNow" },
     { id: "api",       icon: "Code",            label: "API & Embed" },
   ];
 
@@ -1650,6 +1652,7 @@ export default function ESignaturePage() {
         {/* Tab content */}
         <div>
           {active === "dashboard" && <Dashboard docs={docs} setActive={setActive} setSelectedDoc={(d) => { setSelectedDoc(d); setActive("documents"); }} />}
+          {active === "signnow" && <SignNowTab docs={docs} />}
           {active === "documents" && <Documents docs={docs} setDocs={setLocalDocs} setActive={setActive} adminId={adminId} />}
           {active === "sign" && (
             <>

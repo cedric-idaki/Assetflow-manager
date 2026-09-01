@@ -158,3 +158,31 @@ entrypoint = "./functions/listing-public/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/register-client/index.ts"
+
+# Tenant SignNow connection. The caller's JWT is what decides whose credentials
+# these are, so verify_jwt MUST stay true; admin_id is never read from the
+# request body. This is the only write path to signnow_connections, which has
+# RLS on with zero policies. Requires the SIGNNOW_CRED_ENC_KEY function secret.
+[functions.signnow-credentials]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/signnow-credentials/index.ts"
+
+# Send a generated certificate for signature, and track it. Called from the app
+# by a signed-in staff member, so verify_jwt stays true — the JWT is what scopes
+# the signing request to their tenant.
+[functions.signnow-documents]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/signnow-documents/index.ts"
+
+# SignNow event callbacks. SignNow POSTs here with no Supabase JWT of any kind,
+# so verify_jwt MUST be false — otherwise every callback is rejected with 401
+# and no signed certificate is ever released. The function trusts nothing from
+# the body: it verifies the per-tenant HMAC in X-SignNow-Signature, looks the
+# document id up in signing_requests (which we created), and re-reads the
+# document from SignNow's API before applying anything.
+[functions.signnow-webhook]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/signnow-webhook/index.ts"

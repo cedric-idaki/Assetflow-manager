@@ -409,6 +409,7 @@ const AssetRegisterTab = ({ ctx }) => {
           onClose={() => setSelected(null)}
           onEdit={openEdit}
           register={register}
+          saccoName={sacco?.name}
         />
       )}
     </div>

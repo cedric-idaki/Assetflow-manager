@@ -29,6 +29,11 @@ const PRIVATE_BUCKETS = new Set([
   // first day (20260830200000). Rows here store the BARE PATH rather than a
   // URL, so callers pass { bucket: ASSET_DOC_BUCKET } to resolve one.
   'sacco-asset-documents',
+  // Certificates out for signature and the signed copies that come back
+  // (20260901160000). A share certificate names a member, their holding and
+  // their member number, so this one was private from the first day too. Rows
+  // store the BARE PATH; callers pass { bucket: 'signed-certificates' }.
+  'signed-certificates',
 ]);
 
 /** Long enough to open and read a document, short enough not to be a share link. */

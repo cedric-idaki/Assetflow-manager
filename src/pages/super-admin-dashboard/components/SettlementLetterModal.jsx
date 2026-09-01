@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { html } from '../../../utils/htmlEscape';
+import SigningStatusChip from '../../../components/signing/SigningStatusChip';
+import SendForSignatureModal from '../../../components/signing/SendForSignatureModal';
+import SigningRequestDrawer from '../../../components/signing/SigningRequestDrawer';
+import { signingStatusFor, loadSigningPolicies, openSignedCertificate } from '../../../utils/signnowClient';
+import { buildSettlementCertificatePdf } from '../../../utils/certificatePdf';
+import { isIssued } from '../../../utils/certificateSigning';
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 const fmt = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -20,6 +26,46 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
   const [letterRef, setLetterRef] = useState(null);
   const [serialErr, setSerialErr] = useState('');
   const [minting,   setMinting]   = useState(true);
+
+  // Signing, where the tenant has turned it on for settlement certificates.
+  // A settled plan is often the only proof a buyer ever gets that the asset is
+  // theirs, so this is the document most worth an officer's signature.
+  const [signing,   setSigning]   = useState(null);
+  const [required,  setRequired]  = useState(false);
+  const [sendOpen,  setSendOpen]  = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const refreshSigning = useCallback(async () => {
+    if (!plan?.id) return;
+    try {
+      const map = await signingStatusFor('installment_plans', [plan.id]);
+      setSigning(map[plan.id] || null);
+    } catch (_) { /* a tenant that has never used signing has nothing here */ }
+  }, [plan?.id]);
+
+  useEffect(() => { refreshSigning(); }, [refreshSigning]);
+
+  useEffect(() => {
+    let live = true;
+    loadSigningPolicies()
+      .then((p) => { if (live) setRequired(!!p?.settlement_certificate?.require_signature); })
+      .catch(() => { /* no policy row is the normal case */ });
+    return () => { live = false; };
+  }, []);
+
+  /**
+   * The PDF the officers sign. It carries the same serial as the printed
+   * letter — settlement_certificate_issue() is idempotent per plan, so the
+   * signed document and any reprint quote the same number.
+   */
+  const buildDocument = async ({ serial, signers }) => buildSettlementCertificatePdf({
+    plan, client, asset, company: companyProfile, serial: serial || letterRef, signers, draft: true,
+  });
+
+  const openSigned = async () => {
+    const ok = await openSignedCertificate(signing?.signedPath);
+    if (!ok) window.alert('Allow pop-ups for this site to open the signed certificate.');
+  };
 
   const mintSerial = useCallback(async () => {
     if (!plan?.id) { setMinting(false); setSerialErr('This plan has no id to certify.'); return; }
@@ -230,6 +276,30 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
             ))}
           </div>
 
+          {required && (
+            <div className="flex items-start gap-3 p-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800">
+              <span className="text-lg leading-none">✍️</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-blue-800 dark:text-blue-300">
+                  This certificate has to be signed before it is issued.
+                </p>
+                <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">
+                  Anything printed before then is watermarked DRAFT — NOT YET ISSUED.
+                </p>
+              </div>
+              <SigningStatusChip request={signing} requireSignature={required} />
+            </div>
+          )}
+
+          {signing && !required && (
+            <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-border bg-muted/30">
+              <span className="text-xs text-muted-foreground">Signature</span>
+              <button onClick={() => setDrawerOpen(true)}>
+                <SigningStatusChip request={signing} requireSignature={required} />
+              </button>
+            </div>
+          )}
+
           {serialErr ? (
             <div className="flex items-start gap-3 p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-900/20 dark:border-red-800">
               <span className="text-lg leading-none">⚠️</span>
@@ -254,18 +324,64 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
           )}
         </div>
 
-        {/* Actions */}
+        {/* Actions
+            Which primary action is offered depends on where the document is:
+            an issued certificate opens the SIGNED file, an outstanding one
+            opens its trail, and only a plan whose certificate does not have to
+            be signed still prints straight away. */}
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button onClick={onClose}
             className="flex-1 px-4 py-2 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
             Cancel
           </button>
-          <button onClick={handlePrint} disabled={!letterRef}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-            {minting ? 'Registering serial…' : '🖨️ Generate & Print'}
-          </button>
+
+          {isIssued(signing?.status) ? (
+            <button onClick={openSigned}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+              📄 Open signed certificate
+            </button>
+          ) : signing ? (
+            <button onClick={() => setDrawerOpen(true)}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+              ✍️ View signing request
+            </button>
+          ) : required ? (
+            <button onClick={() => setSendOpen(true)} disabled={!letterRef}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+              {minting ? 'Registering serial…' : '✍️ Send for signature'}
+            </button>
+          ) : (
+            <>
+              <button onClick={() => setSendOpen(true)} disabled={!letterRef}
+                className="px-4 py-2 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50 transition-colors">
+                ✍️ Send to sign
+              </button>
+              <button onClick={handlePrint} disabled={!letterRef}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                {minting ? 'Registering serial…' : '🖨️ Generate & Print'}
+              </button>
+            </>
+          )}
         </div>
       </div>
+
+      <SendForSignatureModal
+        open={sendOpen}
+        onClose={() => setSendOpen(false)}
+        onSent={refreshSigning}
+        docKind="settlement_certificate"
+        sourceTable="installment_plans"
+        sourceId={plan?.id}
+        documentName={`Certificate of Full Settlement — ${client?.full_name || plan?.plan_name || ''}`.trim()}
+        build={buildDocument}
+      />
+
+      <SigningRequestDrawer
+        open={drawerOpen}
+        requestId={signing?.requestId}
+        onClose={() => setDrawerOpen(false)}
+        onChanged={refreshSigning}
+      />
     </div>
   );
 };

@@ -23,6 +23,7 @@ import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 import KYCReviewTab from './components/KYCReviewTab';
 import MpesaSettingsTab from './components/MpesaSettingsTab';
+import OnboardingTab from './components/OnboardingTab';
 import SuperAdminCrmTab from '../../components/crm/SuperAdminCrmTab';
 
 const Sk = ({ className = '' }) => (
@@ -171,6 +172,7 @@ const SuperAdminDashboard = () => {
     { id: 'settlements',  label: 'Settlements',             icon: 'Award' },
     { id: 'reminders',    label: 'Reminders',               icon: 'Bell' },
     { id: 'companies',    label: 'Companies',               icon: 'Building2' },
+    { id: 'onboarding',   label: 'Installations',           icon: 'Wrench' },
     { id: 'mpesa',        label: 'M-Pesa',                  icon: 'Smartphone' },
     { id: 'audit',        label: 'Audit Trail',             icon: 'Shield', badge: auditTrail?.filter(a => a.action === 'delete').length || 0 },
   ];
@@ -296,6 +298,11 @@ const SuperAdminDashboard = () => {
             )}
           </div>
         )}
+
+        {/* INSTALLATIONS TAB — what the one-time installation & onboarding fee
+            actually bought each client. Reads through its own hook and RPCs and
+            carries its own loading state, so it is not gated on `loading`. */}
+        {activeTab === 'onboarding' && <OnboardingTab onExport={exportCSV} />}
 
         {/* AUDIT TRAIL TAB */}
         {activeTab === 'audit' && (

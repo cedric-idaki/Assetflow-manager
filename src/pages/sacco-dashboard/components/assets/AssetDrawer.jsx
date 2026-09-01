@@ -22,6 +22,12 @@ import {
   bookValue, reportedValue, ageInYears, depreciationProgress, isFullyDepreciated,
   valuationAge, expiringDocuments,
 } from '../../../../config/assetRegister';
+import SigningStatusChip from '../../../../components/signing/SigningStatusChip';
+import SendForSignatureModal from '../../../../components/signing/SendForSignatureModal';
+import SigningRequestDrawer from '../../../../components/signing/SigningRequestDrawer';
+import { signingStatusFor, loadSigningPolicies, openSignedCertificate } from '../../../../utils/signnowClient';
+import { buildAssetValuationPdf } from '../../../../utils/certificatePdf';
+import { isIssued } from '../../../../utils/certificateSigning';
 
 const TONE_CLASSES = {
   success: 'bg-emerald-100 text-emerald-700',
@@ -200,13 +206,21 @@ const TABS = [
   { id: 'history',   label: 'History',   icon: 'History' },
 ];
 
-const AssetDrawer = ({ asset, onClose, onEdit, register }) => {
+const AssetDrawer = ({ asset, onClose, onEdit, register, saccoName }) => {
   const toast = useToast();
   const [tab, setTab] = useState('record');
   const [docs, setDocs] = useState([]);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  // A valuation certificate turns "somebody typed a number into the register"
+  // into "the valuer and the treasurer attest to this figure", which is the
+  // difference between a note to ourselves and evidence for anyone else.
+  const [signing, setSigning] = useState(null);
+  const [signingRequired, setSigningRequired] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const assetId = asset?.id;
 
@@ -227,6 +241,24 @@ const AssetDrawer = ({ asset, onClose, onEdit, register }) => {
   }, [assetId, register.listDocuments, register.listEvents]);
 
   useEffect(() => { setTab('record'); load(); }, [load]);
+
+  const refreshSigning = useCallback(async () => {
+    if (!assetId) { setSigning(null); return; }
+    try {
+      const map = await signingStatusFor('sacco_fixed_assets', [assetId]);
+      setSigning(map[assetId] || null);
+    } catch (_) { /* a society that has never used signing has nothing here */ }
+  }, [assetId]);
+
+  useEffect(() => { refreshSigning(); }, [refreshSigning]);
+
+  useEffect(() => {
+    let live = true;
+    loadSigningPolicies()
+      .then((p) => { if (live) setSigningRequired(!!p?.asset_valuation?.require_signature); })
+      .catch(() => { /* no policy row is the normal case */ });
+    return () => { live = false; };
+  }, []);
 
   if (!asset) return null;
 
@@ -340,6 +372,43 @@ const AssetDrawer = ({ asset, onClose, onEdit, register }) => {
                 <p className="text-sm text-foreground leading-relaxed">{asset.description}</p>
               )}
 
+              {/* Valuation certificate — only offered once there is a
+                  valuation to certify. Certifying "not valued" would be a
+                  document asserting nothing. */}
+              {asset.current_value != null && (
+                <div className="rounded-xl border border-border p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-foreground">Valuation certificate</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        {isIssued(signing?.status)
+                          ? 'Signed and issued.'
+                          : signingRequired
+                            ? 'Must be signed before it is issued.'
+                            : 'States what this asset is worth, and who stands behind the figure.'}
+                      </p>
+                    </div>
+                    <SigningStatusChip request={signing} requireSignature={signingRequired} />
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {isIssued(signing?.status) && signing?.signedPath ? (
+                      <GhostButton icon="FileCheck" onClick={async () => {
+                        const ok = await openSignedCertificate(signing.signedPath);
+                        if (!ok) toast.error('Allow pop-ups for this site to open the signed certificate.');
+                      }}>Open signed certificate</GhostButton>
+                    ) : signing ? (
+                      <GhostButton icon="PenLine" onClick={() => setDrawerOpen(true)}>
+                        View signing request
+                      </GhostButton>
+                    ) : (
+                      <GhostButton icon="Send" onClick={() => setSendOpen(true)}>
+                        Send for signature
+                      </GhostButton>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {staleValuation && (
                 <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
                   <Icon name="Clock" size={15} color="#ca8a04" />
@@ -429,6 +498,32 @@ const AssetDrawer = ({ asset, onClose, onEdit, register }) => {
           <GhostButton onClick={onClose}>Close</GhostButton>
           <PrimaryButton icon="Pencil" onClick={() => onEdit(asset)}>Edit asset</PrimaryButton>
         </div>
+      </div>
+
+      {/* The backdrop above closes the drawer on any click that reaches it, and
+          React bubbles events through the component tree — so without this
+          guard, every click inside either dialog would close the drawer out
+          from under it. */}
+      <div onClick={(e) => e.stopPropagation()}>
+        <SendForSignatureModal
+          open={sendOpen}
+          onClose={() => setSendOpen(false)}
+          onSent={refreshSigning}
+          docKind="asset_valuation"
+          sourceTable="sacco_fixed_assets"
+          sourceId={assetId}
+          documentName={`Valuation Certificate — ${asset.asset_name}`}
+          build={async ({ serial, signers }) => buildAssetValuationPdf({
+            asset, saccoName, serial, signers, draft: true,
+          })}
+        />
+
+        <SigningRequestDrawer
+          open={drawerOpen}
+          requestId={signing?.requestId}
+          onClose={() => setDrawerOpen(false)}
+          onChanged={refreshSigning}
+        />
       </div>
     </div>
   );
