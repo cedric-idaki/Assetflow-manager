@@ -4,6 +4,7 @@ import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { monthlyInstallmentFor } from './usePOS';
 import { computePayroll, payrollRecordFrom } from '../utils/kenyaPayroll';
 import { computeVatReturn } from '../utils/vatLedger';
+import { vatRateOn } from '../config/taxRegulations';
 import { buildIncomeStatement } from '../utils/financialStatements';
 import { fetchAllRows } from '../lib/fetchAllRows';
 
@@ -372,6 +373,7 @@ export const useFinanceHub = () => {
         const dueDate = new Date(payDate);
         dueDate.setDate(dueDate.getDate() + 30);
         const isOverdue = p.payment_status !== 'completed' && dueDate < now;
+        const paymentVatRate = vatRateOn(p.payment_date || p.created_at);
         return {
           id:           p.id,
           source:       'payment',
@@ -387,9 +389,13 @@ export const useFinanceHub = () => {
           asset_type:   asset?.asset_type || '',
           plate_number: asset?.plate_number || '',
           amount:       parseFloat(p.amount   || 0),
-          vat_amount:   parseFloat(p.amount   || 0) * 0.16,
-          vat_rate:     16,
-          total:        parseFloat(p.amount   || 0) * 1.16,
+          // A payment has no invoice of its own, so one is derived from it —
+          // at the rate that was in force ON THE PAYMENT DATE, not today's. A
+          // payment taken under a different rate must not be restated at the
+          // current one just because the page is being opened now.
+          vat_amount:   parseFloat(p.amount   || 0) * (paymentVatRate / 100),
+          vat_rate:     paymentVatRate,
+          total:        parseFloat(p.amount   || 0) * (1 + paymentVatRate / 100),
           status:       p.payment_status === 'completed' ? 'paid' : isOverdue ? 'overdue' : 'pending',
           method:       p.payment_method   || '—',
           reference:    p.reference_number || '—',

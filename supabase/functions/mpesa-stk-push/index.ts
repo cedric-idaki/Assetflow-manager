@@ -42,7 +42,7 @@ import {
   stkRouting,
   type DarajaCreds,
 } from '../_shared/mpesa.ts';
-import { expectedSubscriptionPrice } from '../_shared/plans.ts';
+import { acceptableSubscriptionPrices } from '../_shared/plans.ts';
 import { openRequest } from '../_shared/http.ts';
 
 const API_VERSIONS = ['2026-08-21'];
@@ -431,12 +431,17 @@ async function verifySubscriptionPrice(
       .eq('admin_id', adminId)
       .eq('status', 'enabled');
 
-    const expected = expectedSubscriptionPrice({
+    // Normally one figure. Two only on the day a new tax regime comes into
+    // force, so a page loaded under the old rate can still pay — see
+    // acceptableSubscriptionPrices(). The first entry is always the canonical
+    // price and is what the payer is told.
+    const accepted = acceptableSubscriptionPrices({
       isSacco: Boolean(sacco),
       seats: Number(sub.max_users),
       productLine: sacco ? 'sacco' : 'company',
       modules: (enabledModules ?? []).map((m: { module_key: string }) => m.module_key),
     });
+    const expected = accepted === null ? null : accepted[0];
 
     // Only reachable when max_users is absent or below 1, which the wizard
     // never produces — so this is a malformed claim, not an unpriceable one.
@@ -452,7 +457,7 @@ async function verifySubscriptionPrice(
       };
     }
 
-    if (expected !== payable) {
+    if (!accepted.includes(payable)) {
       console.error('SUBSCRIPTION PRICE MISMATCH (refused)', {
         subscriptionId,
         adminId,
@@ -461,6 +466,7 @@ async function verifySubscriptionPrice(
         planName: sub.plan_name,
         posted: payable,
         expected,
+        accepted,
       });
       return {
         ok: false,

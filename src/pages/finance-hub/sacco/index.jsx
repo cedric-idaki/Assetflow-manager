@@ -391,7 +391,7 @@ const SaccoFinanceHub = () => {
               <LedgerTab fin={fin} ops={ops} trialBalanceRows={tbClosing} asAt={range.to} />
             )}
             {activeTab === 'journal' && opsReady && (
-              <JournalTab fin={fin} ops={ops} onLedgerChange={loadTrialBalances} />
+              <JournalTab fin={fin} ops={ops} sacco={sacco} onLedgerChange={loadTrialBalances} />
             )}
             {activeTab === 'coa' && (
               <ChartOfAccountsTab fin={fin} trialBalanceRows={tbClosing} currency={cur} />

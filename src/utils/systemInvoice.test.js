@@ -170,3 +170,69 @@ describe('sacco invoices', () => {
     expect(bill.lines).toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * A rate change must not reach backwards.
+ *
+ * Rows raised before the breakdown migration carry no rate of their own, so
+ * one has to be supplied to back the tax out of the total they do carry. Taking
+ * it from TODAY would mean the first VAT change silently restates every
+ * historical invoice on the platform — a document that agrees with neither the
+ * tenant's bank statement nor the return that was filed against it. It is taken
+ * from the row's own billing date instead.
+ */
+describe('a legacy row is re-derived at the rate that was in force then', () => {
+  // A sacco invoice for June 2020, when LN 35/2020 had the standard rate at
+  // 14%. No stored subtotal or vat_amount: this is a pre-migration row.
+  const covidPeriod = {
+    id: 's1', tier: 'bronze', period: '2020-06-01', active_members: 30,
+    base_fee: 500, per_member_fee_total: 1320, total: 1820,
+  };
+
+  it('discloses 14% on a bill for a period when 14% was the law', () => {
+    const bill = invoiceForSaccoInvoice(covidPeriod);
+    expect(bill.vatRate).toBe(14);
+    expect(bill.total).toBe(1820);
+    expect(bill.subtotal).toBe(cents(1820 / 1.14));
+    expect(cents(bill.subtotal + bill.vatAmount)).toBe(1820);
+  });
+
+  it('discloses the current rate on a bill raised under the current one', () => {
+    const now = { ...covidPeriod, period: '2026-09-01' };
+    const bill = invoiceForSaccoInvoice(now);
+    expect(bill.vatRate).toBe(VAT_RATE);
+    expect(bill.total).toBe(1820);
+  });
+
+  it('leaves the amount billed alone whichever rate applies — only the split moves', () => {
+    const covid = invoiceForSaccoInvoice(covidPeriod);
+    const now   = invoiceForSaccoInvoice({ ...covidPeriod, period: '2026-09-01' });
+    expect(covid.total).toBe(now.total);
+    expect(covid.vatAmount).not.toBe(now.vatAmount);
+  });
+
+  it('resolves a subscription from its start date', () => {
+    const sub = {
+      id: 'c1', plan_name: 'silver', max_users: 5,
+      start_date: '2020-06-01', price_paid: 5 * planForUsers(5).pricePerUser,
+    };
+    expect(invoiceForSubscription(sub).vatRate).toBe(14);
+    expect(invoiceForSubscription({ ...sub, start_date: '2026-09-01' }).vatRate).toBe(VAT_RATE);
+  });
+
+  it('falls back to created_at when a row carries no period or start date', () => {
+    const sub = {
+      id: 'c2', plan_name: 'silver', max_users: 5,
+      created_at: '2020-06-01T09:00:00Z', price_paid: 5 * planForUsers(5).pricePerUser,
+    };
+    expect(invoiceForSubscription(sub).vatRate).toBe(14);
+  });
+
+  it('still lets a STORED rate win over the date — what was charged is the fact', () => {
+    // A row that recorded 16% during the 14% window was, for whatever reason,
+    // charged 16%. The invoice prints what happened, not what should have.
+    const stored = { ...covidPeriod, subtotal: 1568.97, vat_rate: 16, vat_amount: 251.03 };
+    expect(invoiceForSaccoInvoice(stored).vatRate).toBe(16);
+  });
+});

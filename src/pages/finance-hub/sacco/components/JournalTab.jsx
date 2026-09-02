@@ -19,6 +19,8 @@ import {
   TextInput, NumberInput, Select, EmptyState, fmtDate,
 } from '../../../sacco-dashboard/components/_shared';
 import { fmtPlain, round2 } from '../../../../utils/saccoAccounting';
+import { normaliseSaccoEntry, buildJournalVoucher, downloadAccountingDocument }
+  from '../../../../utils/accountingDocument';
 
 const CATEGORY_LABEL = {
   member: 'Member transactions', loan: 'Loan book', period_end: 'Period-end (automated)',
@@ -378,7 +380,7 @@ const SyncModal = ({ open, onClose, fin, ops, onDone }) => {
 };
 
 // ── Main tab ────────────────────────────────────────────────────────────────
-const JournalTab = ({ fin, ops, onLedgerChange }) => {
+const JournalTab = ({ fin, ops, sacco, onLedgerChange }) => {
   const toast = useToast();
   const { entries, coa } = fin;
 
@@ -386,6 +388,7 @@ const JournalTab = ({ fin, ops, onLedgerChange }) => {
   const [filter, setFilter] = useState('all');
   const [query, setQuery]   = useState('');
   const [expanded, setExpanded] = useState({});
+  const [downloading, setDownloading] = useState(null);
 
   const accountName = (code) => coa.find((a) => a.account_code === code)?.account_name || '';
 
@@ -400,6 +403,26 @@ const JournalTab = ({ fin, ops, onLedgerChange }) => {
       return hay.toLowerCase().includes(q);
     });
   }, [entries, filter, query]);
+
+  // Every posting can leave the screen as a signed voucher: the double entry,
+  // the member it belongs to, and whether it was posted by hand or by the
+  // operations sync. Corrections are reversals here, so a reversed entry keeps
+  // its voucher too — the audit trail is the whole point.
+  const doDownload = async (entry) => {
+    setDownloading(entry.id);
+    try {
+      const filename = await downloadAccountingDocument(buildJournalVoucher({
+        entry: normaliseSaccoEntry(entry),
+        company: { ...(sacco || {}), name: sacco?.name || 'Society' },
+        currency: fin.config?.base_currency || 'KES',
+      }));
+      toast.success(filename, 'Voucher downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the voucher');
+    } finally {
+      setDownloading(null);
+    }
+  };
 
   const doReverse = async (entry) => {
     const reason = window.prompt(`Reverse ${entry.entry_no}?\n\nThe original stays in the ledger; a mirrored entry is posted in the current open period. Reason (optional):`);
@@ -477,26 +500,38 @@ const JournalTab = ({ fin, ops, onLedgerChange }) => {
               const isReversal = e.status === 'reversal';
               return (
                 <div key={e.id} className={`border rounded-lg ${isReversed ? 'border-red-200 bg-red-50/40' : isReversal ? 'border-amber-200 bg-amber-50/40' : 'border-border'}`}>
-                  <button onClick={() => setExpanded((s) => ({ ...s, [e.id]: !open }))}
-                    className="w-full flex items-center gap-3 p-3 text-left">
-                    <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} color="currentColor" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs text-muted-foreground">{e.entry_no}</span>
-                        <span className="text-sm font-medium text-foreground truncate">{e.description}</span>
-                        {e.is_automated && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold uppercase">auto</span>}
-                        {isReversed && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold uppercase">reversed</span>}
-                        {isReversal && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold uppercase">reversal</span>}
+                  <div className="flex items-center">
+                    <button onClick={() => setExpanded((s) => ({ ...s, [e.id]: !open }))}
+                      className="flex-1 min-w-0 flex items-center gap-3 p-3 text-left">
+                      <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} color="currentColor" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs text-muted-foreground">{e.entry_no}</span>
+                          <span className="text-sm font-medium text-foreground truncate">{e.description}</span>
+                          {e.is_automated && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold uppercase">auto</span>}
+                          {isReversed && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold uppercase">reversed</span>}
+                          {isReversal && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold uppercase">reversal</span>}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {fmtDate(e.entry_date)}
+                          {e.template_code && ` · ${e.template_code}`}
+                          {e.member?.full_name && ` · ${e.member.full_name}`}
+                          {e.reference && ` · ref ${e.reference}`}
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {fmtDate(e.entry_date)}
-                        {e.template_code && ` · ${e.template_code}`}
-                        {e.member?.full_name && ` · ${e.member.full_name}`}
-                        {e.reference && ` · ref ${e.reference}`}
-                      </p>
-                    </div>
-                    <span className="font-mono text-sm font-semibold text-foreground whitespace-nowrap">{fmtPlain(e.total_amount)}</span>
-                  </button>
+                      <span className="font-mono text-sm font-semibold text-foreground whitespace-nowrap">{fmtPlain(e.total_amount)}</span>
+                    </button>
+                    <button
+                      onClick={() => doDownload(e)}
+                      disabled={downloading === e.id}
+                      title={`Download journal voucher ${e.entry_no}`}
+                      aria-label={`Download journal voucher ${e.entry_no}`}
+                      className="px-3 py-3 text-muted-foreground hover:text-foreground disabled:opacity-60 transition-colors"
+                    >
+                      <Icon name={downloading === e.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                        className={downloading === e.id ? 'animate-spin' : ''} />
+                    </button>
+                  </div>
 
                   {open && (
                     <div className="px-3 pb-3 overflow-x-auto">

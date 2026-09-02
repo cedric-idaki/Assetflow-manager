@@ -5,6 +5,7 @@ import { supabase } from '../../../lib/supabase';
 import { fetchAllRows } from '../../../lib/fetchAllRows';
 import Pagination from '../../../components/ui/Pagination';
 import { usePagedQuery, sanitizeSearchTerm } from '../../../hooks/usePagedQuery';
+import { buildContributionReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
   TextInput, NumberInput, Select, EmptyState, ProgressBar, ContributionChart,
@@ -47,7 +48,7 @@ const SUBTABS = [
 
 const ContributionsTab = ({ ctx }) => {
   const {
-    members, contributionTypes, contributionAudit, stats,
+    sacco, members, contributionTypes, contributionAudit, stats,
     recordContribution, approveContribution, reverseContribution, editContribution,
     createContributionType, updateContributionType, exportCSV,
     getCollections, getDefaulters, getMemberContributionStats,
@@ -55,6 +56,28 @@ const ContributionsTab = ({ ctx }) => {
   const toast = useToast();
 
   const [sub, setSub] = useState('ledger');
+  const [receipting, setReceipting] = useState(null);
+
+  /**
+   * The slip a member walks away with. A settled contribution downloads as an
+   * official receipt; anything still pending, waived or reversed downloads as
+   * an acknowledgement that says so on its face, so an unsettled entry can
+   * never be waved about as proof of payment.
+   */
+  const downloadReceipt = async (c) => {
+    setReceipting(c.id);
+    try {
+      const filename = await downloadAccountingDocument(buildContributionReceipt({
+        contribution: c,
+        sacco,
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the receipt');
+    } finally {
+      setReceipting(null);
+    }
+  };
 
   // ── Record / edit ──────────────────────────────────────────────────────────
   const [open, setOpen]     = useState(false);
@@ -496,6 +519,17 @@ const ContributionsTab = ({ ctx }) => {
                     {c.status !== 'reversed' && (
                       <button onClick={() => { setReverseFor(c); setReason(''); }} className="ml-3 text-xs text-red-600 font-semibold hover:underline">Reverse</button>
                     )}
+                    <button
+                      onClick={() => downloadReceipt(c)}
+                      disabled={receipting === c.id}
+                      title={c.status === 'completed'
+                        ? `Download the receipt for ${c.txn_no || 'this contribution'}`
+                        : `Download an acknowledgement for ${c.txn_no || 'this contribution'}`}
+                      className="ml-3 align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                    >
+                      <Icon name={receipting === c.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                        className={receipting === c.id ? 'animate-spin' : ''} />
+                    </button>
                   </td>
                 </tr>
               ))}

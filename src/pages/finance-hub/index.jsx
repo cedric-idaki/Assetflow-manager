@@ -7,7 +7,12 @@ import { payslipDocument } from '../../utils/payslipDocument';
 import { buildP10Rows, p10Totals, p10Exceptions, P10_COLUMNS } from '../../utils/payeReturns';
 import { downloadCSV } from '../../utils/exportUtils';
 import { computeVatReturn } from '../../utils/vatLedger';
+import { vatRateOn } from '../../config/taxRegulations';
 import { buildIncomeStatement, buildBalanceSheet, buildCashFlow, buildTrialBalance } from '../../utils/financialStatements';
+import {
+  normaliseJournalRows, buildJournalVoucher, buildInvoiceDocument, buildPayrollVoucher,
+  downloadAccountingDocument,
+} from '../../utils/accountingDocument';
 import { useFinanceHubContext } from '../../contexts/FinanceHubContext';
 import { sendInvoiceEmail } from '../../services/emailService';
 import Icon from '../../components/AppIcon';
@@ -98,6 +103,43 @@ const Tab = ({ active, label, icon, badge, onClick }) => (
         {badge > 99 ? '99+' : badge}
       </span>
     )}
+  </button>
+);
+
+/**
+ * Every accounting transaction on this page can be taken off the screen as a
+ * document, and each of them needs the same three things: a busy state on the
+ * row that was clicked, a toast naming the file that landed, and a toast when
+ * the PDF library could not be reached. One hook so all four tabs behave the
+ * same rather than each growing its own half of that.
+ */
+const useDocumentDownload = () => {
+  const [downloading, setDownloading] = useState(null);
+  const download = async (key, buildModel) => {
+    setDownloading(key);
+    try {
+      const filename = await downloadAccountingDocument(buildModel());
+      toast(`Downloaded ${filename}`, 'success');
+    } catch (e) {
+      toast(e?.message || 'Could not generate the document', 'error');
+    } finally {
+      setDownloading(null);
+    }
+  };
+  return { downloading, download };
+};
+
+/** The row-level "take this transaction away as a document" affordance. */
+const DownloadDocButton = ({ busy, onClick, title = 'Download supporting document', label = null, className = '' }) => (
+  <button
+    className={className || S.btnGhost}
+    onClick={onClick}
+    disabled={busy}
+    title={title}
+    aria-label={title}
+  >
+    <Icon name={busy ? 'Loader' : 'Download'} size={13} color="currentColor" className={busy ? 'animate-spin' : ''} />
+    {label}
   </button>
 );
 
@@ -328,7 +370,7 @@ export const printInvoice = ({ company, invoice: inv }) => {
         <tbody>
           ${rawHtml(itemRows)}
           <tr class="vat">
-            <td>VAT (${inv.vat_rate ?? 16}%)</td>
+            <td>VAT (${inv.vat_rate ?? vatRateOn(inv.date)}%)</td>
             <td class="r">${money(inv.vat_amount)}</td>
           </tr>
         </tbody>
@@ -356,12 +398,18 @@ const blankInvoiceForm = () => {
   const today = new Date();
   const due   = new Date(today);
   due.setDate(due.getDate() + 30);
+  const issueDate = today.toISOString().split('T')[0];
   return {
     client_id: '', client_name: '', client_email: '', client_phone: '', account_no: '',
     asset_id: '',
-    issue_date: today.toISOString().split('T')[0],
+    issue_date: issueDate,
     due_date:   due.toISOString().split('T')[0],
-    vat_rate: 16,
+    // The standard rate in force on the issue date, not a typed-in 16. The
+    // field stays editable — a zero-rated or exempt supply, or a tenant who is
+    // not registered for VAT, is the user's call — but the DEFAULT is now
+    // whatever the law says today rather than whatever was true when this
+    // form was written.
+    vat_rate: vatRateOn(issueDate),
     status: 'pending',
     payment_method: '',
     reference: '',
@@ -382,6 +430,15 @@ const InvoicesTab = ({
   const [saving,   setSaving]   = useState(false);
   const [busyRow,  setBusyRow]  = useState(null);
   const [form,     setForm]     = useState(blankInvoiceForm);
+  const { downloading, download } = useDocumentDownload();
+
+  // A pending invoice downloads as a TAX INVOICE and a settled one as an
+  // OFFICIAL RECEIPT — headed by the company the asset came from, exactly like
+  // the printed and emailed copies.
+  const downloadInvoice = (inv) => download(inv.id, () => buildInvoiceDocument({
+    invoice: inv,
+    company: invoiceSeller(inv, companyProfile),
+  }));
 
   const formSubtotal = useMemo(
     () => form.items.reduce((s, it) => s + (parseFloat(it.quantity || 0) * parseFloat(it.unit_price || 0)), 0),
@@ -518,7 +575,7 @@ const InvoicesTab = ({
             ...(inv.items && inv.items.length > 0
               ? inv.items.map(it => ({ description: it.description, quantity: it.quantity, unitPrice: it.unit_price }))
               : [{ description: inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment', quantity: 1, unitPrice: inv.amount || 0 }]),
-            { description: `VAT (${inv.vat_rate ?? 16}%)`, quantity: 1, unitPrice: inv.vat_amount || 0 },
+            { description: `VAT (${inv.vat_rate ?? vatRateOn(inv.date)}%)`, quantity: 1, unitPrice: inv.vat_amount || 0 },
           ],
           // The emailed copy states the same plan as the printed one.
           plan: inv.plan ? {
@@ -618,7 +675,7 @@ const InvoicesTab = ({
                 </tr>
               )}
               <tr className="border-b border-gray-100 dark:border-border text-gray-500">
-                <td className="px-4 py-2 text-xs">VAT ({inv.vat_rate ?? 16}%)</td>
+                <td className="px-4 py-2 text-xs">VAT ({inv.vat_rate ?? vatRateOn(inv.date)}%)</td>
                 <td className="px-4 py-2 text-right font-mono text-xs">{inv.vat_amount.toLocaleString('en-KE', { maximumFractionDigits: 0 })}</td>
               </tr>
             </tbody>
@@ -673,6 +730,13 @@ const InvoicesTab = ({
             <button className={S.btnPri} onClick={() => printInvoice({ company: co, invoice: inv })}>
               <Icon name="Printer" size={14} color="currentColor" /> Print
             </button>
+            <DownloadDocButton
+              busy={downloading === inv.id}
+              onClick={() => downloadInvoice(inv)}
+              className={S.btnSec}
+              title={inv.status === 'paid' ? 'Download the receipt as a PDF' : 'Download the tax invoice as a PDF'}
+              label={inv.status === 'paid' ? 'Download Receipt' : 'Download Invoice'}
+            />
             <button
               className={S.btnSec}
               onClick={handleEmail}
@@ -920,6 +984,13 @@ const InvoicesTab = ({
                       <button className={S.btnGhost} onClick={() => setSelected(inv)} title="View invoice">
                         <Icon name="Eye" size={13} color="currentColor" />
                       </button>
+                      <DownloadDocButton
+                        busy={downloading === inv.id}
+                        onClick={() => downloadInvoice(inv)}
+                        title={inv.status === 'paid'
+                          ? `Download receipt ${inv.invoice_no}`
+                          : `Download invoice ${inv.invoice_no}`}
+                      />
                       {inv.source === 'manual' && inv.status !== 'paid' && (
                         <button className={S.btnGhost} title="Mark as paid"
                           onClick={() => handleStatus(inv, 'paid')} disabled={busyRow === inv.id}>
@@ -941,8 +1012,20 @@ const InvoicesTab = ({
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB 2 — AUTO JOURNAL FEED
 // ─────────────────────────────────────────────────────────────────────────────
-const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS, onNewEntry }) => {
+const AutomatedJournalTab = ({ entries, loading, companyProfile, TRIGGER_LABELS, onNewEntry }) => {
   const [filter, setFilter] = useState('all');
+  const { downloading, download } = useDocumentDownload();
+
+  // The feed lists one ROW per line of the double entry, but a voucher
+  // documents the whole entry — so the siblings sharing this row's entry_no are
+  // gathered back up before it is built. An entry old enough to predate
+  // entry_no stands on its own.
+  const downloadVoucher = (entry) => download(entry.id, () => buildJournalVoucher({
+    entry: normaliseJournalRows(
+      entry.entry_no ? entries.filter(e => e.entry_no === entry.entry_no) : [entry]
+    ),
+    company: companyProfile,
+  }));
 
   const groups = {
     all:      entries,
@@ -999,7 +1082,7 @@ const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS, onNewEntry }) =
           <table className="w-full">
             <thead>
               <tr>
-                {['Trigger', 'Date', 'Description', 'Debit Account', 'Credit Account', 'Amount', 'Status'].map(h => (
+                {['Trigger', 'Date', 'Description', 'Debit Account', 'Credit Account', 'Amount', 'Status', ''].map(h => (
                   <th key={h} className={S.th}>{h}</th>
                 ))}
               </tr>
@@ -1007,10 +1090,10 @@ const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS, onNewEntry }) =
             <tbody>
               {loading ? (
                 Array(8).fill(0).map((_, i) => (
-                  <tr key={i}>{Array(7).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>
+                  <tr key={i}>{Array(8).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>
                 ))
               ) : visible.length === 0 ? (
-                <tr><td colSpan={7}><Empty icon="Zap" text="No automated entries yet" sub="Journal entries are posted automatically when sales, payments and payroll events occur" /></td></tr>
+                <tr><td colSpan={8}><Empty icon="Zap" text="No automated entries yet" sub="Journal entries are posted automatically when sales, payments and payroll events occur" /></td></tr>
               ) : visible.map(entry => {
                 const tl = TRIGGER_LABELS[entry.trigger_event] || { label: entry.trigger_event, icon: '📝', color: 'blue' };
                 return (
@@ -1027,6 +1110,13 @@ const AutomatedJournalTab = ({ entries, loading, TRIGGER_LABELS, onNewEntry }) =
                     <td className={`${S.td} text-red-500 font-medium`}>{entry.credit_account}</td>
                     <td className={`${S.td} font-mono font-semibold text-foreground`}>{fmt(entry.amount)}</td>
                     <td className={S.td}><StatusBadge status={entry.status || 'posted'} /></td>
+                    <td className={S.td}>
+                      <DownloadDocButton
+                        busy={downloading === entry.id}
+                        onClick={() => downloadVoucher(entry)}
+                        title={`Download journal voucher ${entry.entry_no || ''}`.trim()}
+                      />
+                    </td>
                   </tr>
                 );
               })}
@@ -1051,13 +1141,22 @@ const blankHead  = () => ({ date: todayISO(), description: '', reference: '', en
 const blankLines = () => [{ account: '', debit: '', credit: '' }, { account: '', debit: '', credit: '' }];
 const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
 
-const JournalTab = ({ journalEntries, chartOfAccounts, loading, onPost, onReverse }) => {
+const JournalTab = ({ journalEntries, chartOfAccounts, companyProfile, loading, onPost, onReverse }) => {
   const [head,   setHead]   = useState(blankHead);
   const [lines,  setLines]  = useState(blankLines);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState({});
   const [reversing, setReversing] = useState(null);
+  const { downloading, download } = useDocumentDownload();
+
+  // The rows of an entry are stored as debit/credit PAIRS; a voucher prints the
+  // legs. normaliseJournalRows does that unwinding, so what gets signed reads
+  // like a voucher rather than like the table it came out of.
+  const downloadVoucher = (g) => download(g.key, () => buildJournalVoucher({
+    entry: normaliseJournalRows(g.rows),
+    company: companyProfile,
+  }));
 
   const coaNames = chartOfAccounts
     .filter(a => a.is_active !== false)
@@ -1262,24 +1361,33 @@ const JournalTab = ({ journalEntries, chartOfAccounts, loading, onPost, onRevers
                     g.status === 'reversed' ? 'border-red-200 bg-red-50/40 dark:bg-red-900/10'
                     : g.status === 'reversal' ? 'border-amber-200 bg-amber-50/40 dark:bg-amber-900/10'
                     : 'border-border'}`}>
-                    <button onClick={() => setExpanded(s => ({ ...s, [g.key]: !open }))}
-                      className="w-full flex items-center gap-3 p-3 text-left">
-                      <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} color="currentColor" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-xs text-muted-foreground">{g.entryNo || `JE-${g.key.slice(-6).toUpperCase()}`}</span>
-                          <span className="text-sm font-medium text-foreground truncate">{g.description}</span>
-                          <StatusBadge status={g.status} />
+                    <div className="flex items-center">
+                      <button onClick={() => setExpanded(s => ({ ...s, [g.key]: !open }))}
+                        className="flex-1 min-w-0 flex items-center gap-3 p-3 text-left">
+                        <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} color="currentColor" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-xs text-muted-foreground">{g.entryNo || `JE-${g.key.slice(-6).toUpperCase()}`}</span>
+                            <span className="text-sm font-medium text-foreground truncate">{g.description}</span>
+                            <StatusBadge status={g.status} />
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {fmtDate(g.date)}
+                            {g.entryType && ` · ${g.entryType}`}
+                            {g.reference && ` · ref ${g.reference}`}
+                            {` · ${g.rows.length} line${g.rows.length === 1 ? '' : 's'}`}
+                          </p>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {fmtDate(g.date)}
-                          {g.entryType && ` · ${g.entryType}`}
-                          {g.reference && ` · ref ${g.reference}`}
-                          {` · ${g.rows.length} line${g.rows.length === 1 ? '' : 's'}`}
-                        </p>
+                        <span className="font-mono text-sm font-semibold text-foreground whitespace-nowrap">{fmt(g.total)}</span>
+                      </button>
+                      <div className="pr-2">
+                        <DownloadDocButton
+                          busy={downloading === g.key}
+                          onClick={() => downloadVoucher(g)}
+                          title={`Download journal voucher ${g.entryNo || ''}`.trim()}
+                        />
                       </div>
-                      <span className="font-mono text-sm font-semibold text-foreground whitespace-nowrap">{fmt(g.total)}</span>
-                    </button>
+                    </div>
 
                     {open && (
                       <div className="px-3 pb-3">
@@ -1594,6 +1702,7 @@ const PayeWorking = ({ result }) => {
 // TAB 5 — PAYROLL
 // ─────────────────────────────────────────────────────────────────────────────
 const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprove, companyProfile }) => {
+  const { downloading, download } = useDocumentDownload();
   const [subTab, setSubTab]     = useState('run');
   const [empId,  setEmpId]      = useState('');
   const [month,  setMonth]      = useState(new Date().toISOString().slice(0, 7));
@@ -1663,19 +1772,33 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
     } catch (e) { toast(e.message, 'error'); }
   };
 
+  const employeeOf = (r) => ({
+    id: r.employee_id,
+    full_name: r.employee?.full_name,
+    department: r.employee?.department,
+    email: r.employee?.email,
+  });
+
   const handlePrintRecord = (r) => {
     printPayslip({
       company: companyProfile,
-      employee: {
-        id: r.employee_id,
-        full_name: r.employee?.full_name,
-        department: r.employee?.department,
-        email: r.employee?.email,
-      },
+      employee: employeeOf(r),
       month: r.pay_month,
       data: resolvePayrollRecord(r),
     });
   };
+
+  // The payslip is the employee's copy of a payroll run; this is the company's
+  // — the payment voucher that goes in the file behind the payroll journal
+  // entry. Both are drawn from the same resolved record, so they cannot
+  // disagree about what was withheld.
+  const handleDownloadRecord = (r) => download(r.id, () => buildPayrollVoucher({
+    record: r,
+    employee: employeeOf(r),
+    month: r.pay_month,
+    data: resolvePayrollRecord(r),
+    company: companyProfile,
+  }));
 
   // Every payslip for a month as one page-broken document, so a run goes out in
   // a single print/save rather than one pop-up per employee.
@@ -1991,6 +2114,13 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
                               >
                                 <Icon name="Printer" size={12} color="currentColor" /> Print
                               </button>
+                              <DownloadDocButton
+                                busy={downloading === r.id}
+                                onClick={() => handleDownloadRecord(r)}
+                                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground border border-border px-2.5 py-1 rounded-lg hover:bg-muted transition-colors disabled:opacity-60"
+                                title={`Download the payroll payment voucher for ${r.employee?.full_name || 'this employee'}`}
+                                label="Voucher"
+                              />
                             </div>
                           </td>
                         </tr>
@@ -2691,12 +2821,14 @@ const FinanceHub = () => {
           {activeTab === 'automated' && (
             <AutomatedJournalTab
               entries={automatedEntries} loading={loading} TRIGGER_LABELS={TRIGGER_LABELS}
+              companyProfile={companyProfile}
               onNewEntry={() => setActiveTab('journal')}
             />
           )}
           {activeTab === 'journal' && (
             <JournalTab
               journalEntries={journalEntries} chartOfAccounts={chartOfAccounts} loading={loading}
+              companyProfile={companyProfile}
               onPost={postJournalEntry} onReverse={reverseJournalEntry}
             />
           )}

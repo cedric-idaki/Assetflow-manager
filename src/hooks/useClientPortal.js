@@ -4,6 +4,7 @@ import { useAuthScopedLoader } from './useAuthScopedLoader';
 
 export const useClientPortal = () => {
   const [clientProfile, setClientProfile] = useState(null);
+  const [companyProfile, setCompanyProfile] = useState(null);
   const [myAssets, setMyAssets] = useState([]);
   const [browseAssets, setBrowseAssets] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -105,6 +106,25 @@ export const useClientPortal = () => {
       setPayments(data || []);
     } catch (err) {
       console.error('[ClientPortal] Payments error:', err);
+    }
+  }, []);
+
+  /**
+   * The company the client bought from — the letterhead on a receipt or a
+   * statement they download.
+   *
+   * Best-effort on purpose: whether a client may read their seller's profile is
+   * an RLS question, and a portal that refuses to open because the header could
+   * not be fetched would be far worse than a receipt headed with the app name.
+   */
+  const fetchCompanyProfile = useCallback(async (adminId) => {
+    if (!adminId) return;
+    try {
+      const { data } = await supabase
+        .from('company_profiles').select('*').eq('admin_id', adminId).maybeSingle();
+      setCompanyProfile(data || null);
+    } catch {
+      setCompanyProfile(null);
     }
   }, []);
 
@@ -244,6 +264,7 @@ export const useClientPortal = () => {
           fetchPayments(client.id),
           fetchInstallmentPlans(client.id),
           fetchEnquiries(client.id),
+          fetchCompanyProfile(client.admin_id),
         ]);
         setConnectionStatus('connected');
       }
@@ -253,7 +274,7 @@ export const useClientPortal = () => {
       hasLoaded.current = true;
       setLoading(false);
     }
-  }, [fetchClientProfile, fetchMyAssets, fetchBrowseAssets, fetchPayments, fetchInstallmentPlans, fetchEnquiries]);
+  }, [fetchClientProfile, fetchMyAssets, fetchBrowseAssets, fetchPayments, fetchInstallmentPlans, fetchEnquiries, fetchCompanyProfile]);
 
   // Every field here belongs to one client. This provider lives above the
   // router, so without an explicit reset the next person to sign in on this
@@ -261,6 +282,7 @@ export const useClientPortal = () => {
   const resetState = useCallback(() => {
     hasLoaded.current = false;
     setClientProfile(null);
+    setCompanyProfile(null);
     setMyAssets([]);
     setBrowseAssets([]);
     setPayments([]);
@@ -274,6 +296,7 @@ export const useClientPortal = () => {
 
   return {
     clientProfile,
+    companyProfile,
     myAssets,
     browseAssets,
     payments,

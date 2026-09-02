@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { planForUsers, planById } from '../config/companyPlans';
+import { planForUsers, planById, billableUsers } from '../config/companyPlans';
 import { buildSystemInvoice, monthlyTotal } from '../config/systemBilling';
 
 /**
@@ -60,11 +60,17 @@ const applyPendingIfDue = async (sub) => {
     }
     // A rollover is a RENEWAL: chargeInstallation stays false, so the one-time
     // fee is never charged twice.
+    //
+    // `asOf` is the date the new period STARTS, which is what decides its tax
+    // treatment. A rollover can be processed late — the cron catches up, or
+    // the page is opened days after the period turned — and the bill still
+    // belongs to the period it covers, not to the day the row was written.
     const quote = buildSystemInvoice({
       productLine: 'company',
       seats: sub.pending_max_users,
       tierId: sub.pending_plan_name,
       chargeInstallation: false,
+      asOf: sub.end_date,
     });
     const row = {
       admin_id:   sub.admin_id,
@@ -88,6 +94,9 @@ const applyPendingIfDue = async (sub) => {
       subtotal:         quote.subtotal,
       vat_rate:         quote.vatRate,
       vat_amount:       quote.vatAmount,
+      // The regulation that set the rate, so the row records the authority and
+      // not only the number. See 20260902120000_billing_tax_regime.sql.
+      tax_regime:       quote.taxRegime.version,
     });
     if (insErr && isMissingColumn(insErr)) {
       await supabase.from('company_subscriptions').insert(row);
@@ -152,7 +161,9 @@ export const useAdminSubscription = () => {
   // Passing the current seat count cancels any pending change.
   const changeSeats = useCallback(async (newSeats) => {
     if (!subscription) return;
-    const seats = Math.max(1, parseInt(newSeats, 10) || 1);
+    // Floored at the Business minimum (companyPlans.js): a scheduled change
+    // must not park a tenant on a seat count the price list will not bill.
+    const seats = billableUsers(Math.max(1, parseInt(newSeats, 10) || 1));
     const clearing = seats === subscription.max_users;
     const plan = planForUsers(seats);
 

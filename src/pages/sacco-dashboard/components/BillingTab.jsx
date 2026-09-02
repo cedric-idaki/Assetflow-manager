@@ -3,6 +3,7 @@ import Icon from '../../../components/AppIcon';
 import { Card, StatCard, Table, Badge, KES, fmtDate } from './_shared';
 import { html, rawHtml } from '../../../utils/htmlEscape';
 import { invoiceForSaccoInvoice } from '../../../utils/systemInvoice';
+import { MIN_BILLABLE_MEMBERS } from '../../../config/saccoTiers';
 
 // ── Invoice download ─────────────────────────────────────────────────────────
 const invoiceNo = (row) => {
@@ -106,7 +107,14 @@ const BillingTab = ({ ctx }) => {
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard label="Current tier" value={stats.tier?.name} hint={stats.tier?.memberRange} icon="Layers" />
-        <StatCard label="Active members" value={stats.activeMembers} hint="Billed members" icon="Users" />
+        <StatCard
+          label="Active members"
+          value={stats.activeMembers}
+          hint={bill.minimumApplied
+            ? `Billed on ${bill.billedMembers} — ${MIN_BILLABLE_MEMBERS}-member minimum`
+            : 'Billed members'}
+          icon="Users"
+        />
         <StatCard label="Estimated monthly bill" value={KES(bill.total)} hint="Base + members + storage, VAT inclusive" icon="Receipt" tone="success" />
       </div>
 

@@ -28,23 +28,7 @@
  */
 
 import { signatureBlocks, A4, fieldsForSigners } from './certificateSigning';
-
-// ── jsPDF, from the CDN, exactly as generateContractPDF loads it ─────────────
-const loadJsPDF = () => new Promise((resolve, reject) => {
-  if (window.jspdf?.jsPDF) return resolve(window.jspdf.jsPDF);
-  if (document.getElementById('jspdf-script')) {
-    const wait = setInterval(() => {
-      if (window.jspdf?.jsPDF) { clearInterval(wait); resolve(window.jspdf.jsPDF); }
-    }, 100);
-    return;
-  }
-  const script = document.createElement('script');
-  script.id = 'jspdf-script';
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-  script.onload = () => resolve(window.jspdf.jsPDF);
-  script.onerror = () => reject(new Error('Failed to load jsPDF'));
-  document.head.appendChild(script);
-});
+import { loadJsPDF } from './jsPdfLoader';
 
 const KES = (n) => 'KES ' + (parseFloat(n) || 0).toLocaleString('en-KE', {
   minimumFractionDigits: 2, maximumFractionDigits: 2,

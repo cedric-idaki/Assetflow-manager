@@ -1,9 +1,25 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { auditLogsService } from '../services/supabaseService';
+import { vatRateOn } from '../config/taxRegulations';
 
 // ── Kenya Tax (VAT) ───────────────────────────────────────────────────────────
-export const VAT_RATE = 0.16;
+/**
+ * The VAT rate on a sale, as a FRACTION, resolved from the date of supply.
+ *
+ * Was a `0.16` constant, with "VAT (16%)" typed separately into the two places
+ * the till prints it — so a rate change had to be made in three spots or the
+ * receipt would state one rate and charge another. The rate now comes from
+ * src/config/taxRegulations.js and the label is derived from the same figure.
+ *
+ * A sale is taxed at the rate in force on the day it is made, which is why the
+ * default is today rather than a frozen constant: a till left open across a
+ * changeover picks up the new rate on its next sale.
+ */
+export const vatFractionOn = (asOf = null) => vatRateOn(asOf) / 100;
+
+/** The same rate as a percentage, for anything that prints it. */
+export const vatPercentOn = (asOf = null) => vatRateOn(asOf);
 
 // ── Amortisation engine (BRS Section 4.3) ────────────────────────────────────
 
@@ -89,6 +105,26 @@ const genInvoiceNo = () =>
 
 const genReceiptNo = () =>
   `RCP-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+
+// ── Reprint support ───────────────────────────────────────────────────────────
+/** Columns migration 20260902140000 adds; a sale still records without them. */
+const REPRINT_COLUMNS = ['receipt_number', 'vat_percent'];
+
+/**
+ * Is this PostgREST error "that column does not exist", for one of `columns`?
+ *
+ * Exported for test. It has to be narrow: any broader reading would let a real
+ * constraint violation be retried as though the schema were merely behind.
+ * PostgREST reports an unknown column on write as PGRST204 and names it in the
+ * message; a stale schema cache surfaces as 42703 from Postgres itself.
+ */
+export const isMissingColumnError = (err, columns = []) => {
+  if (!err) return false;
+  const code = String(err.code || '');
+  if (code !== 'PGRST204' && code !== '42703') return false;
+  const haystack = `${err.message || ''} ${err.details || ''}`.toLowerCase();
+  return columns.some((c) => haystack.includes(c));
+};
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 export const usePOS = () => {
@@ -201,7 +237,7 @@ export const usePOS = () => {
     try {
       const {
         clientId, asset, pricingModel, sellingPrice, discountAmount,
-        discountReason, vatAmount, totalAmount, depositAmount,
+        discountReason, vatAmount, vatPercent, totalAmount, depositAmount,
         financeBalance, interestRate, tenureMonths, startDate,
         paymentMethod, mpesaRef, bankRef, notes, schedule,
       } = saleData;
@@ -246,9 +282,7 @@ export const usePOS = () => {
       }
 
       // 2. Create sale/contract record
-      const { data: saleRecord, error: saleErr } = await supabase
-        .from('sales')
-        .insert({
+      const saleRow = {
           invoice_number:   invoiceNo,
           client_id:        clientId,
           asset_id:         asset.id,
@@ -271,9 +305,30 @@ export const usePOS = () => {
           notes:            notes || null,
           status:           'active',
           sale_date:        now.split('T')[0],
-        })
-        .select()
-        .single();
+          // Kept so the receipt can be printed again later. Nothing else reads
+          // these two — see migration 20260902140000 for why the number a
+          // customer was handed cannot be reconstructed without them.
+          receipt_number:   receiptNo,
+          vat_percent:      vatPercent ?? null,
+      };
+
+      let { data: saleRecord, error: saleErr } = await supabase
+        .from('sales').insert(saleRow).select().single();
+
+      // The reprint columns are additive, and this repo's migrations have run
+      // ahead of and behind the live schema in both directions. A till that
+      // cannot take money is far worse than one that cannot reprint, so an
+      // unapplied migration costs the reprint fields and nothing else. Narrow
+      // on purpose: only a missing-column error retries, and the failed insert
+      // wrote nothing, so there is no risk of a double sale.
+      if (saleErr && isMissingColumnError(saleErr, REPRINT_COLUMNS)) {
+        console.warn('Sales reprint columns missing; recording the sale without them:', saleErr.message);
+        const fallback = { ...saleRow };
+        REPRINT_COLUMNS.forEach((c) => delete fallback[c]);
+        ({ data: saleRecord, error: saleErr } = await supabase
+          .from('sales').insert(fallback).select().single());
+      }
+
       if (saleErr) {
         console.error('Sales insert error details:', saleErr);
         throw new Error('Sale record failed: ' + saleErr.message + ' (code: ' + saleErr.code + ')');
@@ -369,6 +424,61 @@ export const usePOS = () => {
     refetchAssets: () => fetchAvailableAssets(adminId),
     refetchClients: () => fetchClients(adminId),
   };
+};
+
+/**
+ * Everything needed to reprint the receipt for one past sale.
+ *
+ * The list screen holds the sale row already, but a receipt needs three things
+ * the list does not carry: the installment schedule (the A4 sheet prints it),
+ * the payment (its timestamp is the moment the money was taken, which is what
+ * the reprint must show — not the moment somebody pressed Print), and the name
+ * of whoever served the customer.
+ *
+ * Everything but the sale itself is best-effort. A schedule that never
+ * persisted, a payment row since edited, a cashier whose profile was deleted —
+ * none of those should stop a customer getting their receipt. Each simply
+ * leaves its line off the document.
+ *
+ * Not a hook: the history screen calls it on a click, not on render.
+ */
+export const fetchSaleForReprint = async (saleId) => {
+  const { data: sale, error } = await supabase
+    .from('sales')
+    // select('*') deliberately, matching fetchAvailableAssets above: this
+    // table has drifted from the migrations more than once, and a reprint
+    // should not 400 over a column it does not need.
+    .select('*, client:clients(*), asset:assets(*)')
+    .eq('id', saleId)
+    .single();
+  if (error) throw error;
+
+  const [{ data: schedule }, { data: payment }] = await Promise.all([
+    supabase
+      .from('installment_schedules')
+      .select('installment_no, due_date, opening_balance, installment_amount, principal_portion, interest_portion, closing_balance')
+      .eq('sale_id', saleId)
+      .order('installment_no'),
+    // submitSale writes the invoice number as the payment's transaction_id, so
+    // this is an exact match rather than a heuristic on client + asset.
+    supabase
+      .from('payments')
+      .select('payment_date, processed_by, reference_number')
+      .eq('transaction_id', sale.invoice_number)
+      .maybeSingle(),
+  ]);
+
+  let cashier = '';
+  if (payment?.processed_by) {
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('full_name')
+      .eq('id', payment.processed_by)
+      .maybeSingle();
+    cashier = profile?.full_name || '';
+  }
+
+  return { sale, client: sale.client, asset: sale.asset, schedule: schedule || [], payment, cashier };
 };
 
 export default usePOS;

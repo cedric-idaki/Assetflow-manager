@@ -4,6 +4,7 @@ import Icon from '../../../components/AppIcon';
 import { useModules } from '../../../contexts/TenantModulesContext';
 import { useAssetValuation } from '../../../hooks/useAssetValuation';
 import { valuationCoverage } from '../../../config/assetRegister';
+import { MIN_BILLABLE_MEMBERS } from '../../../config/saccoTiers';
 import { Card, StatCard, KES } from './_shared';
 
 const OverviewTab = ({ ctx, onNavigate }) => {
@@ -71,7 +72,10 @@ const OverviewTab = ({ ctx, onNavigate }) => {
               <span className="font-semibold text-foreground">{KES(bill.baseFee)}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Per-member · {stats.activeMembers} × {KES(stats.tier?.perMemberFee)}</span>
+              <span className="text-muted-foreground">
+                Per-member · {bill.billedMembers} × {KES(bill.tier?.perMemberFee)}
+                {bill.minimumApplied && ` · ${MIN_BILLABLE_MEMBERS}-member minimum`}
+              </span>
               <span className="font-semibold text-foreground">{KES(bill.perMemberFeeTotal)}</span>
             </div>
             <div className="flex items-center justify-between">

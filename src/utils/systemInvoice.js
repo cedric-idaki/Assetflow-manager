@@ -14,20 +14,43 @@
  *     have only a single total. src/config/systemBilling.js re-derives the
  *     components, and the result is then RECONCILED to the stored total so the
  *     printed invoice can never contradict the money that moved.
+ *
+ *  3. RE-DERIVE AT THE RATE THAT WAS IN FORCE, never at today's. Where rule 2
+ *     applies there is no stored rate to honour, so the row's own billing date
+ *     picks the tax regime out of src/config/taxRegulations.js. Without this,
+ *     the first VAT rate change would silently restate every historical
+ *     invoice on the platform at the new rate — a document that disagrees with
+ *     both the tenant's bank statement and the return that was filed.
  */
 
 import { buildSystemInvoice, VAT_RATE, COMPANY_INSTALLATION_FEE } from '../config/systemBilling';
+import { vatRateOn } from '../config/taxRegulations';
+import { billableMembers, MIN_BILLABLE_MEMBERS } from '../config/saccoTiers';
 
 const money = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const num = (n) => Number(n) || 0;
 
 /**
- * A stored rate of 0 means zero-rated or exempt and must be honoured — it is
- * not a missing value. `num(v) || VAT_RATE` would silently tax such a row at
- * 16%, so absence is tested for explicitly.
+ * When was this bill raised? Everything tax-shaped about it is decided by the
+ * regulations in force on that date, so a row that carries no stored rate is
+ * re-derived at the rate that was lawful THEN — not at today's.
+ *
+ * A subscription is billed from its start; a sacco invoice belongs to its
+ * period. Either way `created_at` is the fallback, and a row with no date at
+ * all resolves to the current regime.
  */
-const rateOf = (v) => {
-  if (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) return VAT_RATE;
+const billedOn = (row) => row?.period || row?.start_date || row?.issue_date || row?.created_at || null;
+
+/**
+ * A stored rate of 0 means zero-rated or exempt and must be honoured — it is
+ * not a missing value. `num(v) || rate` would silently tax such a row at the
+ * standard rate, so absence is tested for explicitly.
+ *
+ * Absence itself only happens on a row raised before the breakdown columns
+ * existed, which is exactly the case that must resolve by date.
+ */
+const rateOf = (v, asOf = null) => {
+  if (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) return vatRateOn(asOf);
   return Number(v);
 };
 
@@ -66,10 +89,10 @@ const netify = (lines, subtotal) => {
   return lines;
 };
 
-const wrap = (lines, subtotal, vatRate, vatAmount, total) => ({
+const wrap = (lines, subtotal, vatRate, vatAmount, total, asOf = null) => ({
   lines: netify(lines, subtotal),
   subtotal: money(subtotal),
-  vatRate: rateOf(vatRate),
+  vatRate: rateOf(vatRate, asOf),
   vatAmount: money(vatAmount),
   total: money(total),
 });
@@ -87,6 +110,8 @@ const wrap = (lines, subtotal, vatRate, vatAmount, total) => ({
  * @param {string[]} [modules] module keys the tenant runs, for the extras line
  */
 export function invoiceForSubscription(row, modules = null) {
+  const asOf = billedOn(row);
+
   if (hasStoredBreakdown(row)) {
     const seats = row.max_users ?? 0;
     const lines = storedLines([
@@ -95,12 +120,15 @@ export function invoiceForSubscription(row, modules = null) {
       { label: 'Additional modules', qty: 1, unit: row.module_fee, gross: row.module_fee },
       { label: 'Installation & onboarding (one-time)', qty: 1, unit: row.installation_fee, gross: row.installation_fee },
     ]);
-    return wrap(lines, row.subtotal, row.vat_rate, row.vat_amount, row.price_paid);
+    return wrap(lines, row.subtotal, row.vat_rate, row.vat_amount, row.price_paid, asOf);
   }
 
   const seats = num(row?.max_users);
   const paid = num(row?.price_paid);
-  const opts = { productLine: 'company', seats, tierId: row?.plan_name || null, modules };
+  // `asOf` prices this row under the regime in force when it was raised, so a
+  // rate that has changed since cannot restate a subscription that was billed
+  // and paid under the old one.
+  const opts = { productLine: 'company', seats, tierId: row?.plan_name || null, modules, asOf };
 
   const recurring = buildSystemInvoice({ ...opts, chargeInstallation: false });
   // Within half a fee of the gap means the fee is in there; a scheduled-change
@@ -111,7 +139,7 @@ export function invoiceForSubscription(row, modules = null) {
   // The catalogue may have moved since this row was written. What the tenant
   // paid is the fact; the components are the best available explanation of it.
   return paid && Math.abs(paid - priced.total) > 0.02
-    ? reconcile(priced, paid)
+    ? reconcile(priced, paid, asOf)
     : priced;
 }
 
@@ -120,25 +148,38 @@ export function invoiceForSubscription(row, modules = null) {
  * installation fee is only ever what the row itself stores.
  */
 export function invoiceForSaccoInvoice(row) {
-  const members = num(row?.active_members);
+  // The period this invoice covers decides its tax treatment — a 'YYYY-MM'
+  // period resolves against the month's last day, so a rate that came in
+  // mid-month governs the bill for that month.
+  const asOf = billedOn(row);
+  // The QUANTITY on the page is the billed member count, not the raw one: a
+  // sub-minimum sacco is charged for MIN_BILLABLE_MEMBERS, so printing its own
+  // headcount would put a unit price on the invoice that does not multiply out
+  // to the amount charged. The label says why the two differ.
+  const activeMembers = num(row?.active_members);
+  const members = billableMembers(activeMembers);
+  const memberLabel = members > activeMembers
+    ? `Active member charges (${MIN_BILLABLE_MEMBERS}-member minimum)`
+    : 'Active member charges';
   const lines = storedLines([
     { label: `Base system price — ${row?.tier || '—'} tier`, qty: 1, unit: row?.base_fee, gross: row?.base_fee },
-    { label: 'Active member charges', qty: members, unit: members ? num(row?.per_member_fee_total) / members : 0, gross: row?.per_member_fee_total },
+    { label: memberLabel, qty: members, unit: members ? num(row?.per_member_fee_total) / members : 0, gross: row?.per_member_fee_total },
     { label: 'Storage excess', qty: 1, unit: row?.storage_fee, gross: row?.storage_fee },
     { label: 'Additional modules', qty: 1, unit: row?.module_fee, gross: row?.module_fee },
     { label: 'Installation & onboarding (one-time)', qty: 1, unit: row?.installation_fee, gross: row?.installation_fee },
   ]);
 
   if (hasStoredBreakdown(row)) {
-    return wrap(lines, row.subtotal, row.vat_rate, row.vat_amount, row.total);
+    return wrap(lines, row.subtotal, row.vat_rate, row.vat_amount, row.total, asOf);
   }
 
-  // Pre-migration row: back the tax out of the total it already carries, so
-  // the figure the sacco was billed is untouched and only disclosed.
+  // Pre-migration row: back the tax out of the total it already carries, at
+  // the rate that was in force for that period, so the figure the sacco was
+  // billed is untouched and only disclosed.
   const total = num(row?.total);
-  const vatRate = rateOf(row?.vat_rate);
+  const vatRate = rateOf(row?.vat_rate, asOf);
   const subtotal = money(total / (1 + vatRate / 100));
-  return wrap(lines, subtotal, vatRate, money(total - subtotal), total);
+  return wrap(lines, subtotal, vatRate, money(total - subtotal), total, asOf);
 }
 
 /**
@@ -146,11 +187,11 @@ export function invoiceForSaccoInvoice(row) {
  * Scales the components proportionally rather than dropping them: a stale
  * catalogue should cost the reader detail, not accuracy.
  */
-function reconcile(priced, paid) {
+function reconcile(priced, paid, asOf = null) {
   const factor = priced.total ? paid / priced.total : 0;
   const lines = priced.lines.map((l) => ({ ...l, gross: money(l.gross * factor) }));
-  const subtotal = money(paid / (1 + rateOf(priced.vatRate) / 100));
-  return wrap(lines, subtotal, priced.vatRate, money(paid - subtotal), paid);
+  const subtotal = money(paid / (1 + rateOf(priced.vatRate, asOf) / 100));
+  return wrap(lines, subtotal, priced.vatRate, money(paid - subtotal), paid, asOf);
 }
 
 export { VAT_RATE };

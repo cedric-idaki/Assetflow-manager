@@ -25,6 +25,7 @@ const ClientPortal = () => {
   const { userProfile } = useAuth();
   const {
     clientProfile,
+    companyProfile,
     myAssets,
     browseAssets,
     payments,
@@ -104,7 +105,8 @@ const ClientPortal = () => {
             )}
             {activeTab === 'payments' && (
               <PaymentsTab payments={payments} installmentPlans={installmentPlans}
-                clientProfile={clientProfile} onPay={initiateMpesaPayment} onExport={exportPayments} />
+                clientProfile={clientProfile} companyProfile={companyProfile}
+                onPay={initiateMpesaPayment} onExport={exportPayments} />
             )}
             {activeTab === 'kyc' && <KYCTab clientProfile={clientProfile} onUploaded={refetch} />}
             {activeTab === 'documents' && <DocumentCentreTab clientProfile={clientProfile} />}
@@ -114,7 +116,7 @@ const ClientPortal = () => {
             )}
             {activeTab === 'statement' && (
               <StatementDownloadTab payments={payments} installmentPlans={installmentPlans}
-                clientProfile={clientProfile} companyProfile={null} />
+                clientProfile={clientProfile} companyProfile={companyProfile} />
             )}
             {activeTab === 'enquiry' && (
               <ItemEnquiryTab clientProfile={clientProfile} enquiries={enquiries} onRefetch={refetch} />

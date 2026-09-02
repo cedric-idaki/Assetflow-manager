@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import Icon from '../../components/AppIcon';
-import { usePOS, buildInstallmentSchedule, VAT_RATE } from '../../hooks/usePOS';
+import { usePOS, buildInstallmentSchedule, vatFractionOn, vatPercentOn } from '../../hooks/usePOS';
 import { generateReceiptPDF } from '../../utils/generateReceiptPDF';
+import { useReceiptPrinter, PaperPicker } from './components/ReceiptPrinter';
+import SalesHistory from './components/SalesHistory';
 import { supabase } from '../../lib/supabase';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -64,11 +66,31 @@ const StepBar = ({ step }) => (
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-lg ${className}`} />;
 
 // ── Receipt popup ─────────────────────────────────────────────────────────────
-const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose, onNewSale, schedule }) => {
-  const [downloading, setDownloading] = React.useState(false);
+const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier, onClose, onNewSale, schedule }) => {
+  const [downloading, setDownloading]     = React.useState(false);
+  const [downloadError, setDownloadError] = React.useState('');
+
+  // The moment the money was taken, not the moment Print was pressed — a
+  // reprint has to show the customer the time of their transaction.
+  const issuedAt = result.payment?.payment_date || new Date().toISOString();
+
+  // `printed` defaults to 0: this is the till, so the first sheet is the
+  // original and only a second press is stamped DUPLICATE.
+  const printer = useReceiptPrinter({
+    buildArgs: () => ({
+      saleData, client, asset, companyProfile, schedule,
+      invoiceNo: result.invoiceNo,
+      receiptNo: result.receiptNo,
+      cashier, issuedAt,
+    }),
+  });
+
+  const actionError = printer.error || downloadError;
 
   const handleDownload = async () => {
     setDownloading(true);
+    setDownloadError('');
+    printer.setError('');
     try {
       await generateReceiptPDF({
         saleData,
@@ -80,7 +102,7 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
         receiptNo: result.receiptNo,
       });
     } catch (err) {
-      alert('PDF generation failed: ' + err.message);
+      setDownloadError('PDF generation failed: ' + err.message);
     } finally {
       setDownloading(false);
     }
@@ -123,7 +145,7 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
             <>
               <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(saleData.sellingPrice - (saleData.discountAmount || 0))}</span></div>
               {saleData.discountAmount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="text-red-500">-{fmt(saleData.discountAmount)}</span></div>}
-              {saleData.vatAmount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">VAT (16%)</span><span>{fmt(saleData.vatAmount)}</span></div>}
+              {saleData.vatAmount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({saleData.vatPercent ?? vatPercentOn()}%)</span><span>{fmt(saleData.vatAmount)}</span></div>}
               <div className="flex justify-between font-bold text-base pt-1 border-t border-border">
                 <span className="text-foreground">Total Paid</span>
                 <span className="text-emerald-600">{fmt(saleData.totalAmount)}</span>
@@ -155,27 +177,41 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
         </div>
       </div>
 
-      <div className="flex gap-2 px-6 pb-6">
-        <button onClick={onNewSale}
-          className="flex-1 py-2.5 border border-border text-sm font-medium text-muted-foreground rounded-xl hover:bg-muted transition-colors">
-          New Sale
-        </button>
-        <button onClick={() => window.print()}
-          className="py-2.5 px-4 text-sm font-medium border border-border text-foreground rounded-xl hover:bg-muted transition-colors">
-          Print
-        </button>
-        <button onClick={handleDownload} disabled={downloading}
-          className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold text-white rounded-xl disabled:opacity-60 transition-all"
-          style={{ background: 'linear-gradient(135deg,#1A56DB,#1E429F)' }}>
-          {downloading ? (
-            <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-            </svg> Generating...</>
-          ) : (
-            <><Icon name="Download" size={14} color="white" /> Download PDF</>
-          )}
-        </button>
+      <div className="px-6 pb-6 space-y-3">
+        {actionError && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{actionError}</div>
+        )}
+
+        <PaperPicker
+          paper={printer.paper}
+          onChange={printer.setPaper}
+          printedHere={printer.printedHere}
+          nextIsDuplicate={printer.nextIsDuplicate}
+        />
+
+        <div className="flex gap-2">
+          <button onClick={onNewSale}
+            className="flex-1 py-2.5 border border-border text-sm font-medium text-muted-foreground rounded-xl hover:bg-muted transition-colors">
+            New Sale
+          </button>
+          <button onClick={printer.print}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 text-sm font-semibold border border-border text-foreground rounded-xl hover:bg-muted transition-colors">
+            <Icon name="Printer" size={14} color="currentColor" />
+            {printer.printedHere > 0 ? 'Print Again' : 'Print Receipt'}
+          </button>
+          <button onClick={handleDownload} disabled={downloading}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold text-white rounded-xl disabled:opacity-60 transition-all"
+            style={{ background: 'linear-gradient(135deg,#1A56DB,#1E429F)' }}>
+            {downloading ? (
+              <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+              </svg> Generating...</>
+            ) : (
+              <><Icon name="Download" size={14} color="white" /> Download PDF</>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -187,14 +223,21 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
 // ══════════════════════════════════════════════════════════════════════════════
 const POSModule = () => {
   const {
-    clients, assets, companyProfile, loading, submitting, error: hookError,
+    adminId, clients, assets, companyProfile, loading, submitting, error: hookError,
     submitSale,
   } = usePOS();
 
+  // The till does two things: take a sale, and reissue a receipt for one
+  // already taken. Both belong to whoever is standing at the counter.
+  const [view, setView]               = useState('sale');
   const [step, setStep]               = useState(1);
   const [errors, setErrors]           = useState({});
   const [globalError, setGlobalError] = useState('');
   const [receipt, setReceipt]         = useState(null);
+  // Who served the customer. A receipt names the operator so a till dispute has
+  // someone to ask; the submit path already loads the profile for the approval
+  // checks, so it costs nothing to keep.
+  const [cashier, setCashier]         = useState('');
 
   const [clientSearch, setClientSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
@@ -247,8 +290,12 @@ const POSModule = () => {
     (parseFloat(sellingPrice) || 0) - discountAmount,
     [sellingPrice, discountAmount]);
 
+  // The rate in force on the day of supply, and the percentage the receipt
+  // prints, come from the same resolution — a till cannot state one rate and
+  // charge another.
+  const vatPercent = useMemo(() => vatPercentOn(), []);
   const vatAmount = useMemo(() =>
-    vatApplicable ? Math.round(priceAfterDiscount * VAT_RATE) : 0,
+    vatApplicable ? Math.round(priceAfterDiscount * vatFractionOn()) : 0,
     [priceAfterDiscount, vatApplicable]);
 
   const totalAmount = useMemo(() =>
@@ -338,6 +385,7 @@ const POSModule = () => {
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       const { data: currentProfile } = await supabase.from('user_profiles').select('full_name, role, admin_id').eq('id', currentUser.id).single();
       const isManagerRole = ['admin', 'manager', 'director'].includes(currentProfile?.role);
+      setCashier(currentProfile?.full_name || currentUser.email || '');
 
       if (totalAmount > LARGE_TXN_THRESHOLD && !isManagerRole) {
         const ref = `TXN-${Date.now().toString(36).toUpperCase()}`;
@@ -411,6 +459,9 @@ const POSModule = () => {
         discountAmount,
         discountReason,
         vatAmount,
+        // Stored on the sale so a reprint states the rate these figures were
+        // actually charged at, rather than whatever is in force when it prints.
+        vatPercent,
         totalAmount,
         depositAmount:   parseFloat(depositAmount) || 0,
         financeBalance,
@@ -463,7 +514,7 @@ const POSModule = () => {
           saleData={{
             pricingModel, sellingPrice: parseFloat(sellingPrice),
             discountAmount, discountPct, discountReason,
-            vatAmount, totalAmount,
+            vatAmount, vatPercent, totalAmount,
             depositAmount:      parseFloat(depositAmount) || 0,
             financeBalance,
             interestRate:       parseFloat(interestRate) || 0,
@@ -477,6 +528,7 @@ const POSModule = () => {
           }}
           schedule={schedule?.schedule}
           companyProfile={companyProfile}
+          cashier={cashier}
           onClose={() => setReceipt(null)}
           onNewSale={resetForm}
         />
@@ -491,20 +543,39 @@ const POSModule = () => {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-foreground">Point of Sale</h1>
-              <p className="text-xs text-muted-foreground">New asset sale transaction</p>
+              <p className="text-xs text-muted-foreground">
+                {view === 'sale' ? 'New asset sale transaction' : 'Reprint a receipt for a past sale'}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {step > 1 && (
+            {view === 'sale' && step > 1 && (
               <button onClick={resetForm} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 px-3 py-1.5 border border-border rounded-lg hover:bg-muted transition-colors">
                 <Icon name="RotateCcw" size={13} color="currentColor" /> Reset
               </button>
             )}
+            <div className="flex items-center gap-1 p-1 bg-muted/40 border border-border rounded-xl" role="tablist" aria-label="Point of Sale view">
+              {[
+                { value: 'sale',    label: 'New Sale', icon: 'ShoppingCart' },
+                { value: 'history', label: 'Receipts', icon: 'ReceiptText' },
+              ].map(t => (
+                <button key={t.value} role="tab" aria-selected={view === t.value}
+                  onClick={() => setView(t.value)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                    view === t.value ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                  <Icon name={t.icon} size={13} color="currentColor" /> {t.label}
+                </button>
+              ))}
+            </div>
             <ClosePageButton label="Close Point of Sale" />
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-2xl overflow-hidden">
+        {view === 'history' && (
+          <SalesHistory adminId={adminId} clients={clients} companyProfile={companyProfile} />
+        )}
+
+        <div className={`bg-card border border-border rounded-2xl overflow-hidden ${view === 'sale' ? '' : 'hidden'}`}>
           <StepBar step={step} />
 
           <div className="p-5 min-h-[400px]">
@@ -662,7 +733,7 @@ const POSModule = () => {
                       className={`w-10 h-6 rounded-full transition-colors flex items-center ${vatApplicable ? 'bg-primary justify-end' : 'bg-muted justify-start'}`}>
                       <span className="w-5 h-5 bg-white rounded-full shadow mx-0.5" />
                     </button>
-                    <label className="text-sm text-foreground">VAT (16%) applicable</label>
+                    <label className="text-sm text-foreground">VAT ({vatPercent}%) applicable</label>
                   </div>
                 </div>
                 {pricingModel !== 'cash' && (
@@ -696,7 +767,7 @@ const POSModule = () => {
                   {[
                     { label: 'Selling Price', value: fmt(sellingPrice || 0) },
                     discountAmount > 0 && { label: 'Discount', value: `-${fmt(discountAmount)}` },
-                    vatApplicable && { label: 'VAT (16%)', value: fmt(vatAmount) },
+                    vatApplicable && { label: `VAT (${vatPercent}%)`, value: fmt(vatAmount) },
                     { label: 'Total Amount', value: fmt(totalAmount), bold: true },
                     pricingModel !== 'cash' && { label: 'Deposit', value: fmt(depositAmount || 0) },
                     pricingModel !== 'cash' && { label: 'Finance Balance', value: fmt(financeBalance) },
@@ -828,7 +899,7 @@ const POSModule = () => {
                     { label: 'Pricing Model', value: PRICING_MODELS.find(m => m.value === pricingModel)?.label },
                     { label: 'Selling Price', value: fmt(sellingPrice || 0) },
                     discountAmount > 0 && { label: 'Discount Applied', value: `${discountPct}% = -${fmt(discountAmount)}` },
-                    vatApplicable && { label: 'VAT (16%)', value: fmt(vatAmount) },
+                    vatApplicable && { label: `VAT (${vatPercent}%)`, value: fmt(vatAmount) },
                     { label: 'Total Amount', value: fmt(totalAmount), bold: true },
                     pricingModel !== 'cash' && { label: 'Deposit (Now)', value: fmt(depositAmount || 0), bold: true },
                     pricingModel !== 'cash' && { label: 'Finance Balance', value: fmt(financeBalance) },

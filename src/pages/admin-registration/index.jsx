@@ -5,8 +5,8 @@ import Icon from '../../components/AppIcon';
 import BrandPreviewPanel from '../../components/BrandPreviewPanel';
 import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
-import { COMPANY_PLANS as PLANS, planForUsers } from '../../config/companyPlans';
-import { tierForMembers, SACCO_TIERS } from '../../config/saccoTiers';
+import { COMPANY_PLANS as PLANS, planForUsers, MIN_BILLABLE_USERS } from '../../config/companyPlans';
+import { tierForMembers, billableMembers, MIN_BILLABLE_MEMBERS, SACCO_TIERS } from '../../config/saccoTiers';
 import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../config/kenyaCounties';
 import { PRESETS, PRESET_LABELS, modulesForScope, dependenciesOf } from '../../config/modules';
 import { buildSystemInvoice } from '../../config/systemBilling';
@@ -106,7 +106,9 @@ const AdminRegistration = () => {
   // bill = base fee + members × per-member fee (saccoTiers.js, BRS §7.2).
   const [numberOfUsers, setNumberOfUsers] = useState('');
   const userCount = parseInt(numberOfUsers, 10) || 0;
-  const saccoTier = isSacco && userCount >= 1 ? tierForMembers(userCount) : null;
+  // Tier off the BILLED member count (>= MIN_BILLABLE_MEMBERS), so the card and
+  // the quote below can never name different tiers.
+  const saccoTier = isSacco && userCount >= 1 ? tierForMembers(billableMembers(userCount)) : null;
   // Normalise the sacco tier into the shape the plan card renders so steps 3–4
   // can treat both flows the same.
   const activePlan = isSacco
@@ -394,7 +396,13 @@ const AdminRegistration = () => {
         plan_name: activePlan.id,
         status: 'pending',
         price_paid: totalPrice,
-        max_users: userCount, // seats the admin paid for
+        // Seats the admin PAID for. Every product line is billed on at least
+        // its own floor — MIN_BILLABLE_USERS (companyPlans.js) for a Business,
+        // MIN_BILLABLE_MEMBERS (saccoTiers.js) for a sacco or chama — so a
+        // one-person signup pays for, and therefore gets, two, and a
+        // three-member chama five. quote.billedSeats is the same figure the
+        // invoice line and the M-Pesa amount were built from.
+        max_users: quote.billedSeats,
         start_date: new Date().toISOString(),
         end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       };
@@ -410,6 +418,10 @@ const AdminRegistration = () => {
         subtotal: quote.subtotal,
         vat_rate: quote.vatRate,
         vat_amount: quote.vatAmount,
+        // WHICH regulation set that rate, not just what the rate was. See
+        // 20260902120000_billing_tax_regime.sql; it rides in the same
+        // fallback as the rest of the breakdown.
+        tax_regime: quote.taxRegime.version,
       };
 
       const insertSubscription = (row) => supabase
@@ -1057,7 +1069,7 @@ const AdminRegistration = () => {
                   </div>
                   <input
                     type="number"
-                    min="1"
+                    min={isSacco ? MIN_BILLABLE_MEMBERS : MIN_BILLABLE_USERS}
                     inputMode="numeric"
                     value={numberOfUsers}
                     onChange={e => setNumberOfUsers(e.target.value.replace(/[^0-9]/g, ''))}
@@ -1076,8 +1088,8 @@ const AdminRegistration = () => {
                 </div>
                 <p className="text-xs mt-1" style={{ color: C.textMuted }}>
                   {isSacco
-                    ? 'How many members your Sacco / Chama has. Your tier is chosen automatically and per-member fees are billed monthly.'
-                    : 'How many staff login accounts you need. Your plan is chosen automatically.'}
+                    ? `How many members your Sacco / Chama has. Your tier is chosen automatically and per-member fees are billed monthly, starting at a ${MIN_BILLABLE_MEMBERS}-member minimum.`
+                    : `How many staff login accounts you need. Your plan is chosen automatically. Billing starts at a ${MIN_BILLABLE_USERS}-user minimum.`}
                 </p>
               </div>
 

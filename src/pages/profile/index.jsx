@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { formatKEPhone } from '../../utils/phoneUtils';
-import { planForUsers, subscriptionPriceFor, planById } from '../../config/companyPlans';
+import { planForUsers, subscriptionPriceFor, planById, MIN_BILLABLE_USERS } from '../../config/companyPlans';
 import { tierById } from '../../config/saccoTiers';
 import useAdminSubscription from '../../hooks/useAdminSubscription';
 import { useSaccoDashboardContext } from '../../contexts/SaccoDashboardContext';
@@ -315,10 +315,10 @@ const PasswordCard = ({ email }) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 const PlanCard = ({ sub }) => {
   const { subscription, seats, planName, monthlyCost, status, startDate, endDate, daysRemaining, expired, changeSeats, refetch } = sub;
-  const [draft, setDraft] = useState(seats || 1);
+  const [draft, setDraft] = useState(seats || MIN_BILLABLE_USERS);
   const [busy, setBusy]   = useState(false);
   const [msg, setMsg]     = useState(null);
-  React.useEffect(() => { setDraft(seats || 1); }, [seats]);
+  React.useEffect(() => { setDraft(seats || MIN_BILLABLE_USERS); }, [seats]);
 
   const meta        = tierMeta(planName);
   const draftPlan   = planForUsers(draft);
@@ -385,18 +385,18 @@ const PlanCard = ({ sub }) => {
       <div className="rounded-xl border border-border p-4">
         <div className="text-sm font-semibold text-foreground mb-1">Upgrade or downgrade users</div>
         <p className="text-xs text-muted-foreground mb-4">
-          Changes take effect once the current subscription period ends — your current plan stays active until then. The tier adjusts automatically to the number of users.
+          Changes take effect once the current subscription period ends — your current plan stays active until then. The tier adjusts automatically to the number of users, and billing starts at a {MIN_BILLABLE_USERS}-user minimum.
         </p>
 
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <label className="block text-xs font-semibold text-muted-foreground mb-1.5">User seats</label>
             <div className="flex items-center gap-2">
-              <button className={btnSec} style={{ padding: '0.5rem' }} disabled={draft <= 1} onClick={() => setDraft((d) => Math.max(1, d - 1))}>
+              <button className={btnSec} style={{ padding: '0.5rem' }} disabled={draft <= MIN_BILLABLE_USERS} onClick={() => setDraft((d) => Math.max(MIN_BILLABLE_USERS, d - 1))}>
                 <Icon name="Minus" size={16} color="currentColor" />
               </button>
-              <input type="number" min={1} className={`${inputCls} w-20 text-center`} value={draft}
-                onChange={(e) => setDraft(Math.max(1, parseInt(e.target.value, 10) || 1))} />
+              <input type="number" min={MIN_BILLABLE_USERS} className={`${inputCls} w-20 text-center`} value={draft}
+                onChange={(e) => setDraft(Math.max(MIN_BILLABLE_USERS, parseInt(e.target.value, 10) || MIN_BILLABLE_USERS))} />
               <button className={btnSec} style={{ padding: '0.5rem' }} onClick={() => setDraft((d) => d + 1)}>
                 <Icon name="Plus" size={16} color="currentColor" />
               </button>

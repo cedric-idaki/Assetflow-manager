@@ -35,6 +35,8 @@
  * than showing a confident zero or, worse, a made-up number.
  */
 
+import { vatRateOn } from '../config/taxRegulations';
+
 /** A VAT account at all? */
 const VAT_TOKEN = /\bvat\b|value[\s-]*added[\s-]*tax/i;
 
@@ -107,8 +109,14 @@ export const computeVatReturn = ({
   journals = [],
   chartOfAccounts = [],
   period = null,
-  rate = 0.16,
+  // The standard rate for the period being returned, as a fraction. Resolved
+  // from src/config/taxRegulations.js rather than fixed at 0.16, so a return
+  // for a period under a different rate grosses its figures up at THAT rate.
+  // It only feeds the taxableSales / taxablePurchases derivation below — the
+  // VAT itself is read off the ledger and never computed from a rate.
+  rate = null,
 } = {}) => {
+  const effectiveRate = rate == null ? vatRateOn(period) / 100 : rate;
   const { index, unclassified } = vatAccountIndex(chartOfAccounts);
 
   // A journal line can name an account that was never added to the chart, so
@@ -157,15 +165,15 @@ export const computeVatReturn = ({
 
   return {
     period,
-    rate,
+    rate: effectiveRate,
     outputVAT,
     inputVAT,
     netVAT: round2(outputVAT - inputVAT),
     // The tax-exclusive value the VAT was charged on. Derived from the tax at
-    // the standard rate, so it is only meaningful where everything is standard
-    // rated — the panel labels it as such.
-    taxableSales: rate > 0 ? round2(outputVAT / rate) : 0,
-    taxablePurchases: rate > 0 ? round2(inputVAT / rate) : 0,
+    // the standard rate for the period, so it is only meaningful where
+    // everything is standard rated — the panel labels it as such.
+    taxableSales: effectiveRate > 0 ? round2(outputVAT / effectiveRate) : 0,
+    taxablePurchases: effectiveRate > 0 ? round2(inputVAT / effectiveRate) : 0,
 
     diagnostics: {
       // Distinguishes "no input VAT account exists" from "one exists but

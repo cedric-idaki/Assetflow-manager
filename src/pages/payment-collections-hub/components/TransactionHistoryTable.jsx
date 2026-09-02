@@ -5,6 +5,7 @@ import Select from '../../../components/ui/Select';
 import Button from '../../../components/ui/Button';
 import { sendPaymentConfirmation, sendInvoiceEmail } from '../../../services/emailService';
 import { html, rawHtml } from '../../../utils/htmlEscape';
+import { buildPaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 
 const fmtKES = (n) => `KES ${Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const isPaidStatus = (s) => s === 'completed' || s === 'successful';
@@ -99,12 +100,27 @@ const printTxnReceipt = (txn, company) => {
 };
 
 const TransactionHistoryTable = ({ transactions, companyProfile }) => {
+  const [downloading, setDownloading] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMethod, setFilterMethod] = useState('all');
   const [filterDateRange, setFilterDateRange] = useState('all');
   const [selected, setSelected] = useState(null);
   const [emailing, setEmailing] = useState(false);
   const [emailMsg, setEmailMsg] = useState(null);
+
+  // Printing is a dialog; this is a file. A client asking for "the receipt" is
+  // asking for something they can attach to an email or file with their books,
+  // which the print window has never given them.
+  const downloadTxnDocument = async (txn) => {
+    setDownloading(txn?.id);
+    try {
+      await downloadAccountingDocument(buildPaymentReceipt({ txn, company: companyProfile }));
+    } catch (e) {
+      window.alert(e?.message || 'Could not generate the document.');
+    } finally {
+      setDownloading(null);
+    }
+  };
 
   const paymentMethodOptions = [
     { value: 'all', label: 'All Methods' },
@@ -326,6 +342,15 @@ const TransactionHistoryTable = ({ transactions, companyProfile }) => {
                       title="Print receipt / invoice"
                       icon={<Icon name="Printer" size={15} color="currentColor" />}
                     />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      loading={downloading === txn?.id}
+                      disabled={downloading === txn?.id}
+                      onClick={() => downloadTxnDocument(txn)}
+                      title={isPaidStatus(txn?.status) ? 'Download receipt (PDF)' : 'Download invoice (PDF)'}
+                      icon={<Icon name="Download" size={15} color="currentColor" />}
+                    />
                   </div>
                 </td>
               </tr>
@@ -405,6 +430,17 @@ const TransactionHistoryTable = ({ transactions, companyProfile }) => {
                 onClick={() => printTxnReceipt(txn, companyProfile)}
               >
                 Print
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                loading={downloading === txn?.id}
+                disabled={downloading === txn?.id}
+                icon={<Icon name="Download" size={14} color="currentColor" />}
+                iconPosition="left"
+                onClick={() => downloadTxnDocument(txn)}
+              >
+                Download
               </Button>
             </div>
           </div>
@@ -520,6 +556,17 @@ const TransactionHistoryTable = ({ transactions, companyProfile }) => {
                 onClick={() => printTxnReceipt(selected, companyProfile)}
               >
                 Print
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                loading={downloading === selected?.id}
+                disabled={downloading === selected?.id}
+                icon={<Icon name="Download" size={14} color="currentColor" />}
+                iconPosition="left"
+                onClick={() => downloadTxnDocument(selected)}
+              >
+                {isPaidStatus(selected.status) ? 'Download Receipt' : 'Download Invoice'}
               </Button>
               <Button
                 variant="outline"
