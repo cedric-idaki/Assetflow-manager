@@ -530,6 +530,7 @@ set search_path = public, pg_temp
 as $$
 declare
   v_admin_id uuid := public.assert_tenant_owner();
+  v_rows     integer;
 begin
   execute 'update public.company_profiles
               set self_signup_enabled = $1,
@@ -537,7 +538,10 @@ begin
             where admin_id = $2'
     using coalesce(p_enabled, false), v_admin_id;
 
-  if not found then
+  -- EXECUTE feeds GET DIAGNOSTICS but leaves FOUND alone, and FOUND starts
+  -- false in every call -- `if not found` here would raise on every success.
+  get diagnostics v_rows = row_count;
+  if v_rows = 0 then
     raise exception 'no company profile for this tenant' using errcode = '22023';
   end if;
 
@@ -562,11 +566,15 @@ as $$
 declare
   v_admin_id uuid := public.assert_tenant_owner();
   v_code     text := public.generate_signup_code();
+  v_rows     integer;
 begin
   execute 'update public.company_profiles set signup_code = $1 where admin_id = $2'
     using v_code, v_admin_id;
 
-  if not found then
+  -- EXECUTE feeds GET DIAGNOSTICS but leaves FOUND alone, and FOUND starts
+  -- false in every call -- `if not found` here would raise on every success.
+  get diagnostics v_rows = row_count;
+  if v_rows = 0 then
     raise exception 'no company profile for this tenant' using errcode = '22023';
   end if;
 
