@@ -1380,7 +1380,7 @@ const SalesAgentPortal = () => {
             {/* KPI Row */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <KPICard
-                label="Wallet Balance"
+                label="Income Balance"
                 value={fmt(kpis?.walletBalance)}
                 icon="Wallet"
                 colorClass="text-emerald-600"
