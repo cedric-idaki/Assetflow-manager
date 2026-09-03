@@ -89,6 +89,20 @@ const SHARED_STYLES = `
   .row > span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .total { font-weight: 700; }
   .dup { border: 2px solid #000; text-align: center; font-weight: 700; letter-spacing: .15em; padding: 4px; margin-bottom: 8px; }
+
+  /* ── KRA eTIMS ────────────────────────────────────────────────────────────
+     A receipt signature is a long unbroken token that a customer may have to
+     read back to KRA character by character, so it is monospaced (where the
+     ambiguous glyph pairs separate) and allowed to wrap ANYWHERE — break-word
+     alone will not split a single unspaced token, and on a 72mm roll an
+     unsplittable signature runs off the edge of the paper. */
+  .mono { font-family: "Courier New", Courier, monospace; word-break: break-all; overflow-wrap: anywhere; }
+  .etims-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: #555; }
+  .etims-sig { margin: 4px 0; }
+  .etims-url { font-size: 8px; color: #555; word-break: break-all; overflow-wrap: anywhere; margin-top: 4px; text-align: center; }
+  .etims-qr { text-align: center; margin: 6px 0; }
+  .etims-qr img { width: 96px; height: 96px; image-rendering: pixelated; }
+  .etims-pending { border: 1px dashed #000; padding: 4px; font-size: 10px; text-align: center; }
 `;
 
 export const THERMAL_STYLES = `
@@ -168,6 +182,22 @@ export const buildPosReceipt = ({
   cashier,
   issuedAt,
   copyNo = 1,
+  /**
+   * The eTIMS transmission row for this sale, where the tenant files with KRA.
+   *
+   * Absent for the great majority of tenants, who have the module switched off
+   * — and the receipt is then exactly what it always was. Present and unfiled
+   * is its own case, handled in etimsBlock(): a receipt that quietly omitted
+   * the block would look indistinguishable from a compliant one.
+   */
+  etims = null,
+  /**
+   * The KRA verification QR, pre-rendered as a data URI by the caller (see
+   * src/utils/qrLoader.js). Passed in rather than drawn here so this builder
+   * stays pure and synchronous, and so a CDN failure costs the image and not
+   * the receipt.
+   */
+  qrImage = null,
 } = {}) => {
   const isCash     = saleData.pricingModel === 'cash';
   const gross      = parseFloat(saleData.sellingPrice) || 0;
@@ -235,6 +265,31 @@ export const buildPosReceipt = ({
       totalPayable: parseFloat(saleData.totalPayable) || 0,
     },
     schedule: Array.isArray(schedule) ? schedule : [],
+
+    /**
+     * What eTIMS has, or has not, done with this sale.
+     *
+     * `filed` is the only thing that makes the printed block a valid tax
+     * invoice, so it is derived from the presence of a SIGNATURE rather than
+     * from the row's status — a status can be set by a code path, a signature
+     * can only come from KRA.
+     */
+    etims: etims ? {
+      filed:            Boolean(etims.receipt_signature),
+      signature:        etims.receipt_signature || '',
+      internalData:     etims.internal_data || '',
+      invoiceNumber:    etims.invoice_number ?? null,
+      kraInvoiceNumber: etims.kra_invoice_number ?? null,
+      controlUnitId:    etims.control_unit_id || '',
+      controlUnitAt:    etims.control_unit_at || '',
+      verifyUrl:        etims.qr_url || '',
+      status:           etims.status || 'pending',
+      // A sandbox filing is a test that reached nothing. Printing it as though
+      // it were a real one would hand a customer a receipt asserting a filing
+      // that does not exist.
+      isSandbox:        (etims.environment || 'sandbox') !== 'production',
+      qrImage:          qrImage || null,
+    } : null,
   };
 };
 
@@ -294,6 +349,71 @@ const amountsBlock = (m, isCash) => rawHtml(html`
   ${optionalLine('Balance', fmt(m.balance), m.balance > 0, 'total')}
 `);
 
+/**
+ * THE KRA eTIMS BLOCK — what makes the paper a valid tax invoice.
+ *
+ * A receipt for a supply filed with eTIMS must carry the control-unit data KRA
+ * returned: the receipt signature, the internal data block, the control unit's
+ * id and the invoice number KRA assigned. Those four are what let anyone
+ * holding the paper verify the sale was really filed, and a receipt without
+ * them is not a valid tax invoice however correct its figures are.
+ *
+ * ── THE UNFILED CASE, WHICH IS THE WHOLE REASON THIS IS NOT A ONE-LINER ─────
+ * Filing happens after the sale, on a queue, precisely so that a KRA outage
+ * cannot stop a shop trading (see migration 20260902160000). So a receipt is
+ * routinely printed BEFORE its document has been transmitted.
+ *
+ * That receipt must say so. If it silently omitted the block it would be
+ * indistinguishable from a compliant one, and neither the cashier nor the
+ * customer would ever learn that the sale still needs a compliant copy. So an
+ * unfiled sale prints an explicit line saying the filing is pending and that a
+ * compliant copy can be reprinted once it completes — which is true, because
+ * the signature is stored against the sale and the reprint path reads it.
+ *
+ * A sandbox filing is called out for the same reason: it looks exactly like a
+ * real one and reached nothing at all.
+ */
+const etimsBlock = (e) => {
+  if (!e) return '';
+
+  if (!e.filed) {
+    return rawHtml(html`
+      <div class="rule"></div>
+      <div class="lbl">KRA eTIMS</div>
+      <div class="etims-pending">
+        Tax filing pending — this sale has not yet been transmitted to KRA.
+        Ask for a reprint once it completes if you need the compliant copy.
+      </div>
+    `);
+  }
+
+  return rawHtml(html`
+    <div class="rule"></div>
+    <div class="lbl">KRA eTIMS${e.isSandbox ? ' — TEST DOCUMENT, NOT FILED WITH KRA' : ''}</div>
+    <div class="etims">
+      ${line('Invoice No.', String(e.kraInvoiceNumber ?? e.invoiceNumber ?? ''))}
+      ${optionalLine('Control Unit', e.controlUnitId, !!e.controlUnitId)}
+      ${optionalLine('Date', e.controlUnitAt, !!e.controlUnitAt)}
+      <div class="etims-sig">
+        <div class="etims-lbl">Receipt Signature</div>
+        <div class="mono">${e.signature}</div>
+      </div>
+      ${e.internalData ? rawHtml(html`
+        <div class="etims-sig">
+          <div class="etims-lbl">Internal Data</div>
+          <div class="mono">${e.internalData}</div>
+        </div>
+      `) : ''}
+      ${e.qrImage
+        ? rawHtml(html`<div class="etims-qr"><img src="${e.qrImage}" alt="KRA verification QR code" /></div>`)
+        : ''}
+      ${/* Always printed, QR or not — the QR only encodes this. A receipt whose
+            image failed to draw is still verifiable by typing the address. */ ''}
+      ${e.verifyUrl ? rawHtml(html`<div class="etims-url">${e.verifyUrl}</div>`) : ''}
+    </div>
+  `);
+};
+
 const planBlock = (plan) => (plan ? rawHtml(html`
   <div class="rule"></div>
   <div class="lbl">Payment Plan</div>
@@ -334,6 +454,7 @@ export const thermalBody = (r) => html`
   ${line('Paid by', r.paymentLabel)}
   ${optionalLine('Reference', r.paymentRef, !!r.paymentRef)}
   ${planBlock(r.plan)}
+  ${etimsBlock(r.etims)}
   <div class="rule-solid"></div>
   <div class="foot">
     ${r.isTaxReceipt && r.issuer.kraPin
@@ -386,6 +507,7 @@ export const a4Body = (r) => html`
   ${line('Paid by', r.paymentLabel)}
   ${optionalLine('Reference', r.paymentRef, !!r.paymentRef)}
   ${planBlock(r.plan)}
+  ${etimsBlock(r.etims)}
   ${scheduleTable(r.schedule)}
   <div class="sigs">
     <div class="sig">Customer Signature</div>
@@ -453,6 +575,17 @@ export const reprintArgsFromSale = ({
   payment,
   companyProfile,
   cashier,
+  /**
+   * The sale's eTIMS row, where the tenant files with KRA.
+   *
+   * This is the main reason a reprint is worth having for an eTIMS tenant at
+   * all: the receipt handed over at the till was almost certainly printed
+   * BEFORE the document reached KRA (filing is queued so an outage cannot stop
+   * a shop trading). Reprinting after it lands is how the customer gets the
+   * compliant copy, and the signature comes from this row.
+   */
+  etims = null,
+  qrImage = null,
 } = {}) => {
   const rows = (Array.isArray(schedule) ? schedule : []).map((r) => ({
     installmentNo:     r.installment_no,
@@ -502,6 +635,8 @@ export const reprintArgsFromSale = ({
     // The moment the money was taken. payment_date is the payment's own
     // timestamp; sale_date is a date only, so it is the coarser fallback.
     issuedAt: payment?.payment_date || sale.sale_date || sale.created_at,
+    etims,
+    qrImage,
   };
 };
 

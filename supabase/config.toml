@@ -186,3 +186,26 @@ entrypoint = "./functions/signnow-documents/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/signnow-webhook/index.ts"
+
+# Tenant KRA eTIMS device registration. The caller's JWT decides whose device
+# this is, so verify_jwt MUST stay true; admin_id is never read from the request
+# body. This is the only write path to etims_credentials, which has RLS on with
+# zero policies. Requires the ETIMS_CRED_ENC_KEY function secret — without it
+# the function refuses to save rather than storing a device key in plaintext.
+[functions.etims-credentials]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/etims-credentials/index.ts"
+
+# The eTIMS queue drain — the only thing on this platform that files a tax
+# document with KRA. Run it on a schedule (every 5 minutes), the same way
+# agent-followup-reminders and kyc-renewal-reminders are run.
+#
+# verify_jwt = false so the scheduler can invoke it with the service-role key,
+# which also means the platform performs no auth here: the function accepts the
+# service-role key or CRON_SECRET for a whole-platform drain, and otherwise
+# authenticates the caller itself and drains only THEIR tenant's queue.
+[functions.etims-transmit]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/etims-transmit/index.ts"

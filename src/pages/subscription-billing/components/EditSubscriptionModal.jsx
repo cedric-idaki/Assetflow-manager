@@ -1,43 +1,60 @@
 import React, { useState, useEffect } from 'react';
 import Icon from '../../../components/AppIcon';
 import PricingTierCard from './PricingTierCard';
+import InvoiceBreakdown from './InvoiceBreakdown';
 import {
-  CLIENT_TYPE, TIER,
-  CORPORATE_TIERS, SACCO_TIERS,
-  calcCorporateTotal, calcSaccoTotal,
+  CLIENT_TYPE,
+  tiersFor,
+  productLineFor,
+  quoteSubscription,
 } from '../../../config/subscriptionPricing';
+import { PRESETS } from '../../../config/modules';
 
-const fmt = (n) => `KES ${(n || 0).toLocaleString()}`;
-
+/**
+ * Edit an existing subscription and see the invoice it will produce.
+ *
+ * The preview is a RENEWAL — installation is a one-time charge and an edit
+ * must never re-raise it — priced through buildSystemInvoice() so what the
+ * operator approves here is what the client is billed.
+ */
 const EditSubscriptionModal = ({ client, onClose, onSave }) => {
-  const [tier, setTier]         = useState(client?.tier ?? TIER.BRONZE);
-  const [users, setUsers]       = useState(client?.users ?? 10);
-  const [members, setMembers]   = useState(client?.members ?? 50);
-  const [extra, setExtra]       = useState(client?.extraSignings ?? 0);
-  const [saving, setSaving]     = useState(false);
+  const [tier, setTier] = useState(client?.tier ?? null);
+  const [autoTier, setAutoTier] = useState(true);
+  const [seats, setSeats] = useState(client?.seats ?? 0);
+  const [storageGb, setStorageGb] = useState(client?.storageGb ?? 0);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (client) {
       setTier(client.tier);
-      setUsers(client.users);
-      setMembers(client.members);
-      setExtra(client.extraSignings);
+      setSeats(client.seats ?? 0);
+      setStorageGb(client.storageGb ?? 0);
+      setAutoTier(true);
     }
   }, [client]);
 
   if (!client) return null;
 
   const isCorporate = client.type === CLIENT_TYPE.CORPORATE;
-  const tiers       = isCorporate ? CORPORATE_TIERS : SACCO_TIERS;
+  const productLine = productLineFor(client.type);
+  const tiers = tiersFor(client.type);
+  const modules = PRESETS[productLine] || PRESETS.custom;
 
-  const result = isCorporate
-    ? calcCorporateTotal(tier, users, extra)
-    : calcSaccoTotal(tier, members, extra);
+  const quote = quoteSubscription({
+    clientType: client.type,
+    tierId: autoTier ? null : tier,
+    seats,
+    storageGb,
+    modules,
+    chargeInstallation: false,
+  });
+
+  const activeTierId = quote.tier?.id || tier;
 
   const handleSave = async () => {
     setSaving(true);
-    await new Promise(r => setTimeout(r, 600)); // simulate API
-    onSave?.({ ...client, tier, users, members, extraSignings: extra });
+    await new Promise((r) => setTimeout(r, 600)); // simulate API
+    onSave?.({ ...client, tier: activeTierId, seats, storageGb });
     setSaving(false);
     onClose();
   };
@@ -45,8 +62,7 @@ const EditSubscriptionModal = ({ client, onClose, onSave }) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-card border border-border rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
-
+      <div className="relative bg-card border border-border rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-card z-10">
           <div>
@@ -60,28 +76,48 @@ const EditSubscriptionModal = ({ client, onClose, onSave }) => {
 
         <div className="p-6 space-y-6">
           {/* Client type badge */}
-          <div className="flex items-center gap-2">
-            <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${
-              isCorporate ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
-            }`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${
+                isCorporate ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+              }`}
+            >
               <Icon name={isCorporate ? 'Building2' : 'Users'} size={12} color="currentColor" />
               {isCorporate ? 'Corporate Client' : 'SACCO Client'}
             </span>
-            <span className="text-xs text-muted-foreground">· Model cannot be changed after setup</span>
+            <span className="text-xs text-muted-foreground">
+              · Model cannot be changed after setup
+            </span>
           </div>
 
           {/* Tier selection */}
           <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Select Tier</p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Tier
+              </p>
+              <button
+                onClick={() => setAutoTier((v) => !v)}
+                className={`text-[11px] font-semibold px-2 py-1 rounded-md border transition-colors ${
+                  autoTier
+                    ? 'border-primary/40 text-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {autoTier ? 'Auto — from headcount' : 'Manual override'}
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {Object.entries(tiers).map(([key, t]) => (
                 <PricingTierCard
                   key={key}
-                  tierKey={key}
                   tier={t}
                   type={client.type}
-                  isSelected={tier === key}
-                  onSelect={() => setTier(key)}
+                  isSelected={activeTierId === key}
+                  onSelect={() => {
+                    setAutoTier(false);
+                    setTier(key);
+                  }}
                 />
               ))}
             </div>
@@ -91,43 +127,38 @@ const EditSubscriptionModal = ({ client, onClose, onSave }) => {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1">
-                {isCorporate ? 'Number of Users' : 'Number of SACCO Members'}
+                {isCorporate ? 'Licensed Users' : 'Active SACCO Members'}
               </label>
               <input
                 type="number"
-                min={1}
-                value={isCorporate ? users : members}
-                onChange={e => isCorporate
-                  ? setUsers(Math.max(1, parseInt(e.target.value) || 1))
-                  : setMembers(Math.max(1, parseInt(e.target.value) || 1))
-                }
+                min={0}
+                value={seats}
+                onChange={(e) => setSeats(Math.max(0, parseInt(e.target.value, 10) || 0))}
                 className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm font-semibold text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1">
-                Extra External Signings
+                Storage Used (GB)
               </label>
               <input
                 type="number"
                 min={0}
-                value={extra}
-                onChange={e => setExtra(Math.max(0, parseInt(e.target.value) || 0))}
+                value={storageGb}
+                onChange={(e) => setStorageGb(Math.max(0, parseInt(e.target.value, 10) || 0))}
                 className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm font-semibold text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </div>
           </div>
 
-          {/* Cost preview */}
-          <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">New Monthly Total</p>
-            <p className="text-3xl font-extrabold text-primary">{fmt(result.total)}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {isCorporate
-                ? `${isCorporate ? users : members} users × KES ${CORPORATE_TIERS[tier]?.pricePerUser?.toLocaleString()}`
-                : `KES ${SACCO_TIERS[tier]?.baseFee} base + ${members} members × KES ${SACCO_TIERS[tier]?.perMemberFee}`
-              }
-              {extra > 0 && ` + ${extra} extra signings`}
+          {/* The invoice this produces */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+              New Monthly Invoice
+            </p>
+            <InvoiceBreakdown quote={quote} productLine={productLine} modules={modules} />
+            <p className="text-[11px] text-muted-foreground mt-2">
+              Renewal — the one-time installation fee is not re-charged.
             </p>
           </div>
         </div>
@@ -147,9 +178,13 @@ const EditSubscriptionModal = ({ client, onClose, onSave }) => {
             style={{ background: 'linear-gradient(135deg, #1A56DB, #1E429F)' }}
           >
             {saving ? (
-              <><Icon name="Loader" size={14} color="#fff" className="animate-spin" /> Saving…</>
+              <>
+                <Icon name="Loader" size={14} color="#fff" className="animate-spin" /> Saving…
+              </>
             ) : (
-              <><Icon name="Save" size={14} color="#fff" /> Save Changes</>
+              <>
+                <Icon name="Save" size={14} color="#fff" /> Save Changes
+              </>
             )}
           </button>
         </div>

@@ -40,4 +40,45 @@ export const loadJsPDF = () => {
   return pending;
 };
 
+/**
+ * TEXT THE STANDARD PDF FONTS CAN ACTUALLY DRAW.
+ *
+ * jsPDF's built-in Helvetica is encoded WinAnsi (cp1252). Hand it anything
+ * outside that and it does not fall back or drop the character — it mangles the
+ * WHOLE string: "≤ 30 Days" came out of the KYC expiry report as
+ * `"d    3 0    D a y s`. Silent, and only visible once somebody prints it.
+ *
+ * Two characters this app meets constantly are outside cp1252: the ≤ and ≥ in
+ * every bucket label, and the ũ in Kenyan names like Wanjirũ. So symbols get an
+ * ASCII spelling, and everything else is stripped back to its base letter
+ * through NFD — Wanjirũ prints as Wanjiru, which is readable and wrong in a way
+ * a reader can see past, rather than illegible and wrong in a way they cannot.
+ *
+ * Embedding a Unicode font would fix it properly and costs a ~300KB TTF on
+ * every PDF; not worth it until something actually needs non-Latin script.
+ */
+const SYMBOLS = {
+  '≤': '<=', '≥': '>=', '≠': '!=', '≈': '~', '≡': '=',
+  '→': '->', '←': '<-', '↔': '<->', '↑': '^', '↓': 'v',
+  '−': '-', '‒': '-', '⁻': '-', '№': 'No.', '∞': 'inf',
+  '☑': '[x]', '☐': '[ ]', '✓': 'v', '✗': 'x', '★': '*',
+};
+
+// Printable ASCII, Latin-1, and the punctuation cp1252 adds in 0x80-0x9F.
+const DRAWABLE = /[\u0020-\u007e\u00a0-\u00ff\u20ac\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\u017d\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u017e\u0178]/;
+
+export const pdfSafeText = (value) => {
+  const s = String(value ?? '');
+  let out = '';
+  for (const ch of s) {
+    if (DRAWABLE.test(ch)) { out += ch; continue; }
+    if (SYMBOLS[ch] !== undefined) { out += SYMBOLS[ch]; continue; }
+    // Strip the accent and keep the letter; drop what is left if even the base
+    // form is undrawable.
+    const base = ch.normalize('NFD').replace(/\p{M}/gu, '');
+    out += [...base].filter((c) => DRAWABLE.test(c)).join('');
+  }
+  return out;
+};
+
 export default loadJsPDF;

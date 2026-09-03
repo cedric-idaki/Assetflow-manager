@@ -102,6 +102,16 @@ export const MODULES = [
     requires: [], routes: ['/finance-hub'],
     desc: 'Books that stay balanced without a month-end scramble.',
   },
+  {
+    // NOT in any preset, deliberately — see migration 20260902160000. Filing
+    // tax documents on a tenant's behalf is not a default anyone should acquire
+    // by ticking a box they did not read: a business chooses this because KRA
+    // requires it of them, and it does nothing at all until a device is
+    // registered under Compliance → eTIMS.
+    key: 'etims', label: 'KRA eTIMS', icon: 'Receipt', scope: 'all',
+    requires: [], routes: [],
+    desc: 'File every invoice with KRA and print the compliant tax receipt.',
+  },
 
   // ── Sacco / chama ──────────────────────────────────────────────────────────
   {

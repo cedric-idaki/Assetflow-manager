@@ -442,6 +442,51 @@ export const usePOS = () => {
  *
  * Not a hook: the history screen calls it on a click, not on render.
  */
+/**
+ * The KRA filing for one sale, or null — and NEVER a thrown error.
+ *
+ * This is the main reason an eTIMS tenant reprints at all: the copy handed over
+ * at the till is printed before the document reaches KRA (filing is queued so
+ * an outage cannot stop a shop trading), so the compliant receipt carrying the
+ * signature only exists once it lands.
+ *
+ * Wrapped whole, rather than by chaining a rejection handler onto the query,
+ * because the two ways this can fail are different in kind and only one of them
+ * produces a promise to reject:
+ *
+ *   the table is not there yet   — this repo's migrations have run ahead of and
+ *                                  behind the live schema in both directions,
+ *                                  and PostgREST answers with an error
+ *   the CHAIN is not there       — a client that does not implement a builder
+ *                                  method throws SYNCHRONOUSLY, before any
+ *                                  promise exists, and takes the whole
+ *                                  Promise.all down with it
+ *
+ * The second one is the one that matters: it would mean a schema or client
+ * detail could stop a customer being handed their receipt, which is precisely
+ * the trade the entire eTIMS design refuses to make (see
+ * supabase/migrations/20260902160000_etims_integration.sql). So nothing about
+ * this lookup is allowed to escape. A tenant with no eTIMS module simply has no
+ * row, and the receipt prints exactly as it always did.
+ */
+const fetchEtimsForSale = async (saleId) => {
+  try {
+    const { data } = await supabase
+      .from('etims_invoices')
+      .select(
+        'status, invoice_number, kra_invoice_number, receipt_signature, internal_data, ' +
+          'control_unit_id, control_unit_at, qr_url, environment',
+      )
+      .eq('sale_id', saleId)
+      .eq('doc_type', 'sale')
+      .neq('status', 'cancelled')
+      .maybeSingle();
+    return { data: data ?? null };
+  } catch {
+    return { data: null };
+  }
+};
+
 export const fetchSaleForReprint = async (saleId) => {
   const { data: sale, error } = await supabase
     .from('sales')
@@ -453,7 +498,7 @@ export const fetchSaleForReprint = async (saleId) => {
     .single();
   if (error) throw error;
 
-  const [{ data: schedule }, { data: payment }] = await Promise.all([
+  const [{ data: schedule }, { data: payment }, { data: etims }] = await Promise.all([
     supabase
       .from('installment_schedules')
       .select('installment_no, due_date, opening_balance, installment_amount, principal_portion, interest_portion, closing_balance')
@@ -466,6 +511,7 @@ export const fetchSaleForReprint = async (saleId) => {
       .select('payment_date, processed_by, reference_number')
       .eq('transaction_id', sale.invoice_number)
       .maybeSingle(),
+    fetchEtimsForSale(saleId),
   ]);
 
   let cashier = '';
@@ -478,7 +524,7 @@ export const fetchSaleForReprint = async (saleId) => {
     cashier = profile?.full_name || '';
   }
 
-  return { sale, client: sale.client, asset: sale.asset, schedule: schedule || [], payment, cashier };
+  return { sale, client: sale.client, asset: sale.asset, schedule: schedule || [], payment, cashier, etims: etims || null };
 };
 
 export default usePOS;

@@ -53,3 +53,90 @@ describe('isMissingColumnError', () => {
     expect(isMissingColumnError({ code: 'PGRST204' }, REPRINT)).toBe(false);
   });
 });
+
+/**
+ * eTIMS must never be able to stop a customer getting their receipt.
+ *
+ * The reprint fetches the sale's KRA filing so the compliant copy can carry the
+ * receipt signature. That lookup touches a table which, on this project, may not
+ * exist yet — the migrations have run ahead of and behind the live schema in
+ * both directions — and is issued through a query builder whose methods a given
+ * client version may not implement.
+ *
+ * Both are survivable; neither may take the receipt down with it. The second is
+ * the sharp one, because an unimplemented builder method throws SYNCHRONOUSLY,
+ * before any promise exists, so chaining a rejection handler onto the query does
+ * not catch it.
+ */
+const { supabase } = await import('../lib/supabase');
+const { fetchSaleForReprint } = await import('./usePOS');
+
+describe('fetchSaleForReprint tolerates eTIMS being unavailable', () => {
+  const SALE = { id: 's1', invoice_number: 'INV-1', client: null, asset: null };
+
+  /** A builder for everything the reprint needs EXCEPT eTIMS. */
+  const okBuilder = (rows) => {
+    const b = {
+      select: () => b,
+      eq: () => b,
+      order: () => Promise.resolve({ data: rows, error: null }),
+      maybeSingle: () => Promise.resolve({ data: Array.isArray(rows) ? rows[0] : rows, error: null }),
+      single: () => Promise.resolve({ data: Array.isArray(rows) ? rows[0] : rows, error: null }),
+    };
+    return b;
+  };
+
+  const mountWithEtims = (etimsBuilder) => {
+    supabase.from.mockImplementation((table) => {
+      if (table === 'sales') return okBuilder(SALE);
+      if (table === 'etims_invoices') return etimsBuilder();
+      return okBuilder([]);
+    });
+  };
+
+  it('still returns the receipt when the eTIMS table rejects the query', async () => {
+    mountWithEtims(() => {
+      const b = {
+        select: () => b, eq: () => b, neq: () => b,
+        maybeSingle: () => Promise.resolve({
+          data: null,
+          error: { code: '42P01', message: 'relation "etims_invoices" does not exist' },
+        }),
+      };
+      return b;
+    });
+
+    const out = await fetchSaleForReprint('s1');
+    expect(out.sale).toEqual(SALE);
+    expect(out.etims).toBeNull();
+  });
+
+  it('still returns the receipt when the query builder throws before any promise exists', async () => {
+    // .neq is simply absent — the exact shape that broke the reprint outright
+    // when the lookup was chained into Promise.all instead of wrapped.
+    mountWithEtims(() => {
+      const b = { select: () => b, eq: () => b, maybeSingle: () => Promise.resolve({ data: null }) };
+      return b;
+    });
+
+    const out = await fetchSaleForReprint('s1');
+    expect(out.sale).toEqual(SALE);
+    expect(out.etims).toBeNull();
+  });
+
+  it('returns the filing when there is one', async () => {
+    mountWithEtims(() => {
+      const b = {
+        select: () => b, eq: () => b, neq: () => b,
+        maybeSingle: () => Promise.resolve({
+          data: { status: 'sent', receipt_signature: 'ABCD1234', environment: 'production' },
+          error: null,
+        }),
+      };
+      return b;
+    });
+
+    const out = await fetchSaleForReprint('s1');
+    expect(out.etims.receipt_signature).toBe('ABCD1234');
+  });
+});

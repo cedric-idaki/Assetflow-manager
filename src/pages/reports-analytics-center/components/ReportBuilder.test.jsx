@@ -70,10 +70,24 @@ vi.mock('../../../contexts/TenantModulesContext', () => ({
   useModules: () => ({ isEnabled: (key) => !moduleState.frozen.includes(key) }),
 }));
 
-const downloadCSV = vi.fn(() => true);
-vi.mock('../../../utils/exportUtils', () => ({
-  downloadCSV: (...args) => downloadCSV(...args),
-}));
+/**
+ * The export path is intercepted at the BROWSER, not at a module boundary.
+ *
+ * Stubbing saveBlob would not have worked: downloadCSVText calls it through the
+ * module's own binding, which an ES module mock cannot reach. Catching the blob
+ * where it is handed to the page also means every layer under it — the grid,
+ * the quoting, the BOM, the workbook bytes — ran for real, so these assertions
+ * are about what lands in the file.
+ */
+const saved = [];
+const captureDownloads = () => {
+  saved.length = 0;
+  global.URL.createObjectURL = vi.fn((blob) => { saved.push({ blob }); return 'blob:x'; });
+  global.URL.revokeObjectURL = vi.fn();
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click() {
+    saved[saved.length - 1].name = this.download;
+  });
+};
 
 // Imported after the vi.mock calls above, which is what they exist to intercept.
 import ReportBuilder from './ReportBuilder';
@@ -97,7 +111,7 @@ const openOnPayments = async (user) => {
 beforeEach(() => {
   requests = [];
   tableRows = ROWS;
-  downloadCSV.mockClear();
+  captureDownloads();
   authState.userProfile = { role: 'admin' };
   moduleState.frozen = [];
 });
@@ -225,25 +239,66 @@ describe('running a report', () => {
 });
 
 describe('exporting', () => {
-  it('hands the CSV the labelled columns and the provenance', async () => {
-    const user = userEvent.setup();
+  /** Run the fixture report, then pick one format off the export menu. */
+  const runAndExport = async (user, format) => {
     await openOnPayments(user);
-
     await user.click(screen.getByRole('button', { name: /Run report/ }));
     await screen.findByText(/3 records/);
-    await user.click(screen.getByRole('button', { name: /Export CSV/ }));
+    await user.click(screen.getByRole('button', { name: /^Export/ }));
+    await user.click(await screen.findByRole('menuitem', { name: new RegExp(format) }));
+  };
 
-    expect(downloadCSV).toHaveBeenCalledTimes(1);
-    const [rows, filename, columns] = downloadCSV.mock.calls[0];
+  it('offers all three formats, each saying what it is for', async () => {
+    const user = userEvent.setup();
+    await openOnPayments(user);
+    await user.click(screen.getByRole('button', { name: /Run report/ }));
+    await screen.findByText(/3 records/);
+    await user.click(screen.getByRole('button', { name: /^Export/ }));
 
-    expect(columns).toEqual(['Paid on', 'Client', 'Amount', 'Method', 'Status']);
-    expect(filename).toMatch(/^payments_report_\d{4}-\d{2}-\d{2}$/);
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((i) => i.textContent)).toEqual([
+      expect.stringContaining('Excel workbook'),
+      expect.stringContaining('CSV file'),
+      expect.stringContaining('PDF document'),
+    ]);
+  });
+
+  it('hands the CSV the labelled columns and the provenance', async () => {
+    const user = userEvent.setup();
+    await runAndExport(user, 'CSV file');
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    const { blob, name } = saved[0];
+    expect(name).toMatch(/^payments_report_\d{4}-\d{2}-\d{2}\.csv$/);
+
+    // The leading BOM is what makes Excel read the UTF-8 as UTF-8. Checked in
+    // BYTES: Blob.text() decodes it away, so a string assertion would pass on a
+    // file that never carried one.
+    expect(Array.from(new Uint8Array(await blob.arrayBuffer()).slice(0, 3)))
+      .toEqual([0xef, 0xbb, 0xbf]);
+
+    const text = await blob.text();
+    const lines = text.split(String.fromCharCode(13) + String.fromCharCode(10));
+    expect(lines[0]).toBe(`"Paid on","Client","Amount","Method","Status"`);
     // Money stays a number in the file — "KES 1,000" is text, and a column of
     // text does not add up in a spreadsheet.
-    expect(rows[0].Amount).toBe(1000);
+    expect(lines[1]).toContain(`"1000"`);
     // The provenance rides along, so the file cannot be quoted out of context.
-    expect(rows.some((r) => String(r['Paid on'] || '').startsWith('Report:'))).toBe(true);
-    expect(rows.some((r) => /Paid on between/.test(String(r['Paid on'] || '')))).toBe(true);
+    expect(text).toContain(`"Report: Payments report"`);
+    expect(text).toMatch(/Paid on between/);
+  });
+
+  it('writes a real workbook for the Excel format, not a renamed CSV', async () => {
+    const user = userEvent.setup();
+    await runAndExport(user, 'Excel workbook');
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    const { blob, name } = saved[0];
+    expect(name).toMatch(/^payments_report_\d{4}-\d{2}-\d{2}\.xlsx$/);
+    expect(blob.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    // Not a CSV wearing a costume: a ZIP, whose first bytes are the local
+    // file header signature.
+    expect((await blob.text()).slice(0, 2)).toBe('PK');
   });
 });
 

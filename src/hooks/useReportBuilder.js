@@ -28,7 +28,7 @@
  * report into a report that is honest about what it could not fetch.
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { getTenantAdminId } from '../lib/tenant';
 import { fetchAllRows } from '../lib/fetchAllRows';
@@ -67,12 +67,40 @@ export const useReportBuilder = () => {
 
   const canBuild = useMemo(() => canBuildReports(role), [role]);
 
+  // ── LETTERHEAD ────────────────────────────────────────────────────────────
+  /**
+   * The tenant's company profile, for the head of a PDF export.
+   *
+   * Fetched on the first PDF and then cached, rather than on mount: most
+   * sessions on this screen never ask for one, and a letterhead is not worth a
+   * query for a report that leaves as a spreadsheet. `null` is a valid answer —
+   * an unfilled profile still gets a headed document, see normaliseIssuer.
+   */
+  const companyRef = useRef(undefined);
+
+  const loadCompany = useCallback(async () => {
+    if (companyRef.current !== undefined) return companyRef.current;
+    try {
+      const adminId = await getTenantAdminId();
+      const { data } = await supabase
+        .from('company_profiles').select('*').eq('admin_id', adminId).maybeSingle();
+      companyRef.current = data || null;
+    } catch (err) {
+      logger.debug('Company profile not available for the export letterhead', { error: err?.message });
+      companyRef.current = null;
+    }
+    return companyRef.current;
+  }, []);
+
   // ── SAVED REPORTS ─────────────────────────────────────────────────────────
   const reset = useCallback(() => {
     setSavedReports([]);
     setResult(null);
     setRunError(null);
     setLoadingSaved(true);
+    // A different sign-in is a different tenant, so the cached letterhead has
+    // to go with it — otherwise the next export carries the last one's name.
+    companyRef.current = undefined;
   }, []);
 
   const loadSaved = useCallback(async () => {
@@ -256,6 +284,7 @@ export const useReportBuilder = () => {
     setShared,
     run,
     clear,
+    loadCompany,
     result,
     running,
     runError,

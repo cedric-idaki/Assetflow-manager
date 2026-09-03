@@ -48,6 +48,15 @@ export const KEY_NAMES = {
    * open both.
    */
   signnow: "SIGNNOW_CRED_ENC_KEY",
+  /**
+   * A tenant's KRA eTIMS device communication key (etims_credentials). Held
+   * apart from the other three for the same reason they are held apart from
+   * each other, and more so: this key files TAX DOCUMENTS in the tenant's name
+   * with a revenue authority. A document filed wrongly is the tenant's
+   * liability and cannot be quietly withdrawn — only reversed by a credit note
+   * that is itself a filing. One leaked key must not reach this.
+   */
+  etims: "ETIMS_CRED_ENC_KEY",
 } as const;
 
 export type KeyPurpose = keyof typeof KEY_NAMES;

@@ -11,18 +11,20 @@
  * (src/utils/reportQuery.js), and RLS decides what comes back.
  */
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Icon from '../../../components/AppIcon';
 import { useModules } from '../../../contexts/TenantModulesContext';
 import { useReportBuilder, PREVIEW_ROWS } from '../../../hooks/useReportBuilder';
-import { downloadCSV } from '../../../utils/exportUtils';
+import {
+  FORMATS, PDF_ROW_LIMIT, buildExportModel, exportReport,
+} from '../../../utils/reportExport';
 import {
   sourcesFor, sourceByKey, fieldByKey,
   operatorsForType, aggregationsForType, PERIOD_PRESETS, DATE_GRANULARITIES,
   isNumericType, isTemporalType,
 } from '../../../config/reportSchema';
 import {
-  emptyDefinition, validateDefinition, formatCell, cellLabel, toExportRows,
+  emptyDefinition, validateDefinition, formatCell, cellLabel,
 } from '../../../utils/reportQuery';
 
 // ─── SMALL PRESENTATIONAL PIECES ─────────────────────────────────────────────
@@ -71,6 +73,77 @@ const Note = ({ tone = 'amber', icon = 'AlertTriangle', children }) => {
     <div className={`flex items-start gap-2 px-3 py-2 rounded-lg border text-xs ${tones[tone]}`}>
       <Icon name={icon} size={14} color="currentColor" className="mt-px shrink-0" />
       <div className="space-y-0.5">{children}</div>
+    </div>
+  );
+};
+
+// ─── EXPORT MENU ─────────────────────────────────────────────────────────────
+/**
+ * Pick the file, not just the download.
+ *
+ * A menu rather than three buttons in a row: the formats are one decision with
+ * three answers, and each one needs a line saying what it is FOR — a reader who
+ * wants to keep working wants the workbook, and a reader who is filing the
+ * figures wants the PDF. Three bare icons make that a guess.
+ */
+const ExportMenu = ({ onPick, disabled, busy, unavailable }) => {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    // Pointerdown rather than click: a click listener fires after the button
+    // that opened the menu has already re-rendered, which closes it again.
+    const away = (e) => { if (!box.current?.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={box}>
+      <Ghost
+        icon={busy ? 'Loader' : 'Download'}
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled || Boolean(busy)}
+      >
+        {busy ? `Writing ${busy.toUpperCase()}…` : 'Export'}
+        <Icon name="ChevronDown" size={12} color="currentColor" />
+      </Ghost>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-full mt-1 z-30 w-72 bg-card border border-border rounded-xl shadow-lg overflow-hidden"
+        >
+          {FORMATS.map((f) => {
+            const blocked = unavailable?.[f.value] || null;
+            return (
+              <button
+                key={f.value}
+                type="button"
+                role="menuitem"
+                disabled={Boolean(blocked)}
+                onClick={() => { setOpen(false); onPick(f.value); }}
+                className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left border-b border-border last:border-b-0
+                           hover:bg-muted disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              >
+                <Icon name={f.icon} size={15} color="currentColor" className="mt-0.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-foreground">{f.label}</span>
+                  <span className="block text-[11px] text-muted-foreground leading-snug">
+                    {blocked || f.hint}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -308,7 +381,7 @@ const ReportBuilder = () => {
   const {
     role, canBuild, savedReports, loadingSaved,
     saveReport, deleteReport, setShared,
-    run, clear, result, running, runError, rowCeiling,
+    run, clear, loadCompany, result, running, runError, rowCeiling,
   } = useReportBuilder();
 
   const sources = useMemo(
@@ -322,6 +395,8 @@ const ReportBuilder = () => {
   const [showSave,   setShowSave]   = useState(false);
   const [saving,     setSaving]     = useState(false);
   const [saveError,  setSaveError]  = useState(null);
+  const [exporting,  setExporting]  = useState(null);   // the format being written
+  const [exportError, setExportError] = useState(null);
 
   // Start on the first source the user is actually offered. Waits for the
   // module statuses to arrive rather than defaulting to something that then
@@ -394,26 +469,39 @@ const ReportBuilder = () => {
     setShowSave(false);
   }, [saveReport, loadedFrom, definition]);
 
-  const exportCSV = useCallback(() => {
+  /**
+   * Write the current result as one file.
+   *
+   * The model is rebuilt per export rather than memoised: it holds every row,
+   * and keeping a second copy of a 25,000-row report alive for a button nobody
+   * may press is the kind of thing that makes this tab the reason a laptop
+   * fans up. The company profile is only fetched for the format that prints it.
+   */
+  const doExport = useCallback(async (format) => {
     if (!result) return;
-    const { columns, rows } = toExportRows(result.report);
-    const stamp = new Date().toISOString().slice(0, 10);
-    const name = (loadedFrom?.name || `${result.source.label} report`)
-      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    setExportError(null);
+    setExporting(format);
+    try {
+      const company = format === 'pdf' ? await loadCompany() : null;
+      const model = buildExportModel(result, { name: loadedFrom?.name || null, company });
+      await exportReport(model, format);
+    } catch (err) {
+      // Every failure here has something worth saying: the PDF library did not
+      // load, or the report is too long to be a PDF. Swallowing it would leave
+      // a button that looks like it worked and a Downloads folder that is empty.
+      setExportError(err?.message || 'The export could not be written.');
+    } finally {
+      setExporting(null);
+    }
+  }, [result, loadedFrom, loadCompany]);
 
-    // The provenance rides along in the file. A CSV of numbers with no
-    // statement of what was excluded is a CSV that gets quoted out of context
-    // in a meeting nobody from this screen is in. Trailing rows rather than a
-    // preamble, so the header stays on line one and the file still parses.
-    const meta = [
-      {},
-      { [columns[0]]: `Report: ${loadedFrom?.name || result.source.label}` },
-      ...result.coverage.map((line) => ({ [columns[0]]: line })),
-      { [columns[0]]: `${result.report.rowCount} rows · generated ${new Date().toLocaleString('en-GB')}` },
-    ];
-
-    downloadCSV([...rows, ...meta], `${name}_${stamp}`, columns);
-  }, [result, loadedFrom]);
+  // Why a format is not offered, in words, on the menu item itself — a disabled
+  // row with no reason reads as a bug.
+  const unavailable = useMemo(() => (
+    result && result.report.rowCount > PDF_ROW_LIMIT
+      ? { pdf: `Too many rows to print — the cap is ${PDF_ROW_LIMIT.toLocaleString('en-KE')}. Excel and CSV carry them all.` }
+      : {}
+  ), [result]);
 
   // ── Gates ────────────────────────────────────────────────────────────────
   if (!canBuild) {
@@ -834,9 +922,12 @@ const ReportBuilder = () => {
           <Ghost icon="FilePlus" onClick={() => setLoadedFrom(null)}>Save as new</Ghost>
         )}
 
-        <Ghost icon="Download" onClick={exportCSV} disabled={!result || result.report.rowCount === 0}>
-          Export CSV
-        </Ghost>
+        <ExportMenu
+          onPick={doExport}
+          busy={exporting}
+          unavailable={unavailable}
+          disabled={!result || result.report.rowCount === 0}
+        />
 
         {result && (
           <span className="text-xs text-muted-foreground ml-1">
@@ -862,6 +953,13 @@ const ReportBuilder = () => {
               rather than truncating, so a report is never a partial answer that looks complete.
             </p>
           )}
+        </Note>
+      )}
+
+      {exportError && (
+        <Note tone="red" icon="XCircle">
+          <p className="font-semibold">The file could not be written.</p>
+          <p>{exportError}</p>
         </Note>
       )}
 
