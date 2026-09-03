@@ -356,7 +356,25 @@ export const usePOS = () => {
         if (schErr) console.warn('Schedule insert warning:', schErr.message);
       }
 
-      // 4. Update asset status — BRS 9.2 status machine
+      // 4. Point the asset at its new owner, then move its status.
+      //
+      // The ownership link is its own write, deliberately. `linked_client_id`
+      // is the single column the buyer's portal filters "My Assets" on, so it
+      // is what lets the customer see the thing they just paid for, and it has
+      // been in the schema since the first migration. The status update below
+      // depends on three things no migration in this repo creates —
+      // `quantity_available`, `last_status_reason`, and the 'on_installment'
+      // enum label — which is why it already carries a fallback. The live
+      // database has all three (checked 2026-09-03), but an environment built
+      // from these migrations alone has none of them, and there the update
+      // fails outright. The link the customer actually sees must not go down
+      // with it.
+      const { error: linkErr } = await supabase
+        .from('assets')
+        .update({ linked_client_id: clientId })
+        .eq('id', asset.id);
+      if (linkErr) console.error('Asset owner link failed:', linkErr.message);
+
       // Cash sale → sold immediately on payment confirmation
       // Installment → on_installment (transitions to sold on final payment via DB trigger)
       const newStatus    = pricingModel === 'cash' ? 'sold' : 'on_installment';
