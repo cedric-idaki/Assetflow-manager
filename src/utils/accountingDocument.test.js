@@ -3,6 +3,7 @@ import {
   normaliseJournalRows, normaliseSaccoEntry, normaliseIssuer,
   buildJournalVoucher, buildInvoiceDocument, buildPaymentReceipt,
   buildPayrollVoucher, buildContributionReceipt, buildLoanRepaymentReceipt,
+  buildShareTransactionReceipt, buildDividendStatement,
 } from './accountingDocument';
 import { resolvePayrollRecord } from './kenyaPayroll';
 
@@ -369,6 +370,147 @@ describe('buildLoanRepaymentReceipt', () => {
       loan, sacco,
     });
     expect(d.summary[0].value).toBe('KES 30,000.00');
+  });
+});
+
+describe('buildShareTransactionReceipt', () => {
+  const sacco = { name: 'Umoja Sacco' };
+  const member = { full_name: 'Otieno Odhiambo', member_no: 'M-0042' };
+  // amount is the gross consideration; fee is that party's own trading fee.
+  const purchase = {
+    id: 'st1', txn_no: 'SHT-0000123', txn_type: 'purchase', created_at: '2026-09-02',
+    shares: 100, price_per_share: 135, amount: 13500, fee: 135,
+    balance_after: 600, realized_gain: 0,
+  };
+
+  it('adds the trading fee to what a buyer paid', () => {
+    // amount alone (13,500) is not what left the buyer's pocket — the fee sits
+    // on top of it, and the slip is kept for exactly that number.
+    const d = buildShareTransactionReceipt({ txn: purchase, member, sacco });
+    expect(d.title).toBe('SHARE PURCHASE RECEIPT');
+    expect(d.table.footer).toMatchObject({ description: 'TOTAL PAID', amount: 'KES 13,635.00' });
+  });
+
+  it('deducts the trading fee from what a seller received', () => {
+    const d = buildShareTransactionReceipt({
+      txn: { ...purchase, txn_type: 'sale', shares: -100, fee: 200, realized_gain: 1300, balance_after: 400 },
+      member, sacco,
+    });
+    expect(d.title).toBe('SHARE DISPOSAL ADVICE');
+    expect(d.table.footer).toMatchObject({ description: 'NET PROCEEDS', amount: 'KES 13,300.00' });
+  });
+
+  it('leads a disposal with the gain the member realised', () => {
+    const d = buildShareTransactionReceipt({
+      txn: { ...purchase, txn_type: 'sale', shares: -100, realized_gain: 1300 }, member, sacco,
+    });
+    expect(d.summary[0]).toMatchObject({ label: 'REALISED GAIN', value: 'KES 1,300.00' });
+  });
+
+  it('calls a loss a loss', () => {
+    const d = buildShareTransactionReceipt({
+      txn: { ...purchase, txn_type: 'sale', shares: -100, realized_gain: -450 }, member, sacco,
+    });
+    expect(d.summary[0]).toMatchObject({ label: 'REALISED LOSS', value: 'KES 450.00' });
+  });
+
+  it('is an advice, not a receipt, when no money moved', () => {
+    // A transfer moves shares and nothing else. Titling it a receipt would let
+    // it be waved about as evidence of a payment that never happened.
+    const d = buildShareTransactionReceipt({
+      txn: { ...purchase, txn_type: 'transfer_in', amount: 0, fee: 0, price_per_share: 0 },
+      member, sacco,
+    });
+    expect(d.title).toBe('SHARE TRANSFER ADVICE');
+    expect(d.kind).toBe('advice');
+    expect(d.table.footer).toBeNull();
+    expect(d.footNote).toContain('not a receipt');
+    expect(d.signatures).toEqual([]);
+  });
+
+  it('reports the holding the member is left with', () => {
+    const d = buildShareTransactionReceipt({ txn: purchase, member, sacco });
+    expect(d.summary.at(-1)).toMatchObject({
+      label: 'SHAREHOLDING AFTER THIS MOVEMENT', value: '600 shares',
+    });
+  });
+
+  it('names the member and numbers the transaction', () => {
+    const d = buildShareTransactionReceipt({ txn: purchase, member, sacco });
+    expect(d.party).toMatchObject({ heading: 'Received From', name: 'Otieno Odhiambo' });
+    expect(d.docNo).toBe('SHT-0000123');
+  });
+
+  it('omits the fee line entirely when no fee was charged', () => {
+    const d = buildShareTransactionReceipt({ txn: { ...purchase, fee: 0 }, member, sacco });
+    expect(d.table.rows).toHaveLength(1);
+    expect(d.table.footer.amount).toBe('KES 13,500.00');
+  });
+});
+
+describe('buildDividendStatement', () => {
+  const sacco = { name: 'Umoja Sacco' };
+  const member = { full_name: 'Otieno Odhiambo', member_no: 'M-0042' };
+  const declaration = {
+    period_label: 'FY2025', basis: 'per_share', dividend_per_share: 2.5,
+    record_date: '2026-01-31', payment_date: '2026-03-15',
+  };
+  const allocation = {
+    id: 'da1', shares_at_record: 600, gross_amount: 1500, tax_amount: 75,
+    net_amount: 1425, status: 'paid', paid_at: '2026-03-15', payment_ref: 'MPX-77',
+  };
+
+  it('shows gross, the tax withheld and the net actually paid', () => {
+    // The member is taxed on the gross but paid the net. A slip showing only
+    // the net leaves them unable to account for the tax at all.
+    const d = buildDividendStatement({ allocation, declaration, member, sacco });
+    expect(d.title).toBe('DIVIDEND PAYMENT ADVICE');
+    expect(d.table.rows[1]).toMatchObject({ description: 'Less: withholding tax', amount: 'KES 75.00' });
+    expect(d.table.footer).toMatchObject({ description: 'NET DIVIDEND PAID', amount: 'KES 1,425.00' });
+    expect(d.summary).toEqual([
+      { label: 'GROSS DIVIDEND', value: 'KES 1,500.00' },
+      { label: 'WITHHOLDING TAX', value: 'KES 75.00' },
+      { label: 'NET PAID', value: 'KES 1,425.00', emphasis: true },
+    ]);
+  });
+
+  it('states the basis the dividend was declared on', () => {
+    expect(buildDividendStatement({ allocation, declaration, member, sacco })
+      .meta.find((m) => m.label === 'Basis').value).toBe('KES 2.50 per share');
+    expect(buildDividendStatement({
+      allocation, declaration: { ...declaration, basis: 'profit_percent', dividend_percent: 8 }, member, sacco,
+    }).meta.find((m) => m.label === 'Basis').value).toBe('8% of profit');
+  });
+
+  it('is an entitlement advice, not a payment advice, until it is paid', () => {
+    const d = buildDividendStatement({
+      allocation: { ...allocation, status: 'pending', paid_at: null }, declaration, member, sacco,
+    });
+    expect(d.title).toBe('DIVIDEND ENTITLEMENT ADVICE');
+    expect(d.table.footer.description).toBe('NET DIVIDEND DUE');
+    expect(d.footNote).toContain('Not a payment advice');
+    expect(d.signatures).toEqual([]);
+  });
+
+  it('says so when an allocation was cancelled', () => {
+    const d = buildDividendStatement({
+      allocation: { ...allocation, status: 'cancelled' }, declaration, member, sacco,
+    });
+    expect(d.title).toBe('DIVIDEND CANCELLATION NOTICE');
+    expect(d.footNote).toContain('no payment is due');
+  });
+
+  it('leaves the tax line out when nothing was withheld', () => {
+    const d = buildDividendStatement({
+      allocation: { ...allocation, tax_amount: 0, net_amount: 1500 }, declaration, member, sacco,
+    });
+    expect(d.table.rows).toHaveLength(1);
+    expect(d.summary.map((s) => s.label)).toEqual(['GROSS DIVIDEND', 'NET PAID']);
+  });
+
+  it('reads the declaration nested on the allocation, as the portal loads it', () => {
+    const d = buildDividendStatement({ allocation: { ...allocation, declaration }, member, sacco });
+    expect(d.meta.find((m) => m.label === 'Period').value).toBe('FY2025');
   });
 });
 

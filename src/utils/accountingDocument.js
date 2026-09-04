@@ -500,6 +500,213 @@ export const buildLoanRepaymentReceipt = ({ installment, loan, sacco, currency =
 };
 
 /**
+ * Share movements, as the member's own paperwork.
+ *
+ * `amount` on a share transaction is the gross consideration
+ * (|shares| × price_per_share) and `fee` is that party's own trading fee, held
+ * separately — so the fee is ADDED for someone acquiring shares and DEDUCTED
+ * from someone disposing of them. Printing `amount` alone would understate what
+ * a buyer actually paid and overstate what a seller actually received, which is
+ * the one number either of them keeps the slip for.
+ *
+ * Money only moves on some of these types. A transfer or an adjustment moves
+ * shares and nothing else, and is titled as an advice rather than a receipt so
+ * it can never read as evidence of a payment.
+ */
+const SHARE_TXN_LABELS = {
+  issue: 'Shares issued', purchase: 'Shares bought', sale: 'Shares sold',
+  transfer_in: 'Shares received', transfer_out: 'Shares transferred out',
+  allotment: 'Shares allotted', buyback: 'Shares bought back',
+  retire: 'Shares retired', adjustment: 'Share adjustment',
+  dividend: 'Dividend', reversal: 'Reversal',
+};
+
+export const buildShareTransactionReceipt = ({ txn, member, sacco, currency = 'KES' } = {}) => {
+  const t = txn || {};
+  const shares = parseInt(t.shares, 10) || 0;
+  const price  = round2(t.price_per_share);
+  const amount = round2(t.amount);
+  const fee    = round2(t.fee);
+  const gain   = round2(t.realized_gain);
+  const who    = member || t.member || {};
+
+  const acquired = shares > 0;
+  const disposed = shares < 0;
+  const paidFor  = amount > 0 || fee > 0;          // did money move at all?
+  const movement = SHARE_TXN_LABELS[t.txn_type]
+    || String(t.txn_type || 'Share movement').replace(/_/g, ' ');
+
+  // The member's side of the money: a buyer pays the fee on top, a seller has
+  // it taken out of the proceeds.
+  const total = acquired ? round2(amount + fee) : round2(amount - fee);
+
+  const receipt = acquired && paidFor;
+  const title = receipt ? 'SHARE PURCHASE RECEIPT'
+    : disposed && paidFor ? 'SHARE DISPOSAL ADVICE'
+    : 'SHARE TRANSFER ADVICE';
+
+  const rows = [{
+    description: `${movement}`
+      + `\n${Math.abs(shares).toLocaleString()} share${Math.abs(shares) === 1 ? '' : 's'}`
+      + (price > 0 ? ` @ ${money(price, currency)} each` : ''),
+    amount: money(amount, currency),
+  }];
+  if (fee > 0) {
+    rows.push({
+      description: acquired ? 'Trading fee (added)' : 'Trading fee (deducted)',
+      amount: money(fee, currency),
+    });
+  }
+
+  const summary = [{
+    label: 'SHAREHOLDING AFTER THIS MOVEMENT',
+    value: `${(parseInt(t.balance_after, 10) || 0).toLocaleString()} shares`,
+    emphasis: true,
+  }];
+  if (disposed && gain !== 0) {
+    summary.unshift({
+      label: gain > 0 ? 'REALISED GAIN' : 'REALISED LOSS',
+      value: money(Math.abs(gain), currency),
+    });
+  }
+
+  return {
+    kind: receipt ? 'receipt' : 'advice',
+    title,
+    docNo: t.txn_no || (t.id ? `SHT-${String(t.id).slice(-6).toUpperCase()}` : '—'),
+    dateLabel: fmtDate(t.created_at),
+    status: receipt ? 'completed' : 'recorded',
+    issuer: normaliseIssuer(sacco),
+    party: {
+      heading: acquired ? 'Received From' : 'Shareholder',
+      name: who.full_name || '—',
+      lines: [who.member_no ? `Member No: ${who.member_no}` : ''].filter(Boolean),
+    },
+    subject: receipt
+      ? 'Share purchase received with thanks.'
+      : disposed && paidFor
+        ? 'Your shares were disposed of as set out below.'
+        : 'This records a movement of shares. No money changed hands.',
+    meta: [
+      { label: 'Transaction No', value: t.txn_no || '—' },
+      { label: 'Date',           value: fmtDate(t.created_at) },
+      { label: 'Movement',       value: movement },
+      { label: 'Shares',         value: `${shares > 0 ? '+' : ''}${shares.toLocaleString()}` },
+      price > 0 ? { label: 'Price Per Share', value: money(price, currency) } : null,
+      { label: 'Balance After',  value: `${(parseInt(t.balance_after, 10) || 0).toLocaleString()} shares` },
+    ].filter(Boolean),
+    table: {
+      columns: [
+        { key: 'description', label: 'Description', width: 0.70, align: 'left'  },
+        { key: 'amount',      label: 'Amount',      width: 0.30, align: 'right' },
+      ],
+      rows,
+      footer: paidFor
+        ? { description: acquired ? 'TOTAL PAID' : 'NET PROCEEDS', amount: money(total, currency) }
+        : null,
+    },
+    summary,
+    notes: t.notes ? [t.notes] : [],
+    signatures: receipt ? ['Received by', 'Member'] : [],
+    footNote: receipt
+      ? 'Official receipt — retain it as proof of your share purchase.'
+      : disposed && paidFor
+        ? 'Share disposal advice. Any realised gain shown is the society’s own computation.'
+        : 'Advice of a share movement. It is not a receipt and not proof of payment.',
+    filename: `${receipt ? 'Share_Receipt' : 'Share_Advice'}_${safeName(t.txn_no, 'Share')}_${safeName(who.full_name, 'Member')}.pdf`,
+  };
+};
+
+/**
+ * A member's dividend, with the withholding tax shown on its face.
+ *
+ * The member is taxed on the gross and paid the net, and the difference is
+ * withheld by the society on their behalf — so a slip showing only the net
+ * would leave them unable to account for the tax at all. Gross, tax and net are
+ * all printed, and an allocation that has not been paid says so rather than
+ * passing for a payment advice.
+ */
+export const buildDividendStatement = ({ allocation, declaration, member, sacco, currency = 'KES' } = {}) => {
+  const a = allocation || {};
+  const d = declaration || a.declaration || {};
+  const who = member || a.member || {};
+
+  const gross  = round2(a.gross_amount);
+  const tax    = round2(a.tax_amount);
+  const net    = round2(a.net_amount);
+  const shares = parseInt(a.shares_at_record, 10) || 0;
+
+  const status    = String(a.status || 'pending').toLowerCase();
+  const paid      = status === 'paid';
+  const cancelled = status === 'cancelled';
+
+  const basis = d.basis === 'per_share'
+    ? `${money(d.dividend_per_share, currency)} per share`
+    : d.dividend_percent
+      ? `${parseFloat(d.dividend_percent)}% of profit`
+      : '—';
+
+  const rows = [{
+    description: `Dividend for ${d.period_label || 'the period'}`
+      + `\n${shares.toLocaleString()} share${shares === 1 ? '' : 's'} held at record date`,
+    amount: money(gross, currency),
+  }];
+  if (tax > 0) rows.push({ description: 'Less: withholding tax', amount: money(tax, currency) });
+
+  return {
+    kind: paid ? 'receipt' : 'advice',
+    title: cancelled ? 'DIVIDEND CANCELLATION NOTICE'
+      : paid ? 'DIVIDEND PAYMENT ADVICE'
+      : 'DIVIDEND ENTITLEMENT ADVICE',
+    docNo: `DV-${safeName(d.period_label, 'PERIOD')}-${String(a.id || '').slice(-6).toUpperCase() || '000000'}`,
+    dateLabel: fmtDate(paid ? (a.paid_at || d.payment_date) : (d.payment_date || d.record_date)),
+    status,
+    issuer: normaliseIssuer(sacco),
+    party: {
+      heading: paid ? 'Paid To' : 'Shareholder',
+      name: who.full_name || '—',
+      lines: [who.member_no ? `Member No: ${who.member_no}` : ''].filter(Boolean),
+    },
+    subject: cancelled
+      ? 'This dividend allocation was cancelled.'
+      : paid
+        ? 'Your dividend has been paid as set out below.'
+        : 'Your dividend entitlement is set out below. It has not been paid yet.',
+    meta: [
+      { label: 'Period',      value: d.period_label || '—' },
+      { label: 'Basis',       value: basis },
+      { label: 'Record Date', value: fmtDate(d.record_date) },
+      { label: paid ? 'Paid On' : 'Payment Date',
+        value: fmtDate(paid ? (a.paid_at || d.payment_date) : d.payment_date) },
+      { label: 'Shares At Record', value: shares.toLocaleString() },
+      a.payment_ref ? { label: 'Payment Ref', value: a.payment_ref } : null,
+      { label: 'Status',      value: status.toUpperCase() },
+    ].filter(Boolean),
+    table: {
+      columns: [
+        { key: 'description', label: 'Description', width: 0.70, align: 'left'  },
+        { key: 'amount',      label: 'Amount',      width: 0.30, align: 'right' },
+      ],
+      rows,
+      footer: { description: paid ? 'NET DIVIDEND PAID' : 'NET DIVIDEND DUE', amount: money(net, currency) },
+    },
+    summary: [
+      { label: 'GROSS DIVIDEND', value: money(gross, currency) },
+      ...(tax > 0 ? [{ label: 'WITHHOLDING TAX', value: money(tax, currency) }] : []),
+      { label: paid ? 'NET PAID' : 'NET DUE', value: money(net, currency), emphasis: true },
+    ],
+    notes: d.notes ? [d.notes] : [],
+    signatures: paid ? ['Paid by', 'Member'] : [],
+    footNote: cancelled
+      ? 'This allocation was cancelled and no payment is due on it.'
+      : paid
+        ? 'Dividend payment advice — the withholding tax shown was remitted on your behalf.'
+        : 'Not a payment advice. It becomes one once the dividend is paid.',
+    filename: `${paid ? 'Dividend_Advice' : 'Dividend_Entitlement'}_${safeName(d.period_label, 'Period')}_${safeName(who.full_name, 'Member')}.pdf`,
+  };
+};
+
+/**
  * A payroll run is an accounting transaction too, and the payslip is the
  * employee's copy of it — not the company's. This is the company's: the
  * payment voucher that says what was paid, what was withheld on the employee's
@@ -728,18 +935,37 @@ export const renderAccountingDocument = async (model) => {
   }
 
   // ── Summary block ──────────────────────────────────────────────────────────
+  // The label sits left and the figure is right-aligned in the same band, so a
+  // long label used to run straight under the amount and the two overprinted —
+  // the headline number of the document, unreadable. The figure is what the
+  // document exists for, so it keeps its size and its place and the LABEL gives
+  // way, shrinking until it clears.
   (model.summary || []).forEach((s) => {
     const h = s.emphasis ? 11 : 7;
     pageBreak(h + 4);
     const x = M + CW * 0.42;
     if (s.emphasis) fill(x, Y, CW * 0.58, h, BLUE, 2);
     const baseline = Y + (s.emphasis ? 7.4 : 5);
-    font(s.emphasis ? 'bold' : 'normal', s.emphasis ? 11 : 9);
+    const size = s.emphasis ? 11 : 9;
+    const labelX = x + 4;
+    const valueRight = W - M - 4;
+    const labelStyle = s.emphasis ? 'bold' : 'normal';
+
+    font('bold', size);
+    const room = valueRight - labelX - doc.getTextWidth(String(s.value ?? '')) - 3;
+
+    let labelSize = size;
+    font(labelStyle, labelSize);
+    while (labelSize > 6 && doc.getTextWidth(String(s.label ?? '')) > room) {
+      labelSize -= 0.5;
+      font(labelStyle, labelSize);
+    }
+
     color(s.emphasis ? WHITE : GRAY);
-    text(s.label, x + 4, baseline);
-    font('bold', s.emphasis ? 11 : 9);
+    text(s.label, labelX, baseline);
+    font('bold', size);
     color(s.emphasis ? WHITE : DARK);
-    text(s.value, W - M - 4, baseline, { align: 'right' });
+    text(s.value, valueRight, baseline, { align: 'right' });
     Y += h + 2;
   });
   if ((model.summary || []).length) Y += 6;

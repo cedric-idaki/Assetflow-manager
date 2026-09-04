@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useToast } from '../../../../components/Toast';
+import { buildShareTransactionReceipt, downloadAccountingDocument } from '../../../../utils/accountingDocument';
 import Icon from '../../../../components/AppIcon';
 import { supabase } from '../../../../lib/supabase';
 import { fetchAllRows } from '../../../../lib/fetchAllRows';
@@ -249,6 +250,7 @@ const HoldingsPanel = ({ ctx, ov }) => {
           ov={ov}
           settings={s}
           saccoName={sacco?.name}
+          sacco={sacco}
           // Read for this member specifically, so the history is complete
           // rather than whatever survived the dashboard's display caps.
           txns={portfolio?.txns || []}
@@ -311,7 +313,7 @@ const TABS = [
 ];
 
 const MemberPortfolio = ({
-  holding, member, ov, settings, saccoName, txns, certificates, allocations,
+  holding, member, ov, settings, saccoName, sacco, txns, certificates, allocations,
   dividends, orders, trades, loading, loadError, onClose, onFreeze, onReissue, exportCSV,
 }) => {
   const toast = useToast();
@@ -332,6 +334,26 @@ const MemberPortfolio = ({
     try { await onFreeze(!holding.is_frozen, reason); }
     catch (e) { toast.error(e.message || 'Could not change the freeze.'); }
     finally { setBusy(false); setFreezeOpen(false); }
+  };
+
+  /**
+   * The office's copy of a share movement, for the member's file. The register
+   * could be exported wholesale as a CSV and no single movement could be taken
+   * off the screen as paper.
+   */
+  const [docBusy, setDocBusy] = useState(null);
+  const downloadTxn = async (t) => {
+    setDocBusy(t.id);
+    try {
+      const filename = await downloadAccountingDocument(buildShareTransactionReceipt({
+        txn: t, member, sacco: sacco || { name: saccoName },
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the document');
+    } finally {
+      setDocBusy(null);
+    }
   };
 
   const printCert = (c) => {
@@ -450,7 +472,7 @@ const MemberPortfolio = ({
                     balance_after: t.balance_after, realized_gain: t.realized_gain,
                   })), `share_history_${member.member_no || 'member'}`)}>Export</GhostButton>
                 </div>
-                <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance']}>
+                <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance', '']}>
                   {txns.map((t) => (
                     <tr key={t.id} className="border-b border-border/60">
                       <td className="py-2.5 pr-4 text-muted-foreground whitespace-nowrap">{fmtDate(t.created_at)}</td>
@@ -462,6 +484,17 @@ const MemberPortfolio = ({
                       <td className="py-2.5 pr-4 text-muted-foreground">{num(t.price_per_share) > 0 ? KES(t.price_per_share) : '—'}</td>
                       <td className="py-2.5 pr-4 text-foreground">{num(t.amount) > 0 ? KES(t.amount) : '—'}</td>
                       <td className="py-2.5 pr-4 text-foreground">{int(t.balance_after).toLocaleString()}</td>
+                      <td className="py-2.5 pr-0 text-right">
+                        <button
+                          onClick={() => downloadTxn(t)}
+                          disabled={docBusy === t.id}
+                          title={`Download the document for ${t.txn_no || 'this movement'}`}
+                          className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                        >
+                          <Icon name={docBusy === t.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                            className={docBusy === t.id ? 'animate-spin' : ''} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </Table>

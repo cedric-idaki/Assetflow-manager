@@ -14,6 +14,9 @@ import {
   memberWithholding, reasonLabel, outstanding, onMarket,
 } from '../../sacco-dashboard/components/shares/_util';
 import { formatSerial } from '../../../utils/certificateSerial';
+import {
+  buildShareTransactionReceipt, buildDividendStatement, downloadAccountingDocument,
+} from '../../../utils/accountingDocument';
 
 const SUB_TABS = [
   { id: 'portfolio', label: 'Portfolio',    icon: 'PieChart' },
@@ -57,6 +60,34 @@ const SharesTab = ({ ctx }) => {
 
   const setO = (k, v) => setOrderForm((p) => ({ ...p, [k]: v }));
   const setX = (k, v) => setXferForm((p) => ({ ...p, [k]: v }));
+
+  // ── Supporting documents ────────────────────────────────────────────────────
+  // Share movements and dividends are accounting transactions like any other,
+  // and until now the member could take neither off the screen: the history was
+  // exportable only as a CSV of the whole account. Both builders decide receipt
+  // vs advice from the row's own state, so nothing here can hand out proof of a
+  // payment that has not happened.
+  const [docBusy, setDocBusy] = useState(null);
+
+  const withDoc = async (key, build) => {
+    setDocBusy(key);
+    try {
+      const filename = await downloadAccountingDocument(build());
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the document');
+    } finally {
+      setDocBusy(null);
+    }
+  };
+
+  const downloadTxn = (t) => withDoc(t.id, () => buildShareTransactionReceipt({
+    txn: t, member: me, sacco,
+  }));
+
+  const downloadDividend = (a) => withDoc(a.id, () => buildDividendStatement({
+    allocation: a, declaration: a.declaration, member: me, sacco,
+  }));
 
   // ── My position ───────────────────────────────────────────────────────────
   const treasuryPool = int(treasury?.treasury_shares);
@@ -506,7 +537,7 @@ const SharesTab = ({ ctx }) => {
               <EmptyState icon="Coins" title="No dividends yet"
                 hint="When your SACCO declares and calculates a dividend, your share of it appears here." />
             ) : (
-              <Table columns={['Period', 'Record date', 'Shares', 'Gross', 'Tax', 'Net', 'Status']}>
+              <Table columns={['Period', 'Record date', 'Shares', 'Gross', 'Tax', 'Net', 'Status', '']}>
                 {myAllocations.map((a) => (
                   <tr key={a.id} className="border-b border-border/60">
                     <td className="py-2.5 pr-4 font-medium text-foreground">{a.declaration?.period_label || '—'}</td>
@@ -516,6 +547,19 @@ const SharesTab = ({ ctx }) => {
                     <td className="py-2.5 pr-4 text-muted-foreground">{num(a.tax_amount) > 0 ? KES(a.tax_amount) : '—'}</td>
                     <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(a.net_amount)}</td>
                     <td className="py-2.5 pr-4"><Badge status={a.status} /></td>
+                    <td className="py-2.5 pr-0 text-right">
+                      <button
+                        onClick={() => downloadDividend(a)}
+                        disabled={docBusy === a.id}
+                        title={a.status === 'paid'
+                          ? `Download the payment advice for ${a.declaration?.period_label || 'this dividend'}`
+                          : `Download the entitlement advice for ${a.declaration?.period_label || 'this dividend'}`}
+                        className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                      >
+                        <Icon name={docBusy === a.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                          className={docBusy === a.id ? 'animate-spin' : ''} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </Table>
@@ -570,7 +614,7 @@ const SharesTab = ({ ctx }) => {
             <EmptyState icon="History" title="Nothing yet"
               hint="Your share movements will be listed here from your first purchase onwards." />
           ) : (
-            <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance']}>
+            <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance', '']}>
               {shareTxns.map((t) => (
                 <tr key={t.id} className="border-b border-border/60">
                   <td className="py-2.5 pr-4 text-muted-foreground whitespace-nowrap">{fmtDate(t.created_at)}</td>
@@ -582,6 +626,17 @@ const SharesTab = ({ ctx }) => {
                   <td className="py-2.5 pr-4 text-muted-foreground">{num(t.price_per_share) > 0 ? KES(t.price_per_share) : '—'}</td>
                   <td className="py-2.5 pr-4 text-foreground">{num(t.amount) > 0 ? KES(t.amount) : '—'}</td>
                   <td className="py-2.5 pr-4 text-foreground">{int(t.balance_after).toLocaleString()}</td>
+                  <td className="py-2.5 pr-0 text-right">
+                    <button
+                      onClick={() => downloadTxn(t)}
+                      disabled={docBusy === t.id}
+                      title={`Download the document for ${t.txn_no || 'this movement'}`}
+                      className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                    >
+                      <Icon name={docBusy === t.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                        className={docBusy === t.id ? 'animate-spin' : ''} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </Table>
