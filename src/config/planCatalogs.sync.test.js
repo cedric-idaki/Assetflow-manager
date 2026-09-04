@@ -201,7 +201,7 @@ describe('wizard total equals the server expected price', () => {
   });
 
   it('crosses the company tier boundaries at the same seat counts', () => {
-    // 5→6 (silver→bronze) and 16→17 (bronze→gold) are where an off-by-one in
+    // 5→6 (bronze→silver) and 16→17 (silver→gold) are where an off-by-one in
     // either catalog would show up as a price jump on the wrong side.
     [5, 6, 16, 17].forEach((n) => {
       expect(wizardTotal(false, n), `company seats=${n}`).toBe(

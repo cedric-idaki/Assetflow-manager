@@ -720,3 +720,341 @@ export function etimsVerificationUrl(
     normaliseKraPin(pin)
   }${branch}${receiptSignature}`;
 }
+
+// ===========================================================================
+// STOCK
+//
+// KRA wants two unrelated statements about stock and the difference matters:
+//
+//   insertStockIO    a MOVEMENT, sequenced per device by sarNo the way an
+//                    invoice is sequenced by invcNo.
+//   saveStockMaster  a BALANCE. Not a movement -- the declared quantity now.
+//
+// Both are built here so the arithmetic is the one the invoice already uses:
+// buildLine() prices a stock line exactly as it prices a sales line, which is
+// what keeps a movement's tax consistent with the document that caused it.
+// ===========================================================================
+
+/**
+ * sarTyCd -- why stock moved.
+ *
+ * KRA's authoritative list comes from selectCodeList, which nothing fetches
+ * yet, so these are the four this system actually needs and no more. They are
+ * defaults, not assertions: every movement row carries its own overridable
+ * movement_code, so a tenant whose KRA agent gives them a different code can
+ * use it. See migration 20260905140000.
+ */
+export const STOCK_MOVEMENT_CODES = {
+  SALE: "11",
+  PURCHASE: "02",
+  ADJUST_IN: "06",
+  ADJUST_OUT: "16",
+} as const;
+
+/**
+ * The code to use when a movement carries none.
+ *
+ * Incoming defaults to purchase and outgoing to sale because those are the two
+ * that arrive automatically. An adjustment is always raised by hand, and the
+ * hand that raises it chooses the reason.
+ */
+export const defaultStockMovementCode = (direction?: string | null): string =>
+  direction === "in" ? STOCK_MOVEMENT_CODES.PURCHASE : STOCK_MOVEMENT_CODES.SALE;
+
+export interface BuildStockInput {
+  sarNumber?: number | null;
+  seller?: EtimsSeller;
+  direction?: "in" | "out";
+  movementCode?: string | null;
+  line?: EtimsLineInput;
+  /** Required, exactly as for a sale -- there is no safe default. */
+  pricesIncludeTax?: boolean;
+  occurredAt?: string | Date;
+  /** 'A' when a sale produced it, 'M' when a person did. */
+  registrationType?: string | null;
+  operator?: { id?: string | null; name?: string | null };
+  remark?: string | null;
+}
+
+/**
+ * Build the payload for `insertStockIO`.
+ *
+ * Quantities stay POSITIVE in both directions. Unlike a credit note -- which is
+ * a negated sale -- a stock movement says which way it went in sarTyCd, and a
+ * negative quantity alongside an outgoing code would state the direction twice,
+ * in two places that can then disagree.
+ */
+export function buildStockMovementDocument(input: BuildStockInput = {}): BuildDocumentResult {
+  const {
+    sarNumber = null,
+    seller = {},
+    direction = "out",
+    movementCode = null,
+    line = {},
+    pricesIncludeTax,
+    occurredAt = new Date(),
+    registrationType = "M",
+    operator = {},
+    remark = null,
+  } = input;
+
+  const problems: string[] = [];
+
+  if (typeof pricesIncludeTax !== "boolean") {
+    problems.push(
+      "Whether the recorded price includes tax was not stated, so the tax on this movement cannot be worked out either way.",
+    );
+  }
+
+  const sellerPin = normaliseKraPin(seller.pin);
+  if (!isValidKraPin(sellerPin)) {
+    problems.push(
+      sellerPin
+        ? `The seller's KRA PIN "${sellerPin}" is not a valid PIN.`
+        : "No seller KRA PIN is configured for eTIMS.",
+    );
+  }
+
+  if (!Number.isInteger(sarNumber) || (sarNumber as number) <= 0) {
+    problems.push("No eTIMS stock sequence number was allocated for this movement.");
+  }
+
+  if (direction !== "in" && direction !== "out") {
+    problems.push(`"${direction}" is not a stock direction.`);
+  }
+
+  const occurredOn = etimsDate(occurredAt);
+  if (!occurredOn) problems.push("The movement has no usable date.");
+
+  const built = buildLine({
+    line,
+    seq: 1,
+    pricesIncludeTax: pricesIncludeTax === true,
+    asOf: occurredAt,
+  });
+  problems.push(...built.problems);
+
+  const totals: BuildDocumentResult["totals"] = {
+    taxable: built.figures.taxableAmount,
+    tax: built.figures.taxAmount,
+    total: built.figures.totalAmount,
+    byCode: TAX_CODE_KEYS.reduce((acc, c) => {
+      const mine = c === built.taxCode;
+      acc[c] = {
+        taxable: mine ? built.figures.taxableAmount : 0,
+        tax: mine ? built.figures.taxAmount : 0,
+        rate: mine ? taxRateFor(c, occurredAt) : null,
+      };
+      return acc;
+    }, {} as BuildDocumentResult["totals"]["byCode"]),
+  };
+
+  const payload: Record<string, unknown> = {
+    tin: sellerPin,
+    bhfId: String(seller.branchId ?? HEAD_OFFICE_BRANCH),
+    sarNo: sarNumber,
+    // KRA reads 0 as "this movement reverses nothing".
+    orgSarNo: 0,
+    regTyCd: registrationType ?? "M",
+    // A movement of a tenant's own stock has no counterparty. Present as
+    // explicit nulls because omitting the keys fails schema validation.
+    custTin: null,
+    custNm: null,
+    custBhfId: null,
+    sarTyCd: movementCode ?? defaultStockMovementCode(direction),
+    ocrnDt: occurredOn,
+    totItemCnt: 1,
+    totTaxblAmt: totals.taxable,
+    totTaxAmt: totals.tax,
+    totAmt: totals.total,
+    remark: remark ?? null,
+    regrId: operator.id ?? "system",
+    regrNm: operator.name ?? "Ararat",
+    modrId: operator.id ?? "system",
+    modrNm: operator.name ?? "Ararat",
+    itemList: [built.item],
+  };
+
+  return { ok: problems.length === 0, problems, payload, totals };
+}
+
+/**
+ * Build the payload for `saveStockMaster` -- the declared quantity of one item.
+ *
+ * This is the call that actually keeps KRA's stock position right. A tenant who
+ * never records a single manual adjustment still has a correct balance here,
+ * because the quantity comes from assets.quantity_available, which the POS
+ * itself maintains on every sale.
+ */
+export function buildStockMasterPayload(
+  { seller = {}, itemCode, remainingQuantity, operator = {} }: {
+    seller?: EtimsSeller;
+    itemCode?: string | null;
+    remainingQuantity?: number | string | null;
+    operator?: { id?: string | null; name?: string | null };
+  },
+): { ok: boolean; problems: string[]; payload: Record<string, unknown> } {
+  const problems: string[] = [];
+  const pin = normaliseKraPin(seller.pin);
+
+  if (!isValidKraPin(pin)) problems.push("No valid seller KRA PIN is configured for eTIMS.");
+  if (!itemCode) problems.push("A stock balance needs an item code.");
+
+  const qty = round2(num(remainingQuantity));
+  if (qty < 0) problems.push("A stock balance cannot be negative.");
+
+  return {
+    ok: problems.length === 0,
+    problems,
+    payload: {
+      tin: pin,
+      bhfId: String(seller.branchId ?? HEAD_OFFICE_BRANCH),
+      itemCd: itemCode ?? "",
+      rsdQty: qty,
+      regrId: operator.id ?? "system",
+      regrNm: operator.name ?? "Ararat",
+      modrId: operator.id ?? "system",
+      modrNm: operator.name ?? "Ararat",
+    },
+  };
+}
+
+// ===========================================================================
+// PURCHASES
+//
+// Everything here came from KRA. Nothing in this section computes a purchase
+// figure -- see the header of migration 20260905150000. The two functions below
+// are a flattening on the way in and an echo on the way out.
+// ===========================================================================
+
+/** pchsSttsCd. Defaults, for the same reason as the stock codes above. */
+export const PURCHASE_STATUS_CODES = { APPROVED: "02", REJECTED: "05" } as const;
+
+export interface NormalisedPurchase {
+  supplierPin: string;
+  supplierName: string | null;
+  supplierBranch: string | null;
+  supplierInvoiceNo: number;
+  supplierSdcId: string | null;
+  supplierMrcNo: string | null;
+  receiptType: string | null;
+  paymentType: string | null;
+  purchaseDate: string | null;
+  totalTaxable: number;
+  totalTax: number;
+  totalAmount: number;
+  source: Record<string, unknown>;
+  items: Array<Record<string, unknown>>;
+}
+
+/**
+ * Flatten one record from `selectTrnsPurchaseSalesList` into the columns the
+ * review screen reads.
+ *
+ * Returns null for anything missing the two fields that IDENTIFY a purchase --
+ * the supplier's PIN and their invoice number. Those are the key KRA
+ * reconciles on, so a record without them can be neither filed back nor
+ * deduplicated; it is skipped rather than stored as a half-record.
+ *
+ * Tolerant of shape for the same reason readEtimsReceipt is: the OSCU and VSCU
+ * flavours nest and name these differently.
+ */
+export function normalisePurchase(record: any): NormalisedPurchase | null {
+  if (!record) return null;
+
+  const supplierPin = normaliseKraPin(record.spplrTin ?? record.supplierTin ?? null);
+  const invoiceNo = parseInt(String(record.spplrInvcNo ?? record.invcNo ?? ""), 10);
+  if (!supplierPin || !Number.isFinite(invoiceNo)) return null;
+
+  const rawItems: any[] = Array.isArray(record.itemList) ? record.itemList : [];
+
+  return {
+    supplierPin,
+    supplierName: record.spplrNm ?? null,
+    supplierBranch: record.spplrBhfId ?? null,
+    supplierInvoiceNo: invoiceNo,
+    supplierSdcId: record.spplrSdcId ?? record.sdcId ?? null,
+    supplierMrcNo: record.spplrMrcNo ?? record.mrcNo ?? null,
+    receiptType: record.rcptTyCd ?? null,
+    paymentType: record.pmtTyCd ?? null,
+    // KRA sends yyyyMMdd. Anything else is left null rather than guessed at.
+    purchaseDate: typeof record.salesDt === "string" && /^\d{8}$/.test(record.salesDt)
+      ? `${record.salesDt.slice(0, 4)}-${record.salesDt.slice(4, 6)}-${record.salesDt.slice(6, 8)}`
+      : null,
+    totalTaxable: num(record.totTaxblAmt),
+    totalTax: num(record.totTaxAmt),
+    totalAmount: num(record.totAmt),
+    source: record,
+    items: rawItems.map((it, i) => ({
+      item_seq: parseInt(String(it?.itemSeq ?? i + 1), 10) || i + 1,
+      item_code: it?.itemCd ?? null,
+      classification_code: it?.itemClsCd ?? null,
+      item_name: it?.itemNm ?? null,
+      quantity: num(it?.qty),
+      quantity_unit: it?.qtyUnitCd ?? null,
+      packaging_unit: it?.pkgUnitCd ?? null,
+      unit_price: num(it?.prc),
+      supply_amount: num(it?.splyAmt),
+      discount_amount: num(it?.totDcAmt ?? it?.dcAmt),
+      tax_code: it?.taxTyCd ?? null,
+      taxable_amount: num(it?.taxblAmt),
+      tax_amount: num(it?.taxAmt),
+      total_amount: num(it?.totAmt),
+    })),
+  };
+}
+
+/**
+ * Build the payload for `insertTrnsPurchase`.
+ *
+ * DELIBERATELY AN ECHO. KRA's own record of the supplier's filing is spread
+ * first and only the fields that are genuinely ours are overridden: who we are,
+ * our sequence number, our verdict, and who recorded it. Rebuilding the
+ * document from the flattened columns instead would let this system's
+ * arithmetic disagree with the supplier's filing, and a disagreement between
+ * the two sides of one transaction is a reconciliation failure on somebody's
+ * VAT return.
+ */
+export function buildPurchaseDocument(
+  { source, seller = {}, invoiceNumber = null, accepted, operator = {}, remark = null }: {
+    source?: Record<string, unknown> | null;
+    seller?: EtimsSeller;
+    invoiceNumber?: number | null;
+    accepted?: boolean;
+    operator?: { id?: string | null; name?: string | null };
+    remark?: string | null;
+  },
+): { ok: boolean; problems: string[]; payload: Record<string, unknown> } {
+  const problems: string[] = [];
+  const pin = normaliseKraPin(seller.pin);
+
+  if (!isValidKraPin(pin)) problems.push("No valid KRA PIN is configured for eTIMS.");
+  if (!source || typeof source !== "object") {
+    problems.push("This purchase has no record from KRA to file back.");
+  }
+  if (!Number.isInteger(invoiceNumber) || (invoiceNumber as number) <= 0) {
+    problems.push("No eTIMS sequence number was allocated for this purchase.");
+  }
+  if (typeof accepted !== "boolean") {
+    problems.push("This purchase has not been accepted or rejected.");
+  }
+
+  return {
+    ok: problems.length === 0,
+    problems,
+    payload: {
+      ...(source ?? {}),
+      tin: pin,
+      bhfId: String(seller.branchId ?? HEAD_OFFICE_BRANCH),
+      invcNo: invoiceNumber,
+      orgInvcNo: 0,
+      pchsSttsCd: accepted ? PURCHASE_STATUS_CODES.APPROVED : PURCHASE_STATUS_CODES.REJECTED,
+      cfmDt: etimsDateTime(new Date()),
+      remark: remark ?? (source as any)?.remark ?? null,
+      regrId: operator.id ?? "system",
+      regrNm: operator.name ?? "Ararat",
+      modrId: operator.id ?? "system",
+      modrNm: operator.name ?? "Ararat",
+    },
+  };
+}

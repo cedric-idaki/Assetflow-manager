@@ -90,14 +90,14 @@ describe('quoteSubscription — the engine, not a second opinion', () => {
       seats: 10,
       chargeInstallation: true,
     });
-    // 10 users lands on Bronze (6–16) at 360.
-    expect(q.tier.id).toBe('bronze');
-    expect(q.usageFee).toBe(10 * 360);
+    // 10 users lands on Silver (6–16) at 305.
+    expect(q.tier.id).toBe('silver');
+    expect(q.usageFee).toBe(10 * 305);
     expect(q.installationFee).toBe(COMPANY_INSTALL);
     expect(q.baseFee).toBe(0); // corporate prices entirely per seat today
     expect(q.moduleFee).toBe(0); // every module is bundled
     expect(q.vatAmount).toBeGreaterThan(0);
-    expect(q.total).toBe(10 * 360 + COMPANY_INSTALL);
+    expect(q.total).toBe(10 * 305 + COMPANY_INSTALL);
   });
 
   it('itemises base fee, member charges and VAT on a sacco invoice', () => {
@@ -151,7 +151,7 @@ describe('quoteSubscription — the engine, not a second opinion', () => {
   });
 
   it('derives the tier from headcount, and honours an explicit override', () => {
-    expect(quoteSubscription({ clientType: CLIENT_TYPE.CORPORATE, seats: 3 }).tier.id).toBe('silver');
+    expect(quoteSubscription({ clientType: CLIENT_TYPE.CORPORATE, seats: 3 }).tier.id).toBe('bronze');
     expect(quoteSubscription({ clientType: CLIENT_TYPE.CORPORATE, seats: 30 }).tier.id).toBe('gold');
     expect(
       quoteSubscription({ clientType: CLIENT_TYPE.CORPORATE, seats: 30, tierId: 'silver' }).tier.id,

@@ -540,7 +540,13 @@ BEGIN
   SELECT * INTO g FROM public.sacco_loan_guarantees WHERE id = p_guarantee_id;
   IF g.id IS NULL THEN RAISE EXCEPTION 'Guarantee not found'; END IF;
 
-  IF NOT ((g.admin_id = public.current_admin_id() AND public.is_staff_member())
+  -- `admin_id IS NOT NULL` is not belt-and-braces. Without it a row whose
+  -- tenant was never stamped makes the whole comparison NULL, NOT NULL is
+  -- NULL, and an IF on NULL does not fire — so the refusal would silently
+  -- become permission for exactly the rows that can least afford it.
+  IF NOT ((g.admin_id IS NOT NULL
+           AND g.admin_id = public.current_admin_id()
+           AND public.is_staff_member())
           OR public.is_global_viewer()) THEN
     RAISE EXCEPTION 'Not permitted to serialise this agreement.';
   END IF;
@@ -695,8 +701,13 @@ BEGIN
   IF NEW.doc_kind <> 'guarantee_agreement' OR NEW.source_table <> 'sacco_loan_guarantees' THEN
     RETURN NEW;
   END IF;
-  IF TG_OP = 'UPDATE' AND NEW.status IS NOT DISTINCT FROM OLD.status THEN
-    RETURN NEW;
+
+  -- Nested rather than ANDed: OLD is unassigned on INSERT, and PostgreSQL does
+  -- not promise to short-circuit the second operand before evaluating it.
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.status IS NOT DISTINCT FROM OLD.status THEN
+      RETURN NEW;
+    END IF;
   END IF;
 
   -- Only the four that change what the society knows about the agreement.

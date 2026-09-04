@@ -222,8 +222,8 @@ interface SaccoTier {
 }
 
 const COMPANY_PLANS: CompanyPlan[] = [
-  { id: 'silver', pricePerUser: 305, baseFee: 0, minUsers: 1, maxUsers: 5 },
-  { id: 'bronze', pricePerUser: 360, baseFee: 0, minUsers: 6, maxUsers: 16 },
+  { id: 'bronze', pricePerUser: 360, baseFee: 0, minUsers: 1, maxUsers: 5 },
+  { id: 'silver', pricePerUser: 305, baseFee: 0, minUsers: 6, maxUsers: 16 },
   { id: 'gold', pricePerUser: 267, baseFee: 0, minUsers: 17, maxUsers: null },
 ];
 

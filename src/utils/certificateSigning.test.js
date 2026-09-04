@@ -3,6 +3,7 @@ import {
   A4, SIG_BLOCK, signatureBlocks, fieldsForSigners,
   defaultPanelFor, cleanSigner, cleanPanel,
   signingVerdict, isTerminal, isIssued, releaseState, docKindLabel,
+  DOC_KINDS, isSaccoOnlyKind, releaseWords, GUARANTOR_ROLE,
 } from './certificateSigning';
 
 // The layout is shared by the PDF generator and the SignNow field placement.
@@ -185,5 +186,55 @@ describe('docKindLabel', () => {
   it('names the kinds, and does not blow up on one it does not know', () => {
     expect(docKindLabel('share_certificate')).toBe('Share certificate');
     expect(docKindLabel('mystery')).toBe('Document');
+  });
+});
+
+
+// ── The guarantee agreement kind ────────────────────────────────────────────
+// A sacco-only kind, welded in the database to sacco_loan_guarantees by
+// signing_requests_kind_source_chk. Everything below is a place where this file
+// and 20260905160000_guarantee_agreement_signing.sql have to agree.
+describe('guarantee_agreement', () => {
+  it('points at the table the CHECK constraint demands', () => {
+    // If this drifts, every send is refused by the database with a constraint
+    // violation rather than anything a person could act on.
+    expect(DOC_KINDS.guarantee_agreement.sourceTable).toBe('sacco_loan_guarantees');
+  });
+
+  it('is the only sacco-only kind', () => {
+    expect(isSaccoOnlyKind('guarantee_agreement')).toBe(true);
+    for (const k of ['share_certificate', 'settlement_certificate', 'asset_valuation', 'contract']) {
+      expect(isSaccoOnlyKind(k)).toBe(false);
+    }
+    expect(isSaccoOnlyKind('mystery')).toBe(false);
+  });
+
+  it('puts the guarantor first, because they sign their own undertaking', () => {
+    const panel = defaultPanelFor('guarantee_agreement');
+    expect(panel[0].role).toBe(GUARANTOR_ROLE);
+    expect(panel[0].order).toBe(1);
+    // And somebody countersigns for the society: a guarantee nobody accepted
+    // is not a guarantee.
+    expect(panel.length).toBeGreaterThan(1);
+  });
+
+  it('is executed, never issued', () => {
+    // "Issued" is a claim the society makes about its own paper. An agreement
+    // is something the guarantor did, and the two must not be described alike.
+    expect(signingVerdict('released', 'guarantee_agreement').label).toBe('Executed');
+    expect(releaseWords('guarantee_agreement').issuedLabel).toBe('Executed');
+    expect(releaseWords('guarantee_agreement').release).not.toMatch(/certificate/i);
+  });
+
+  it('leaves the vocabulary of every other kind alone', () => {
+    expect(signingVerdict('released').label).toBe('Issued');
+    expect(signingVerdict('released', 'share_certificate').label).toBe('Issued');
+    expect(releaseWords('share_certificate').issuedLabel).toBe('Issued');
+    expect(releaseWords(undefined).release).toBe('Issue certificate');
+  });
+
+  it('still reports the states it has no special word for', () => {
+    expect(signingVerdict('sent', 'guarantee_agreement').label).toBe('Out for signature');
+    expect(signingVerdict('teleported', 'guarantee_agreement').label).toBe('Unknown');
   });
 });

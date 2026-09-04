@@ -14,6 +14,7 @@ import React, {
 } from 'react';
 import { supabase, invokeSupabaseFunction } from '../lib/supabase';
 import { sendGuaranteeRequest } from '../services/emailService';
+import { guaranteeSigningStates, openSignedCertificate } from '../utils/signnowClient';
 import { useAuth } from './AuthContext';
 
 const SaccoMemberContext = createContext(null);
@@ -69,6 +70,10 @@ export const SaccoMemberProvider = ({ children }) => {
   // Guarantee agreements I am a party to — as guarantor or as borrower
   // (20260904160000_sacco_loan_guarantees).
   const [guarantees,    setGuarantees]    = useState([]);
+  // Where each confirmed agreement has got to on its way to being executed
+  // (20260905160000_guarantee_agreement_signing). Empty for a society that
+  // does not route guarantees through SignNow, which is the default.
+  const [guaranteeSigning, setGuaranteeSigning] = useState({});
   const [loading,       setLoading]       = useState(true);
 
   const channelsRef = useRef([]);
@@ -285,6 +290,18 @@ export const SaccoMemberProvider = ({ children }) => {
         loan:sacco_loans(id, principal, annual_interest_rate, term_months, status, purpose)`)
       .order('created_at', { ascending: false });
     setGuarantees(data || []);
+
+    // Only a confirmed guarantee can have an agreement out for signature, so
+    // this asks about those alone. The RPC answers for the parties to each
+    // agreement — a member is not staff and cannot read signing_requests.
+    const confirmed = (data || []).filter((g) => g.status === 'accepted').map((g) => g.id);
+    try {
+      setGuaranteeSigning(await guaranteeSigningStates(confirmed));
+    } catch (_) {
+      // A society whose signing migration is not applied, or that has never
+      // connected SignNow, simply has nothing to report here.
+      setGuaranteeSigning({});
+    }
   }, []);
 
   const fetchAll = useCallback(async () => {
@@ -749,6 +766,24 @@ export const SaccoMemberProvider = ({ children }) => {
     return data;
   }, [guaranteeRpc, fetchGuarantees]);
 
+  /**
+   * Open the executed agreement — the copy both parties actually signed.
+   *
+   * signed-certificates is a private bucket and a member is not staff, so this
+   * reaches the file through the one storage policy written for the parties to
+   * a guarantee, and only once the request has been released. A draft is
+   * deliberately unreachable: an unexecuted agreement is not theirs to hold.
+   */
+  const openExecutedGuarantee = useCallback(async (guaranteeId) => {
+    const state = guaranteeSigning[guaranteeId];
+    if (!state?.signedPath || state.status !== 'released') {
+      throw new Error('There is no executed agreement for this guarantee yet.');
+    }
+    const opened = await openSignedCertificate(state.signedPath);
+    if (!opened) throw new Error('Allow pop-ups for this site to open the agreement.');
+    return true;
+  }, [guaranteeSigning]);
+
   // ── CSV export (same helper as the sacco dashboard) ───────────────────────
   const exportCSV = useCallback((data, filename) => {
     if (!data || data.length === 0) return;
@@ -801,6 +836,7 @@ export const SaccoMemberProvider = ({ children }) => {
     setDocuments([]);
     setContracts([]);
     setGuarantees([]);
+    setGuaranteeSigning({});
     setLoading(true);
   }, []);
 
@@ -862,7 +898,7 @@ export const SaccoMemberProvider = ({ children }) => {
     elections, electionPositions, electionCandidates, myVoterRows,
     shareSettings, shareTxns, certificates, dividends, dividendAllocations, treasury,
     myWithholdings, myWithholdingEvents,
-    guarantees,
+    guarantees, guaranteeSigning, openExecutedGuarantee,
     stats, loading,
     refetch: fetchAll,
     updateProfile, applyLoan,

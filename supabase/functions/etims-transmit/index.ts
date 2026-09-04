@@ -43,15 +43,23 @@ import { openRequest } from "../_shared/http.ts";
 import { authenticateCaller, isServiceRole, safeEqual } from "../_shared/auth.ts";
 import {
   buildEtimsSalesDocument,
+  buildPurchaseDocument,
+  buildStockMasterPayload,
+  buildStockMovementDocument,
   etimsVerificationUrl,
+  normalisePurchase,
   readEtimsReceipt,
   verifyDocumentTotals,
 } from "../_shared/etims.ts";
 import {
   backoffSeconds,
   type EtimsCredentials,
+  fetchPurchases,
   saveItem,
+  saveStockBalance,
+  transmitPurchase,
   transmitSalesDocument,
+  transmitStockMovement,
 } from "../_shared/etimsClient.ts";
 
 const API_VERSIONS = ["2026-08-21"];
@@ -215,49 +223,183 @@ Deno.serve(async (req) => {
       return json({ error: `Unknown resolution '${resolution}'.` }, 400);
     }
 
+    // One credentials read (and one key decryption) per tenant per run, not per
+    // document — a 200-document backlog for one shop is one decryption. Shared
+    // across all three queues below, which all file under the same device.
+    const credCache = new Map<string, { creds: EtimsCredentials; row: Creds } | null>();
+
+    // =======================================================================
+    // PULLING PURCHASES
+    //
+    // A read, not a filing, so it is its own action: it changes nothing at KRA
+    // and a tenant may want their supplier inbox refreshed without waiting for
+    // the drain. The scheduler pulls for every connected tenant; a signed-in
+    // owner pulls only their own.
+    // =======================================================================
+    if (action === "pull_purchases") {
+      let targets: string[] = [];
+
+      if (adminId) {
+        targets = [adminId];
+      } else {
+        const { data: active } = await db
+          .from("etims_credentials")
+          .select("admin_id")
+          .eq("is_active", true);
+        targets = (active ?? []).map((r: any) => r.admin_id);
+      }
+
+      const pulls: Array<Record<string, unknown>> = [];
+      for (const target of targets) {
+        pulls.push(await pullPurchasesFor({ db, adminId: target, credCache }));
+      }
+
+      return json({
+        ok: true,
+        tenants: targets.length,
+        stored: pulls.reduce((n, p) => n + (Number(p.stored) || 0), 0),
+        results: pulls,
+      });
+    }
+
     if (action !== "drain") return json({ error: `Unknown action '${action}'` }, 400);
 
     // =======================================================================
     // THE DRAIN
+    //
+    // Three queues, one pass. They are drained in the order a tax position is
+    // built: the invoice first, because a credit note and a stock movement can
+    // both refer to it; then stock; then purchases, which are independent of
+    // all of it.
+    //
+    // Each queue gets its own batch budget rather than sharing one, so a large
+    // stock backlog cannot starve the invoices — an unfiled invoice is a
+    // customer holding an invalid tax receipt, which is the worse failure.
     // =======================================================================
     const limit = Math.min(Math.max(parseInt(String(body?.limit ?? DEFAULT_BATCH), 10) || DEFAULT_BATCH, 1), 100);
+    const dueNow = new Date().toISOString();
 
-    let due = db
-      .from("etims_invoices")
-      .select("id")
-      .eq("status", "pending")
-      .lte("next_attempt_at", new Date().toISOString())
-      .order("created_at", { ascending: true })
-      .limit(limit);
+    const dueIn = async (table: string) => {
+      let q = db
+        .from(table)
+        .select("id")
+        .eq("status", "pending")
+        .lte("next_attempt_at", dueNow)
+        .order("created_at", { ascending: true })
+        .limit(limit);
+      if (adminId) q = q.eq("admin_id", adminId);
+      return await q;
+    };
 
-    if (adminId) due = due.eq("admin_id", adminId);
-
-    const { data: dueRows, error: dueErr } = await due;
+    const { data: dueRows, error: dueErr } = await dueIn("etims_invoices");
     if (dueErr) {
       console.error("Could not read the eTIMS queue:", dueErr.message);
       return json({ error: "Could not read the filing queue." }, 500);
     }
 
     const results: Array<Record<string, unknown>> = [];
-    // One credentials read (and one key decryption) per tenant per run, not per
-    // document — a 200-document backlog for one shop is one decryption.
-    const credCache = new Map<string, { creds: EtimsCredentials; row: Creds } | null>();
-
     for (const { id } of dueRows ?? []) {
       const outcome = await processOne({ db, id, credCache, operator });
       results.push({ id, ...outcome });
     }
 
+    // Stock and purchases must not be able to fail the invoice drain: their
+    // tables are newer than the sales path and a tenant whose migration has not
+    // run yet should still get their invoices filed rather than a 500.
+    const stockResults: Array<Record<string, unknown>> = [];
+    const { data: dueStock, error: stockErr } = await dueIn("etims_stock_movements");
+    if (stockErr) {
+      console.error("Could not read the eTIMS stock queue:", stockErr.message);
+    } else {
+      for (const { id } of dueStock ?? []) {
+        stockResults.push({ id, ...await processStockMovement({ db, id, credCache, operator }) });
+      }
+    }
+
+    const purchaseResults: Array<Record<string, unknown>> = [];
+    const { data: duePurchases, error: purErr } = await dueIn("etims_purchases");
+    if (purErr) {
+      console.error("Could not read the eTIMS purchase queue:", purErr.message);
+    } else {
+      for (const { id } of duePurchases ?? []) {
+        purchaseResults.push({ id, ...await processPurchase({ db, id, credCache, operator }) });
+      }
+    }
+
+    const sentIn = (rows: Array<Record<string, unknown>>) =>
+      rows.filter((r) => r.status === "sent").length;
+
     return json({
       ok: true,
       considered: dueRows?.length ?? 0,
-      sent: results.filter((r) => r.status === "sent").length,
+      sent: sentIn(results),
       results,
+      stock: { considered: dueStock?.length ?? 0, sent: sentIn(stockResults), results: stockResults },
+      purchases: {
+        considered: duePurchases?.length ?? 0,
+        sent: sentIn(purchaseResults),
+        results: purchaseResults,
+      },
     });
   } catch (err) {
     return api.fail(err);
   }
 });
+
+// ===========================================================================
+// CREDENTIALS
+//
+// One read and one key decryption per tenant per run, not per document: a
+// 200-document backlog for one shop is one decryption. Shared by all three
+// queues, which is the whole reason it is a function rather than an inline
+// block — a sale, a stock movement and a purchase all file under the same
+// device, and three copies of this logic would be three places for the key
+// handling to drift.
+//
+// A null in the cache means "this tenant cannot file right now", which is a
+// deliberately different thing from "not looked up yet".
+// ===========================================================================
+
+async function loadCreds(
+  db: any,
+  adminId: string,
+  credCache: Map<string, { creds: EtimsCredentials; row: Creds } | null>,
+): Promise<{ creds: EtimsCredentials; row: Creds } | null> {
+  if (credCache.has(adminId)) return credCache.get(adminId) ?? null;
+
+  const { data: row } = await db
+    .from("etims_credentials")
+    .select("*")
+    .eq("admin_id", adminId)
+    .maybeSingle();
+
+  if (!row || !row.is_active || !row.cmc_key_enc) {
+    credCache.set(adminId, null);
+    return null;
+  }
+
+  try {
+    const cmcKey = await decryptSecret(row.cmc_key_enc, "etims", {
+      recordId: adminId,
+      field: "cmc_key_enc",
+    });
+    const entry = {
+      row,
+      creds: {
+        pin: row.kra_pin,
+        branchId: row.branch_id,
+        cmcKey,
+        environment: row.environment,
+      },
+    };
+    credCache.set(adminId, entry);
+    return entry;
+  } catch (err) {
+    console.error("eTIMS key could not be decrypted for", adminId, (err as Error).message);
+    credCache.set(adminId, null);
+    return null;
+  }
+}
 
 // ===========================================================================
 // ONE DOCUMENT
@@ -314,38 +456,7 @@ async function processOne(
   };
 
   // ── Credentials ──────────────────────────────────────────────────────────
-  if (!credCache.has(doc.admin_id)) {
-    const { data: row } = await db
-      .from("etims_credentials")
-      .select("*")
-      .eq("admin_id", doc.admin_id)
-      .maybeSingle();
-
-    if (!row || !row.is_active || !row.cmc_key_enc) {
-      credCache.set(doc.admin_id, null);
-    } else {
-      try {
-        const cmcKey = await decryptSecret(row.cmc_key_enc, "etims", {
-          recordId: doc.admin_id,
-          field: "cmc_key_enc",
-        });
-        credCache.set(doc.admin_id, {
-          row,
-          creds: {
-            pin: row.kra_pin,
-            branchId: row.branch_id,
-            cmcKey,
-            environment: row.environment,
-          },
-        });
-      } catch (err) {
-        console.error("eTIMS key could not be decrypted for", doc.admin_id, (err as Error).message);
-        credCache.set(doc.admin_id, null);
-      }
-    }
-  }
-
-  const cached = credCache.get(doc.admin_id);
+  const cached = await loadCreds(db, doc.admin_id, credCache);
   if (!cached) {
     return await fail(
       "pending",
@@ -517,6 +628,398 @@ async function processOne(
   }
 
   return await fail("rejected", `KRA refused this document: ${res.message}`, res.resultCd);
+}
+
+// ===========================================================================
+// ONE STOCK MOVEMENT
+//
+// Same lease-claim-transmit shape as a document, and the same four outcomes,
+// because a stock movement carries a device sequence number (sarNo) with
+// exactly the invoice sequence's problem: re-sending one either duplicates the
+// movement or is refused, and a timeout leaves it genuinely unknown.
+//
+// After a movement is accepted the BALANCE is declared as well. The two are
+// separate calls to KRA and the balance is the one that matters most — it is
+// what makes the tenant's stock position right even where a movement was never
+// recorded — so a failure to declare it is reported on the row without undoing
+// the movement that did succeed.
+// ===========================================================================
+
+async function processStockMovement(
+  { db, id, credCache, operator }: {
+    db: any;
+    id: string;
+    credCache: Map<string, { creds: EtimsCredentials; row: Creds } | null>;
+    operator: { id: string; name: string };
+  },
+): Promise<Record<string, unknown>> {
+  const nowIso = new Date().toISOString();
+  const leaseUntil = new Date(Date.now() + LEASE_MINUTES * 60_000).toISOString();
+
+  const { data: claimedRows } = await db
+    .from("etims_stock_movements")
+    .update({ next_attempt_at: leaseUntil, updated_at: nowIso })
+    .eq("id", id)
+    .eq("status", "pending")
+    .lte("next_attempt_at", nowIso)
+    .select("*");
+
+  const mv = claimedRows?.[0];
+  if (!mv) return { status: "skipped", reason: "claimed by another run" };
+
+  const fail = async (
+    status: "pending" | "rejected" | "uncertain",
+    message: string,
+    resultCode: string | null = null,
+  ) => {
+    const attempts = (mv.attempts ?? 0) + 1;
+    await db.from("etims_stock_movements").update({
+      status,
+      attempts,
+      last_error: message,
+      last_result_code: resultCode,
+      next_attempt_at: status === "pending"
+        ? new Date(Date.now() + backoffSeconds(attempts) * 1000).toISOString()
+        : new Date(Date.now() + 365 * 24 * 3600_000).toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq("id", id);
+    return { status, error: message };
+  };
+
+  const cached = await loadCreds(db, mv.admin_id, credCache);
+  if (!cached) {
+    return await fail("pending", "eTIMS is not connected for this account. The movement stays queued.");
+  }
+  const { creds, row: credRow } = cached;
+
+  if (mv.environment !== credRow.environment) {
+    return await fail(
+      "rejected",
+      `This movement was queued for the ${mv.environment} environment but the device is now on ${credRow.environment}. It has not been filed.`,
+    );
+  }
+
+  // ── What moved, and how it is classified ─────────────────────────────────
+  const { data: asset } = await db
+    .from("assets")
+    .select("id, description, asset_code, quantity_available, selling_price")
+    .eq("id", mv.asset_id)
+    .maybeSingle();
+
+  const { data: classifications } = await db
+    .from("etims_item_classifications")
+    .select("*")
+    .eq("admin_id", mv.admin_id)
+    .or(`asset_id.eq.${mv.asset_id ?? "00000000-0000-0000-0000-000000000000"},item_code.eq.${mv.item_code}`);
+
+  const cls = classifications?.[0] ?? null;
+  if (!cls) {
+    return await fail(
+      "pending",
+      `"${asset?.description ?? mv.item_code}" has not been classified for KRA, so its stock cannot be filed. Classify it under Compliance → eTIMS.`,
+    );
+  }
+
+  // The value of what moved. A sale is valued at what it actually sold for.
+  //
+  // Anything else is valued at the item's list price, which is a compromise
+  // worth naming: cost would be the better basis for a write-off, but this
+  // database has no cost column — assets.purchase_price is written by the
+  // registration form and does not exist on the live table (verified 2026-09-05,
+  // the same schema drift 20260817120000 dealt with elsewhere). Rather than
+  // send a silent zero, the movement is valued at the price the item carries,
+  // and the tenant can see the figure on the row before it files.
+  //
+  // Zero only when nothing at all is recorded. The document stays
+  // self-consistent either way, which is what KRA validates against.
+  const { data: sale } = mv.sale_id
+    ? await db.from("sales").select("selling_price, discount_amount").eq("id", mv.sale_id).maybeSingle()
+    : { data: null };
+
+  const unitPrice = sale
+    ? Number(sale.selling_price ?? 0)
+    : Number(asset?.selling_price ?? 0);
+
+  // ── Allocate the stock sequence, once ────────────────────────────────────
+  let sarNumber: number | null = mv.sar_number ?? null;
+  if (sarNumber == null) {
+    const { data: allocated, error: seqErr } = await db.rpc("etims_next_sar_number", {
+      p_admin: mv.admin_id,
+    });
+    if (seqErr || allocated == null) {
+      return await fail("pending", `Could not allocate an eTIMS stock number: ${seqErr?.message ?? "no number returned"}`);
+    }
+    sarNumber = Number(allocated);
+    await db.from("etims_stock_movements").update({ sar_number: sarNumber }).eq("id", id);
+  }
+
+  const document = buildStockMovementDocument({
+    sarNumber,
+    seller: { pin: credRow.kra_pin, branchId: credRow.branch_id },
+    direction: mv.direction,
+    movementCode: mv.movement_code ?? null,
+    // The POS is tax-exclusive, the same fact the sales enqueue records per
+    // document. A stock movement is valued on the same basis as the sale that
+    // caused it, so the two cannot disagree about what the tax was.
+    pricesIncludeTax: false,
+    occurredAt: mv.occurred_at ?? mv.created_at,
+    registrationType: mv.sale_id ? "A" : "M",
+    operator,
+    remark: mv.note ?? null,
+    line: {
+      description: asset?.description ?? mv.item_code,
+      itemCode: cls.item_code,
+      classificationCode: cls.classification_code,
+      taxCode: cls.tax_code,
+      quantity: Number(mv.quantity ?? 0),
+      unitPrice,
+      quantityUnit: cls.quantity_unit,
+      packagingUnit: cls.packaging_unit,
+      itemType: cls.item_type,
+    },
+  });
+
+  await db.from("etims_stock_movements").update({ payload: document.payload }).eq("id", id);
+
+  if (!document.ok) {
+    return await fail("rejected", document.problems.join(" "));
+  }
+
+  const res = await transmitStockMovement(document.payload, creds);
+
+  if (res.outcome === "accepted" || res.outcome === "duplicate") {
+    // ── And now the balance ────────────────────────────────────────────────
+    // Declared from assets.quantity_available rather than from the movement,
+    // because it is a statement about stock NOW, not about what just changed.
+    let balanceError: string | null = null;
+    const master = buildStockMasterPayload({
+      seller: { pin: credRow.kra_pin, branchId: credRow.branch_id },
+      itemCode: cls.item_code,
+      remainingQuantity: asset?.quantity_available ?? 0,
+      operator,
+    });
+
+    if (master.ok) {
+      const bal = await saveStockBalance(master.payload, creds);
+      if (bal.outcome !== "accepted" && bal.outcome !== "duplicate") {
+        balanceError = `The movement was filed but the stock balance was not accepted: ${bal.message}`;
+      }
+    } else {
+      balanceError = `The movement was filed but the stock balance could not be built: ${master.problems.join(" ")}`;
+    }
+
+    await db.from("etims_stock_movements").update({
+      status: "sent",
+      attempts: (mv.attempts ?? 0) + 1,
+      transmitted_at: new Date().toISOString(),
+      last_error: balanceError,
+      last_result_code: res.resultCd,
+      updated_at: new Date().toISOString(),
+    }).eq("id", id);
+
+    return { status: "sent", sarNumber, resultCd: res.resultCd, balanceError };
+  }
+
+  if (res.outcome === "retryable") return await fail("pending", res.message, res.resultCd);
+
+  if (res.outcome === "uncertain") {
+    return await fail(
+      "uncertain",
+      `${res.message} Check your KRA eTIMS portal for stock movement ${sarNumber} before deciding whether to send it again.`,
+      res.resultCd,
+    );
+  }
+
+  return await fail("rejected", `KRA refused this stock movement: ${res.message}`, res.resultCd);
+}
+
+// ===========================================================================
+// ONE PURCHASE
+//
+// The tenant has already ruled on it; this files that verdict. The payload is
+// KRA's own record echoed back with our identity and decision written over it
+// — see buildPurchaseDocument. Nothing here recalculates a supplier's figures.
+// ===========================================================================
+
+async function processPurchase(
+  { db, id, credCache, operator }: {
+    db: any;
+    id: string;
+    credCache: Map<string, { creds: EtimsCredentials; row: Creds } | null>;
+    operator: { id: string; name: string };
+  },
+): Promise<Record<string, unknown>> {
+  const nowIso = new Date().toISOString();
+  const leaseUntil = new Date(Date.now() + LEASE_MINUTES * 60_000).toISOString();
+
+  const { data: claimedRows } = await db
+    .from("etims_purchases")
+    .update({ next_attempt_at: leaseUntil, updated_at: nowIso })
+    .eq("id", id)
+    .eq("status", "pending")
+    .lte("next_attempt_at", nowIso)
+    .select("*");
+
+  const pur = claimedRows?.[0];
+  if (!pur) return { status: "skipped", reason: "claimed by another run" };
+
+  const fail = async (
+    status: "pending" | "rejected" | "uncertain",
+    message: string,
+    resultCode: string | null = null,
+  ) => {
+    const attempts = (pur.attempts ?? 0) + 1;
+    await db.from("etims_purchases").update({
+      status,
+      attempts,
+      last_error: message,
+      last_result_code: resultCode,
+      next_attempt_at: status === "pending"
+        ? new Date(Date.now() + backoffSeconds(attempts) * 1000).toISOString()
+        : new Date(Date.now() + 365 * 24 * 3600_000).toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq("id", id);
+    return { status, error: message };
+  };
+
+  if (pur.decision !== "accepted" && pur.decision !== "rejected") {
+    return await fail("rejected", "This purchase was queued without a decision on it.");
+  }
+
+  const cached = await loadCreds(db, pur.admin_id, credCache);
+  if (!cached) {
+    return await fail("pending", "eTIMS is not connected for this account. The purchase stays queued.");
+  }
+  const { creds, row: credRow } = cached;
+
+  // A purchase carries the tenant's own invoice sequence when it is filed, the
+  // same counter a sale uses — KRA sequences everything a device sends.
+  const { data: allocated, error: seqErr } = await db.rpc("etims_next_invoice_number", {
+    p_admin: pur.admin_id,
+  });
+  if (seqErr || allocated == null) {
+    return await fail("pending", `Could not allocate an eTIMS number: ${seqErr?.message ?? "no number returned"}`);
+  }
+
+  const document = buildPurchaseDocument({
+    source: pur.source,
+    seller: { pin: credRow.kra_pin, branchId: credRow.branch_id },
+    invoiceNumber: Number(allocated),
+    accepted: pur.decision === "accepted",
+    operator,
+    remark: pur.decision_note ?? null,
+  });
+
+  if (!document.ok) return await fail("rejected", document.problems.join(" "));
+
+  const res = await transmitPurchase(document.payload, creds);
+
+  if (res.outcome === "accepted" || res.outcome === "duplicate") {
+    await db.from("etims_purchases").update({
+      status: "sent",
+      attempts: (pur.attempts ?? 0) + 1,
+      transmitted_at: new Date().toISOString(),
+      last_error: null,
+      last_result_code: res.resultCd,
+      updated_at: new Date().toISOString(),
+    }).eq("id", id);
+    return { status: "sent", decision: pur.decision, resultCd: res.resultCd };
+  }
+
+  if (res.outcome === "retryable") return await fail("pending", res.message, res.resultCd);
+
+  if (res.outcome === "uncertain") {
+    return await fail(
+      "uncertain",
+      `${res.message} Check your KRA eTIMS portal before deciding whether to file this purchase again.`,
+      res.resultCd,
+    );
+  }
+
+  return await fail("rejected", `KRA refused this purchase: ${res.message}`, res.resultCd);
+}
+
+// ===========================================================================
+// PULLING PURCHASES FROM KRA
+//
+// The read that makes a supplier book unnecessary. Upserts on
+// (admin_id, supplier_pin, supplier_invoice_no), so re-running it sees the same
+// purchases without duplicating them — and, importantly, WITHOUT touching a
+// decision somebody already made. A tenant who accepted a purchase yesterday
+// must not find it back in their inbox because the pull ran again.
+// ===========================================================================
+
+async function pullPurchasesFor(
+  { db, adminId, credCache }: {
+    db: any;
+    adminId: string;
+    credCache: Map<string, { creds: EtimsCredentials; row: Creds } | null>;
+  },
+): Promise<Record<string, unknown>> {
+  const cached = await loadCreds(db, adminId, credCache);
+  if (!cached) return { adminId, ok: false, error: "eTIMS is not connected for this account." };
+
+  const { creds, row: credRow } = cached;
+  const res = await fetchPurchases(creds);
+
+  if (res.outcome !== "accepted" && res.outcome !== "duplicate") {
+    return { adminId, ok: false, error: res.message, resultCd: res.resultCd };
+  }
+
+  // Shape varies by deployment, the same way readEtimsReceipt's does: OSCU and
+  // VSCU nest the list differently and the sandbox differs again.
+  const envelope = res.data as any;
+  const list: any[] = envelope?.saleList ?? envelope?.data?.saleList ?? envelope?.purchaseList ?? [];
+  let stored = 0;
+  let skipped = 0;
+
+  for (const record of Array.isArray(list) ? list : []) {
+    const p = normalisePurchase(record);
+    if (!p) {
+      skipped++;
+      continue;
+    }
+
+    // Insert-only on the parent: onConflict with ignoreDuplicates leaves an
+    // existing row — and therefore its decision and filing state — untouched.
+    const { data: inserted } = await db
+      .from("etims_purchases")
+      .upsert({
+        admin_id: adminId,
+        supplier_pin: p.supplierPin,
+        supplier_name: p.supplierName,
+        supplier_branch: p.supplierBranch,
+        supplier_invoice_no: p.supplierInvoiceNo,
+        supplier_sdc_id: p.supplierSdcId,
+        supplier_mrc_no: p.supplierMrcNo,
+        receipt_type: p.receiptType,
+        payment_type: p.paymentType,
+        purchase_date: p.purchaseDate,
+        total_taxable: p.totalTaxable,
+        total_tax: p.totalTax,
+        total_amount: p.totalAmount,
+        source: p.source,
+        environment: credRow.environment,
+      }, {
+        onConflict: "admin_id,supplier_pin,supplier_invoice_no",
+        ignoreDuplicates: true,
+      })
+      .select("id");
+
+    const purchaseId = inserted?.[0]?.id;
+    // No id back means the row already existed and was left alone, which is the
+    // correct outcome — its lines are already stored too.
+    if (!purchaseId) continue;
+
+    if (p.items.length) {
+      await db.from("etims_purchase_items").insert(
+        p.items.map((it) => ({ ...it, purchase_id: purchaseId })),
+      );
+    }
+    stored++;
+  }
+
+  return { adminId, ok: true, considered: list.length, stored, skipped };
 }
 
 // ===========================================================================

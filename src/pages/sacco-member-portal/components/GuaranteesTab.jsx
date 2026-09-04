@@ -85,11 +85,112 @@ const capLine = (t, saccoName) => {
   } ${basis} — ${KES(t.cap.limit)} for you.`;
 };
 
+/**
+ * Where the executed agreement has got to, for the member who is bound by it.
+ *
+ * WHY THIS IS ON THE MEMBER'S SCREEN AT ALL
+ * -----------------------------------------
+ * Confirming in this portal makes the guarantee final. Some societies then send
+ * the agreement out through SignNow so there is a document signed off this
+ * platform — the thing they can put in front of a bank or a tribunal. That
+ * means a member who has already confirmed will receive an email asking them to
+ * sign "again", from a company they have never heard of. Without this panel the
+ * only sane response to that email is to ignore it.
+ *
+ * `state` is one row of sacco_guarantee_signing_states(). No row and no
+ * requirement means the society does not do this, and nothing is shown.
+ */
+const ExecutionPanel = ({ state, onOpen, opening }) => {
+  if (!state) return null;
+  const { status, required } = state;
+
+  if (!status) {
+    if (!required) return null;
+    return (
+      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/60 border border-border">
+        <Icon name="PenLine" size={14} color="currentColor" />
+        <p className="text-xs text-muted-foreground">
+          Your sacco also has this agreement signed electronically. They will email it to you —
+          look out for a signing request from <strong>SignNow</strong>.
+        </p>
+      </div>
+    );
+  }
+
+  if (['sent', 'viewed'].includes(status)) {
+    return (
+      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-indigo-50 border border-indigo-200">
+        <Icon name="Mail" size={14} color="#4338ca" />
+        <p className="text-xs text-indigo-700">
+          <strong>Sent to you for signature.</strong> Check your email for a signing request from
+          SignNow — {state.signersSigned || 0} of {state.signersTotal || 0} parties have signed.
+          Signing there does not change what you already confirmed; it is the same agreement, on
+          paper the sacco can produce to anyone.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === 'signed') {
+    return (
+      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
+        <Icon name="CheckCircle2" size={14} color="#059669" />
+        <p className="text-xs text-emerald-700">
+          Every party has signed. Your sacco is releasing the executed copy — it will appear here.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === 'released') {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
+        <div className="flex items-start gap-2">
+          <Icon name="FileCheck" size={14} color="#059669" />
+          <p className="text-xs text-emerald-700">
+            <strong>Executed on {fmtDate(state.releasedAt)}.</strong> This is the signed agreement
+            of record — keep a copy.
+          </p>
+        </div>
+        <GhostButton icon={opening ? 'Loader2' : 'Download'} onClick={onOpen} disabled={opening}>
+          {opening ? 'Opening…' : 'Open the agreement'}
+        </GhostButton>
+      </div>
+    );
+  }
+
+  if (status === 'declined') {
+    return (
+      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200">
+        <Icon name="AlertTriangle" size={14} color="#b45309" />
+        <p className="text-xs text-amber-900">
+          The signing request was declined{state.declineReason ? `: “${state.declineReason}”` : '.'}
+          {' '}Your guarantee itself still stands — it was confirmed here and is final. Speak to
+          your sacco if that was not what you intended.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === 'expired') {
+    return (
+      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200">
+        <Icon name="TimerOff" size={14} color="#b45309" />
+        <p className="text-xs text-amber-900">
+          The signing invite lapsed before everyone signed. Your sacco can send it again.
+        </p>
+      </div>
+    );
+  }
+
+  return null;
+};
+
 const emptyRequest = { loan_id: '', guarantor_member_id: '', amount: '', notes: '' };
 
 const GuaranteesTab = ({ ctx }) => {
   const {
-    me, members, loans, guarantees,
+    me, members, loans, guarantees, guaranteeSigning = {}, openExecutedGuarantee,
     getGuaranteeTerms, requestGuarantee, reviewGuarantee, confirmGuarantee,
     declineGuarantee, waitOnGuarantee, cancelGuarantee,
   } = ctx;
@@ -106,9 +207,24 @@ const GuaranteesTab = ({ ctx }) => {
   const [deferring, setDeferring] = useState(null);  // guarantee awaiting a "not yet" note
   const [waitNote, setWaitNote] = useState('');
 
+  // Which executed agreement is being fetched. The bucket is private, so the
+  // link is a signed URL minted on the click rather than an href on the page.
+  const [opening, setOpening] = useState(null);
+
   const [requesting, setRequesting] = useState(false);
   const [form, setForm] = useState(emptyRequest);
   const setF = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  const openAgreement = async (g) => {
+    setOpening(g.id);
+    try {
+      await openExecutedGuarantee?.(g.id);
+    } catch (e) {
+      toast.error(e.message || 'Could not open the agreement.');
+    } finally {
+      setOpening(null);
+    }
+  };
 
   const asGuarantor = useMemo(
     () => guarantees.filter((g) => g.guarantor_member_id === me?.id),
@@ -358,6 +474,13 @@ const GuaranteesTab = ({ ctx }) => {
                       </p>
                     </div>
                   )}
+                  {g.status === 'accepted' && (
+                    <ExecutionPanel
+                      state={guaranteeSigning[g.id]}
+                      opening={opening === g.id}
+                      onOpen={() => openAgreement(g)}
+                    />
+                  )}
                   {g.status === 'declined' && g.decline_reason && (
                     <p className="text-xs text-muted-foreground">You declined: “{g.decline_reason}”</p>
                   )}
@@ -439,6 +562,8 @@ const GuaranteesTab = ({ ctx }) => {
                     {g.ref_no} · loan of {KES(g.loan?.principal)} · asked {fmtDate(g.created_at)}
                     {g.status === 'under_review' && ' · they are reading the agreement'}
                     {g.status === 'accepted' && ` · confirmed ${fmtDate(g.accepted_at)}`}
+                    {guaranteeSigning[g.id]?.status === 'released'
+                      && ` · agreement executed ${fmtDate(guaranteeSigning[g.id].releasedAt)}`}
                     {g.status === 'declined' && g.decline_reason ? ` · “${g.decline_reason}”` : ''}
                   </p>
                   {/* An unanswered request and one the member has deferred look

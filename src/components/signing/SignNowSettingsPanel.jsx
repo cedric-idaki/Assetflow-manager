@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Icon from '../AppIcon';
 import { useToast } from '../Toast';
+import { supabase } from '../../lib/supabase';
 import { DOC_KINDS, defaultPanelFor, cleanPanel } from '../../utils/certificateSigning';
 import {
   signnowStatus, signnowSave, signnowDisable, signnowDisconnect,
@@ -35,15 +36,27 @@ const SignNowSettingsPanel = () => {
   const [policies, setPolicies] = useState({});
   const [openKind, setOpenKind] = useState(null);
   const [savingKind, setSavingKind] = useState('');
+  // Some document kinds only exist inside a society — a guarantee agreement is
+  // welded to sacco_loan_guarantees in the database, so offering it to a
+  // company tenant would be offering a switch that can never do anything.
+  // The gate is the constraint; this only stops the screen lying about it.
+  const [hasSacco, setHasSacco] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [s, p] = await Promise.all([signnowStatus(), loadSigningPolicies()]);
+      const [s, p, saccos] = await Promise.all([
+        signnowStatus(),
+        loadSigningPolicies(),
+        // RLS already scopes this to the caller's tenant, so "any row at all"
+        // is the question. head+count reads no data to answer it.
+        supabase.from('saccos').select('id', { count: 'exact', head: true }),
+      ]);
       setStatus(s);
       setForm((f) => ({ ...f, environment: s?.environment || 'sandbox' }));
       setPolicies(p || {});
+      setHasSacco((saccos?.count || 0) > 0);
     } catch (e) {
       setError(e.message || 'Could not read the SignNow settings.');
     } finally {
@@ -277,7 +290,14 @@ const SignNowSettingsPanel = () => {
         </div>
 
         <div className="divide-y divide-border">
-          {Object.entries(DOC_KINDS).map(([kind, meta]) => {
+          {Object.entries(DOC_KINDS)
+            .filter(([kind, meta]) => (
+              // Keep a kind a society has already switched on visible even if
+              // the sacco probe failed — hiding a live requirement would leave
+              // it enforced with no way to turn it off.
+              !meta.saccoOnly || hasSacco || policies[kind]?.require_signature
+            ))
+            .map(([kind, meta]) => {
             const p = policyOf(kind);
             const isOpen = openKind === kind;
             return (

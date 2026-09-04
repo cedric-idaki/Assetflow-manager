@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach } from 'vitest';
 import SubscriptionCalculator from './SubscriptionCalculator';
 import PricingOverview from './PricingOverview';
-import { COMPANY_PLANS, INSTALLATION_FEE as COMPANY_INSTALL } from '../../../config/companyPlans';
+import { COMPANY_PLANS, planForUsers, INSTALLATION_FEE as COMPANY_INSTALL } from '../../../config/companyPlans';
 import { SACCO_TIERS } from '../../../config/saccoTiers';
 
 /**
@@ -18,7 +18,7 @@ import { SACCO_TIERS } from '../../../config/saccoTiers';
  * the screen, not about the engine (systemBilling.test.js covers that).
  */
 
-const bronze = COMPANY_PLANS.find((p) => p.id === 'bronze'); // 6–16 users @ 360
+const corporate = planForUsers(10); // the tier the default 10-user quote lands on
 const gold = SACCO_TIERS.find((t) => t.id === 'gold');       // 111+ members, 900 + 27
 
 const money = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -30,10 +30,10 @@ describe('SubscriptionCalculator — the bill a super admin reads', () => {
     // Defaults: corporate, 10 users, first invoice.
     const bill = screen.getByText('Itemised bill').closest('div').parentElement;
 
-    // User charges at the REAL rate — 10 x 360, not the old 10 x 320.
+    // User charges at the REAL catalogue rate, not the old 10 x 320.
     expect(within(bill).getByText(/Licensed user charges/)).toBeInTheDocument();
-    expect(within(bill).getByText(`10 × KES ${money(bronze.pricePerUser)}`)).toBeInTheDocument();
-    expect(within(bill).getByText(`KES ${money(10 * bronze.pricePerUser)}`)).toBeInTheDocument();
+    expect(within(bill).getByText(`10 × KES ${money(corporate.pricePerUser)}`)).toBeInTheDocument();
+    expect(within(bill).getByText(`KES ${money(10 * corporate.pricePerUser)}`)).toBeInTheDocument();
 
     // Installation — a component the page never used to show at all.
     expect(within(bill).getByText(/Installation & onboarding/)).toBeInTheDocument();
@@ -45,7 +45,7 @@ describe('SubscriptionCalculator — the bill a super admin reads', () => {
 
     // And the total is the two charges together.
     expect(
-      within(bill).getByText(`KES ${money(10 * bronze.pricePerUser + COMPANY_INSTALL)}`),
+      within(bill).getByText(`KES ${money(10 * corporate.pricePerUser + COMPANY_INSTALL)}`),
     ).toBeInTheDocument();
   });
 
@@ -56,7 +56,7 @@ describe('SubscriptionCalculator — the bill a super admin reads', () => {
     expect(screen.queryByText(/Installation & onboarding/)).not.toBeInTheDocument();
     // With installation gone the only charge is the user line, so that figure
     // is both the line amount and the total — which is the point.
-    expect(screen.getAllByText(`KES ${money(10 * bronze.pricePerUser)}`)).toHaveLength(2);
+    expect(screen.getAllByText(`KES ${money(10 * corporate.pricePerUser)}`)).toHaveLength(2);
     expect(screen.getByText('Recurring monthly invoice.')).toBeInTheDocument();
   });
 

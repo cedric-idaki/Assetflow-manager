@@ -47,7 +47,7 @@ describe('a row with a stored breakdown is printed verbatim', () => {
   it('states the per-user rate the stored charge implies', () => {
     const users = lineFor(invoiceForSubscription(row), 'Licensed user charges');
     expect(users.qty).toBe(5);
-    expect(users.unit).toBe(305);                    // the advertised rate
+    expect(users.unit).toBe(305);                    // what the stored charge divides out to
     expect(users.qty * users.unit).toBe(users.gross); // and it multiplies out
   });
 
@@ -71,14 +71,14 @@ describe('a legacy company row is re-derived from what it paid', () => {
 
   it('spots the installation fee folded into a first registration', () => {
     const paid = monthly(5) + COMPANY_FEE;
-    const bill = invoiceForSubscription({ id: 'a', plan_name: 'silver', max_users: 5, price_paid: paid });
+    const bill = invoiceForSubscription({ id: 'a', plan_name: planForUsers(5).id, max_users: 5, price_paid: paid });
     expect(lineFor(bill, 'Installation').gross).toBe(COMPANY_FEE);
     expect(bill.total).toBe(paid);
   });
 
   it('does not invent an installation fee on a renewal row', () => {
     const paid = monthly(5);
-    const bill = invoiceForSubscription({ id: 'b', plan_name: 'silver', max_users: 5, price_paid: paid });
+    const bill = invoiceForSubscription({ id: 'b', plan_name: planForUsers(5).id, max_users: 5, price_paid: paid });
     expect(lineFor(bill, 'Installation')).toBeUndefined();
     expect(bill.total).toBe(paid);
     expect(lineFor(bill, 'Licensed user charges').gross).toBe(paid);
@@ -86,7 +86,7 @@ describe('a legacy company row is re-derived from what it paid', () => {
 
   it('discloses the VAT inside a legacy total without changing it', () => {
     const paid = monthly(10) + COMPANY_FEE;
-    const bill = invoiceForSubscription({ id: 'c', plan_name: 'bronze', max_users: 10, price_paid: paid });
+    const bill = invoiceForSubscription({ id: 'c', plan_name: planForUsers(10).id, max_users: 10, price_paid: paid });
     expect(bill.total).toBe(paid);
     expect(cents(bill.subtotal + bill.vatAmount)).toBe(paid);
     expect(bill.vatRate).toBe(VAT_RATE);
@@ -96,7 +96,7 @@ describe('a legacy company row is re-derived from what it paid', () => {
     // A row priced under an older, cheaper rate card. The components are the
     // best available explanation; the total is a matter of record.
     const paid = 3000;
-    const bill = invoiceForSubscription({ id: 'd', plan_name: 'silver', max_users: 5, price_paid: paid });
+    const bill = invoiceForSubscription({ id: 'd', plan_name: planForUsers(5).id, max_users: 5, price_paid: paid });
     expect(bill.total).toBe(paid);
     expect(sumLines(bill)).toBe(bill.subtotal);
     expect(cents(bill.subtotal + bill.vatAmount)).toBe(paid);
@@ -214,7 +214,7 @@ describe('a legacy row is re-derived at the rate that was in force then', () => 
 
   it('resolves a subscription from its start date', () => {
     const sub = {
-      id: 'c1', plan_name: 'silver', max_users: 5,
+      id: 'c1', plan_name: planForUsers(5).id, max_users: 5,
       start_date: '2020-06-01', price_paid: 5 * planForUsers(5).pricePerUser,
     };
     expect(invoiceForSubscription(sub).vatRate).toBe(14);
@@ -223,7 +223,7 @@ describe('a legacy row is re-derived at the rate that was in force then', () => 
 
   it('falls back to created_at when a row carries no period or start date', () => {
     const sub = {
-      id: 'c2', plan_name: 'silver', max_users: 5,
+      id: 'c2', plan_name: planForUsers(5).id, max_users: 5,
       created_at: '2020-06-01T09:00:00Z', price_paid: 5 * planForUsers(5).pricePerUser,
     };
     expect(invoiceForSubscription(sub).vatRate).toBe(14);

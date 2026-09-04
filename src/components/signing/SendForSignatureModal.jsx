@@ -38,7 +38,7 @@ const inputCls =
  * By ROLE, not by position: a society that renamed its second officer must not
  * end up with the guarantor's email against the Treasurer's line.
  */
-const withPins = (rows, pins) => {
+export const withPins = (rows, pins) => {
   if (!pins?.length) return rows;
   const merged = rows.map((r) => {
     const pin = pins.find((p) => (p.role || '').toLowerCase() === (r.role || '').toLowerCase());
@@ -50,7 +50,15 @@ const withPins = (rows, pins) => {
     }
   });
   return merged
-    .sort((a, b) => (Number(a.order) || 99) - (Number(b.order) || 99))
+    .sort((a, b) => (
+      // A pin and a stored row can both claim order 1 — a society that put its
+      // own officer first has no way of knowing a pinned signatory exists. The
+      // pin wins the tie, because it is the one whose position is a rule
+      // (the guarantor signs their own undertaking, then it is countersigned)
+      // rather than a preference.
+      (Number(a.order) || 99) - (Number(b.order) || 99)
+      || (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)
+    ))
     .map((r, i) => ({ ...r, order: i + 1 }));
 };
 

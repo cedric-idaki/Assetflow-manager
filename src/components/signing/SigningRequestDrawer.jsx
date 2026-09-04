@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Icon from '../AppIcon';
 import { useToast } from '../Toast';
-import { signingVerdict, isTerminal } from '../../utils/certificateSigning';
+import { signingVerdict, isTerminal, releaseWords } from '../../utils/certificateSigning';
 import {
   loadSigningRequest, syncSigningRequest, cancelSigningRequest,
   releaseSigningRequest, openSignedCertificate,
@@ -70,7 +70,10 @@ const SigningRequestDrawer = ({ open, requestId, onClose, onChanged }) => {
   if (!open) return null;
 
   const req = data.request;
-  const verdict = req ? signingVerdict(req.status) : null;
+  const verdict = req ? signingVerdict(req.status, req.doc_kind) : null;
+  // "Issue the certificate" is the wrong sentence for an agreement the society
+  // is a party to rather than the author of. See releaseWords().
+  const words = releaseWords(req?.doc_kind);
   const canCancel = req && ['draft', 'sent', 'viewed'].includes(req.status);
   const canRelease = req && req.status === 'signed' && req.signed_path;
   const canRefresh = req && !isTerminal(req.status) && req.provider_document_id;
@@ -122,7 +125,7 @@ const SigningRequestDrawer = ({ open, requestId, onClose, onChanged }) => {
               <Fact label="Certificate serial" value={req.certificate_serial} mono />
               <Fact label="Sent" value={fmt(req.sent_at)} />
               <Fact label="Signed" value={fmt(req.signed_at)} />
-              <Fact label="Issued" value={fmt(req.released_at)} />
+              <Fact label={words.issuedLabel} value={fmt(req.released_at)} />
               <Fact label="Signing order" value={req.signing_order === 'parallel' ? 'All at once' : 'One after another'} />
               <Fact label="Provider" value={`SignNow (${req.provider_environment || 'not sent'})`} />
               <div className="col-span-2">
@@ -196,17 +199,17 @@ const SigningRequestDrawer = ({ open, requestId, onClose, onChanged }) => {
               <button
                 onClick={async () => {
                   const ok = await openSignedCertificate(req.signed_path);
-                  if (!ok) toast.error('Allow pop-ups for this site to open the signed certificate.');
+                  if (!ok) toast.error('Allow pop-ups for this site to open the signed document.');
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-lg border border-border text-foreground hover:bg-muted/50"
               >
-                <Icon name="FileCheck" size={14} color="currentColor" /> Signed copy
+                <Icon name="FileCheck" size={14} color="currentColor" /> {words.signedCopy}
               </button>
             )}
             {canRefresh && (
               <button
                 onClick={() => run('sync', () => syncSigningRequest(req.id),
-                  (r) => (r?.released ? 'Signed by everyone — the certificate has been issued.' : 'Up to date.'))}
+                  (r) => (r?.released ? words.releasedBySync : 'Up to date.'))}
                 disabled={!!busy}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-lg border border-border text-foreground hover:bg-muted/50 disabled:opacity-50"
               >
@@ -227,12 +230,12 @@ const SigningRequestDrawer = ({ open, requestId, onClose, onChanged }) => {
             )}
             {canRelease && (
               <button
-                onClick={() => run('release', () => releaseSigningRequest(req.id), 'Certificate issued.')}
+                onClick={() => run('release', () => releaseSigningRequest(req.id), words.released)}
                 disabled={!!busy}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 <Icon name="BadgeCheck" size={14} color="currentColor" />
-                {busy === 'release' ? 'Issuing…' : 'Issue certificate'}
+                {busy === 'release' ? words.releasing : words.release}
               </button>
             )}
           </div>

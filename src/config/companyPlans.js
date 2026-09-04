@@ -24,8 +24,8 @@ export const INSTALLATION_FEE = 4000; // KES
  * applicable charge sit on top of it untouched, so a first registration costs
  * (2 x pricePerUser) + installation + modules, and a renewal (2 x pricePerUser).
  *
- * WHY A FLOOR RATHER THAN A HIGHER SILVER RATE: raising pricePerUser would move
- * every Silver tenant's bill, including the 5-user ones. The floor moves only
+ * WHY A FLOOR RATHER THAN A HIGHER BRONZE RATE: raising pricePerUser would move
+ * every Bronze tenant's bill, including the 5-user ones. The floor moves only
  * the single-seat case, which is the one the business is unwilling to serve at
  * one user's price.
  *
@@ -64,31 +64,31 @@ export const billableUsers = (n) => {
 
 export const COMPANY_PLANS = [
   {
-    id: 'silver',
-    name: 'Silver',
-    pricePerUser: 305,
+    id: 'bronze',
+    name: 'Bronze',
+    pricePerUser: 360,
     baseFee: 0,
     minUsers: 1,
     maxUsers: 5,
     storageGb: 5,
     userRange: '1–5 users',
-    color: '#C0C0C0',
-    bg: 'bg-slate-50',
-    border: 'border-slate-300',
+    color: '#CD7F32',
+    bg: 'bg-amber-50',
+    border: 'border-amber-300',
     features: ['1–5 users', '5 GB free storage', 'Asset management', 'Client portal', 'Basic reporting'],
   },
   {
-    id: 'bronze',
-    name: 'Bronze',
-    pricePerUser: 360,
+    id: 'silver',
+    name: 'Silver',
+    pricePerUser: 305,
     baseFee: 0,
     minUsers: 6,
     maxUsers: 16,
     storageGb: 10,
     userRange: '6–16 users',
-    color: '#CD7F32',
-    bg: 'bg-amber-50',
-    border: 'border-amber-300',
+    color: '#C0C0C0',
+    bg: 'bg-slate-50',
+    border: 'border-slate-300',
     features: ['6–16 users', '10 GB free storage', 'Asset management', 'Client portal', 'Sales agent portal', 'KYC management', 'Advanced reporting'],
     popular: true,
   },
@@ -114,7 +114,7 @@ export const planForUsers = (n) => {
   return COMPANY_PLANS.find((p) => n >= p.minUsers && (p.maxUsers == null || n <= p.maxUsers)) || null;
 };
 
-/** Look up a plan by its id / plan_name (e.g. 'silver'). */
+/** Look up a plan by its id / plan_name (e.g. 'bronze'). */
 export const planById = (id) => COMPANY_PLANS.find((p) => p.id === id) || null;
 
 /**

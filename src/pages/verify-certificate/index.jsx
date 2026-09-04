@@ -24,6 +24,9 @@ import CertificateVerifier from '../../components/CertificateVerifier';
 const KINDS = [
   { icon: 'Award',   title: 'Share certificates',     body: 'Issued by the society whenever a member’s holding changes. Serials begin ARA-SHR.' },
   { icon: 'PenTool', title: 'Signature certificates', body: 'The certificate page appended to every sealed e-signature document. Serials begin ARA-ESG.' },
+  // The reader this desk was built for: somebody holding a guarantee agreement
+  // who has no account here — a bank, an advocate, a co-operative officer.
+  { icon: 'ShieldCheck', title: 'Guarantee agreements', body: 'The undertaking a member signed to stand behind another member’s loan. Serials begin ARA-GTE.' },
 ];
 
 const VerifyCertificatePage = () => {

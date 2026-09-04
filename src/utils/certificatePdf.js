@@ -726,7 +726,7 @@ export const buildGuaranteeAgreementPdf = async ({
   for (let p = 1; p <= pages; p += 1) {
     doc.setPage(p);
     drawFooter(doc, geometry, serial,
-      `Page ${p} of ${pages} — this agreement binds the Guarantor only as executed by every signatory below.`);
+      `Page ${p} of ${pages} — this agreement binds the Guarantor only when executed by every signatory named on it.`);
     if (draft) drawDraftStamp(doc, geometry);
   }
 

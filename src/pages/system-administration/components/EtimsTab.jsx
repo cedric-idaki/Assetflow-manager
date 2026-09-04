@@ -52,10 +52,20 @@ const STATUS_STYLE = {
 
 // ── Small presentational pieces ──────────────────────────────────────────────
 
+const STAT_TONE = {
+  bad: 'text-red-600',
+  // Amber, not red: a purchase waiting to be reviewed is work to do, not a
+  // fault. Red here would put the compliance screen permanently in alarm for
+  // something that is simply a supplier's invoice arriving.
+  warn: 'text-amber-600',
+  good: 'text-emerald-600',
+  default: 'text-foreground',
+};
+
 const Stat = ({ label, value, tone = 'default' }) => (
   <div className="rounded-lg border border-border bg-card p-4">
     <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-    <div className={`mt-1 text-2xl font-semibold ${tone === 'bad' ? 'text-red-600' : 'text-foreground'}`}>
+    <div className={`mt-1 text-2xl font-semibold ${STAT_TONE[tone] || STAT_TONE.default}`}>
       {value}
     </div>
   </div>
@@ -357,6 +367,253 @@ const CreditNotePanel = ({ row, saving, onRaise, onClose }) => {
   );
 };
 
+// ── Purchases ────────────────────────────────────────────────────────────────
+
+/**
+ * One purchase a supplier filed against this tenant's PIN.
+ *
+ * Shows the lines, because "do you recognise this?" is not answerable from a
+ * header. There is deliberately no accept-all: accepting claims input VAT, and
+ * the liability for claiming tax on a supply that never happened sits with the
+ * tenant, so it costs one deliberate click each.
+ */
+const PurchaseRow = ({ row, saving, onDecide }) => {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState('');
+
+  const decide = async (decision) => {
+    setErr('');
+    try {
+      await onDecide(row.id, decision, note || null);
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  const undecided = row.decision === 'new';
+  const filed = row.status === 'sent';
+
+  return (
+    <div className="p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+            undecided
+              ? 'bg-amber-100 text-amber-900'
+              : row.decision === 'accepted'
+                ? 'bg-emerald-100 text-emerald-900'
+                : 'bg-red-100 text-red-900'
+          }`}
+        >
+          {undecided ? 'To review' : row.decision === 'accepted' ? 'Accepted' : 'Rejected'}
+        </span>
+
+        <span className="text-sm text-foreground">
+          {row.supplier_name || row.supplier_pin} · invoice {row.supplier_invoice_no}
+        </span>
+
+        <span className="text-xs text-muted-foreground">{row.purchase_date || '—'}</span>
+
+        <span className="text-xs text-muted-foreground">
+          KES {fmtMoney(row.total_amount)}
+          {row.total_tax != null ? ` · tax ${fmtMoney(row.total_tax)}` : ''}
+        </span>
+
+        {filed && <span className="text-xs text-muted-foreground">filed with KRA</span>}
+
+        <button
+          type="button"
+          className="text-xs text-primary underline"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? 'Hide items' : `Show ${row.items?.length ?? 0} item(s)`}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-2 overflow-x-auto rounded border border-border">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/50 text-muted-foreground">
+              <tr>
+                <th className="p-2 text-left">Item</th>
+                <th className="p-2 text-right">Qty</th>
+                <th className="p-2 text-right">Price</th>
+                <th className="p-2 text-left">Tax</th>
+                <th className="p-2 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(row.items || []).map((it) => (
+                <tr key={it.item_seq} className="border-t border-border">
+                  <td className="p-2">{it.item_name || it.item_code}</td>
+                  <td className="p-2 text-right">{fmtMoney(it.quantity)}</td>
+                  <td className="p-2 text-right">{fmtMoney(it.unit_price)}</td>
+                  <td className="p-2">{it.tax_code || '—'}</td>
+                  <td className="p-2 text-right">{fmtMoney(it.total_amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {row.decision_note && (
+        <div className="mt-1 text-xs text-muted-foreground">Note: {row.decision_note}</div>
+      )}
+      {row.last_error && <div className="mt-1 text-xs text-red-700">{row.last_error}</div>}
+      {err && <div className="mt-1 text-xs text-red-700">{err}</div>}
+
+      {undecided && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            className={`${inputCls} max-w-xs`}
+            placeholder="Note (optional)"
+            value={note}
+            maxLength={200}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <Button size="sm" disabled={saving} onClick={() => decide('accepted')}>
+            We bought this
+          </Button>
+          <Button size="sm" variant="outline" disabled={saving} onClick={() => decide('rejected')}>
+            We did not
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Stock ────────────────────────────────────────────────────────────────────
+
+/**
+ * Record a stock change a sale cannot explain.
+ *
+ * The reason is asked for rather than inferred. A quantity that fell from nine
+ * to four could be a write-off, breakage, a transfer or a corrected miscount,
+ * and each is a different code on a tax filing — guessing would put a
+ * fabricated statement into a tax record.
+ *
+ * Only classified items appear: an unclassified one cannot be filed at all, so
+ * offering it here would only produce a queued movement that sticks.
+ */
+const StockAdjustmentForm = ({ items, saving, disabled, onRecord }) => {
+  const [assetId, setAssetId] = useState('');
+  const [direction, setDirection] = useState('in');
+  const [quantity, setQuantity] = useState('');
+  const [movementCode, setMovementCode] = useState('');
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState('');
+
+  const withAsset = useMemo(() => (items || []).filter((i) => i.asset_id), [items]);
+
+  const submit = async () => {
+    setErr('');
+    setDone('');
+    try {
+      await onRecord({
+        assetId,
+        direction,
+        quantity,
+        movementCode: movementCode || null,
+        note: note || null,
+      });
+      setDone('Recorded. It files on the next run.');
+      setQuantity('');
+      setNote('');
+      setMovementCode('');
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  if (!withAsset.length) {
+    return (
+      <div className="border-b border-border p-4 text-sm text-muted-foreground">
+        Classify an item below before recording stock movements for it.
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-b border-border p-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <Field label="Item">
+          <select className={inputCls} value={assetId} onChange={(e) => setAssetId(e.target.value)}>
+            <option value="">Choose…</option>
+            {withAsset.map((i) => (
+              <option key={i.asset_id} value={i.asset_id}>
+                {i.item_name || i.item_code}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Direction">
+          <select
+            className={inputCls}
+            value={direction}
+            onChange={(e) => setDirection(e.target.value)}
+          >
+            <option value="in">Came in</option>
+            <option value="out">Went out</option>
+          </select>
+        </Field>
+
+        <Field label="Quantity">
+          <input
+            className={inputCls}
+            inputMode="decimal"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value.replace(/[^\d.]/g, ''))}
+          />
+        </Field>
+
+        <Field label="KRA code" hint="Optional, two digits.">
+          <input
+            className={inputCls}
+            inputMode="numeric"
+            maxLength={2}
+            placeholder={direction === 'in' ? '02' : '11'}
+            value={movementCode}
+            onChange={(e) => setMovementCode(e.target.value.replace(/\D/g, '').slice(0, 2))}
+          />
+        </Field>
+
+        <Field label="Reason">
+          <input
+            className={inputCls}
+            maxLength={200}
+            placeholder="Damaged in transit"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </Field>
+      </div>
+
+      {err && <div className="mt-2 text-sm text-red-700">{err}</div>}
+      {done && <div className="mt-2 text-sm text-emerald-700">{done}</div>}
+
+      <div className="mt-3">
+        <Button
+          size="sm"
+          disabled={saving || disabled || !assetId || !(parseFloat(quantity) > 0)}
+          onClick={submit}
+        >
+          Record the movement
+        </Button>
+        {disabled && (
+          <span className="ml-2 text-xs text-muted-foreground">
+            Register a KRA device first.
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // ── Item classification ──────────────────────────────────────────────────────
 
 const ClassificationRow = ({ row, saving, onSave }) => {
@@ -475,7 +732,9 @@ const EtimsTab = () => {
   const {
     config, summary, recent, classifications, unclassified, readiness,
     loading, saving, error,
+    stockSummary, stockRecent, purchases, purchaseSummary,
     saveDevice, disableDevice, sendNow, resolveDocument, raiseCreditNote, saveClassification,
+    recordStockAdjustment, pullPurchases, decidePurchase,
   } = useEtims();
 
   const [resolving, setResolving] = useState(null);
@@ -713,6 +972,125 @@ const EtimsTab = () => {
                         </Button>
                       </div>
                     )
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Purchases ────────────────────────────────────────────────────── */}
+      <div className="rounded-lg border border-border bg-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+          <div>
+            <h3 className="text-base font-semibold text-foreground">Purchases from your suppliers</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              What your suppliers have already filed against your KRA PIN. Nothing here was typed
+              in — it comes from KRA, so you review it rather than re-enter it. Accepting a
+              purchase is what puts its tax into your input VAT.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={pullPurchases} disabled={saving || !config?.isActive}>
+            {saving ? 'Checking…' : 'Check KRA for new purchases'}
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 border-b border-border p-4 sm:grid-cols-4">
+          <Stat
+            label="To review"
+            value={purchaseSummary?.awaiting ?? 0}
+            tone={purchaseSummary?.awaiting ? 'warn' : 'default'}
+          />
+          <Stat label="Accepted" value={purchaseSummary?.accepted ?? 0} />
+          <Stat label="Rejected" value={purchaseSummary?.rejected ?? 0} />
+          <Stat label="Input tax accepted (KES)" value={fmtMoney(purchaseSummary?.input_tax)} />
+        </div>
+
+        {purchases.length === 0 ? (
+          <div className="p-6 text-center text-sm text-muted-foreground">
+            Nothing yet. Use the button above to check KRA for purchases filed against your PIN.
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {purchases.map((row) => (
+              <PurchaseRow key={row.id} row={row} saving={saving} onDecide={decidePurchase} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Stock ────────────────────────────────────────────────────────── */}
+      <div className="rounded-lg border border-border bg-card">
+        <div className="border-b border-border p-4">
+          <h3 className="text-base font-semibold text-foreground">Stock</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Every sale files the stock that left with it, and the remaining quantity is declared
+            to KRA from your asset register. Record anything else that changed your stock —
+            deliveries received, breakages, write-offs — so KRA's count matches yours.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 border-b border-border p-4 sm:grid-cols-4">
+          <Stat label="Queued" value={stockSummary?.pending ?? 0} />
+          <Stat label="Filed" value={stockSummary?.sent ?? 0} tone="good" />
+          <Stat
+            label="Refused"
+            value={stockSummary?.rejected ?? 0}
+            tone={stockSummary?.rejected ? 'bad' : 'default'}
+          />
+          <Stat
+            label="Unknown"
+            value={stockSummary?.uncertain ?? 0}
+            tone={stockSummary?.uncertain ? 'bad' : 'default'}
+          />
+        </div>
+
+        <StockAdjustmentForm
+          items={classifications}
+          saving={saving}
+          disabled={!config?.isActive}
+          onRecord={recordStockAdjustment}
+        />
+
+        {stockRecent.length === 0 ? (
+          <div className="p-6 text-center text-sm text-muted-foreground">
+            No stock movements yet. They are filed automatically as you sell.
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {stockRecent.map((row) => {
+              const s = STATUS_STYLE[row.status] || STATUS_STYLE.pending;
+              return (
+                <div key={row.id} className="p-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${s.cls}`}>
+                      <Icon name={s.icon} size={12} />
+                      {s.label}
+                    </span>
+                    <span className="text-sm text-foreground">
+                      {row.direction === 'in' ? 'In' : 'Out'} {fmtMoney(row.quantity)} ×{' '}
+                      {row.item_code}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {fmtWhen(row.transmitted_at || row.occurred_at || row.created_at)}
+                    </span>
+                    {row.sale_id && (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        from a sale
+                      </span>
+                    )}
+                    {row.environment !== 'production' && (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        sandbox
+                      </span>
+                    )}
+                  </div>
+                  {row.note && (
+                    <div className="mt-1 text-xs text-muted-foreground">{row.note}</div>
+                  )}
+                  {row.last_error && (
+                    <div className="mt-1 text-xs text-red-700">{row.last_error}</div>
                   )}
                 </div>
               );

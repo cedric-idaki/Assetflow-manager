@@ -273,6 +273,54 @@ export async function fetchItemClassifications(
 }
 
 /**
+ * Transmit a stock movement.
+ *
+ * Separate from the balance below on purpose: KRA treats a movement and a
+ * balance as different statements, and sending one where the other is meant
+ * either double-counts stock or silently fails to correct it.
+ */
+export async function transmitStockMovement(
+  payload: Record<string, unknown>,
+  creds: EtimsCredentials,
+): Promise<EtimsResponse> {
+  return await callEtims("insertStockIO", payload, creds);
+}
+
+/** Declare the remaining quantity of one item. Idempotent at KRA's end. */
+export async function saveStockBalance(
+  payload: Record<string, unknown>,
+  creds: EtimsCredentials,
+): Promise<EtimsResponse> {
+  return await callEtims("saveStockMaster", payload, creds);
+}
+
+/**
+ * Fetch the purchases suppliers have filed against this tenant's PIN.
+ *
+ * This is the read that makes a purchase book unnecessary: KRA already holds
+ * the supplier's side of every transaction, so the tenant reviews rather than
+ * retypes. `lastReqDt` is 'yyyyMMddHHmmss'; an old date returns everything.
+ */
+export async function fetchPurchases(
+  creds: EtimsCredentials,
+  lastReqDt = "20180101000000",
+): Promise<EtimsResponse> {
+  return await callEtims(
+    "selectTrnsPurchaseSalesList",
+    { tin: creds.pin, bhfId: creds.branchId, lastReqDt },
+    creds,
+  );
+}
+
+/** File the tenant's verdict on a purchase back to KRA. */
+export async function transmitPurchase(
+  payload: Record<string, unknown>,
+  creds: EtimsCredentials,
+): Promise<EtimsResponse> {
+  return await callEtims("insertTrnsPurchase", payload, creds);
+}
+
+/**
  * Whether an outcome means the caller may safely send this invoice number
  * again on a later run.
  *

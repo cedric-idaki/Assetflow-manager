@@ -8,6 +8,7 @@ import Pagination from '../../../components/ui/Pagination';
 import { usePagedQuery } from '../../../hooks/usePagedQuery';
 import { buildLoanRepaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 import GuaranteePolicyCard from './GuaranteePolicyCard';
+import GuaranteeRegisterCard from './GuaranteeRegisterCard';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
   TextInput, NumberInput, Select, EmptyState, KES, fmtDate,
@@ -277,6 +278,9 @@ const LoansTab = ({ ctx }) => {
 
       {/* Guarantee policy — the exposure cap members are held to */}
       <GuaranteePolicyCard ctx={ctx} />
+
+      {/* The guarantees themselves, and getting each one executed */}
+      <GuaranteeRegisterCard ctx={ctx} />
 
       {/* Loans */}
       <Card

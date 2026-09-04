@@ -30,6 +30,10 @@ export const useEtims = () => {
   const [config, setConfig] = useState(null);
   const [summary, setSummary] = useState(null);
   const [recent, setRecent] = useState([]);
+  const [stockSummary, setStockSummary] = useState(null);
+  const [stockRecent, setStockRecent] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [purchaseSummary, setPurchaseSummary] = useState(null);
   const [classifications, setClassifications] = useState([]);
   const [unclassified, setUnclassified] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -68,6 +72,48 @@ export const useEtims = () => {
     setRecent(rows || []);
   }, []);
 
+  // ── Stock ─────────────────────────────────────────────────────────────────
+  // Totals from the RPC for the same reason as the queue above: the list is
+  // capped, and a page that sums the capped list reports the total of the cap.
+  const loadStock = useCallback(async () => {
+    const [{ data: totals }, { data: rows }] = await Promise.all([
+      supabase.rpc('etims_stock_summary'),
+      supabase
+        .from('etims_stock_movements')
+        .select(
+          'id, asset_id, item_code, direction, quantity, movement_code, sale_id, note, ' +
+            'sar_number, status, attempts, last_error, environment, occurred_at, ' +
+            'transmitted_at, created_at',
+        )
+        .order('created_at', { ascending: false })
+        .limit(RECENT_LIMIT),
+    ]);
+    setStockSummary(Array.isArray(totals) ? totals[0] ?? null : totals ?? null);
+    setStockRecent(rows || []);
+  }, []);
+
+  // ── Purchases ─────────────────────────────────────────────────────────────
+  // Read with their lines, because the review question is "do you recognise
+  // this?" and nobody can answer that from a header.
+  const loadPurchases = useCallback(async () => {
+    const [{ data: totals }, { data: rows }] = await Promise.all([
+      supabase.rpc('etims_purchase_summary'),
+      supabase
+        .from('etims_purchases')
+        .select(
+          'id, supplier_pin, supplier_name, supplier_invoice_no, purchase_date, ' +
+            'total_taxable, total_tax, total_amount, decision, decided_at, decision_note, ' +
+            'status, last_error, environment, created_at, ' +
+            'items:etims_purchase_items(item_seq, item_name, item_code, quantity, unit_price, ' +
+            'tax_code, taxable_amount, tax_amount, total_amount)',
+        )
+        .order('purchase_date', { ascending: false, nullsFirst: false })
+        .limit(RECENT_LIMIT),
+    ]);
+    setPurchaseSummary(Array.isArray(totals) ? totals[0] ?? null : totals ?? null);
+    setPurchases(rows || []);
+  }, []);
+
   // ── What cannot be filed yet ──────────────────────────────────────────────
   const loadClassifications = useCallback(async (aId) => {
     const [{ data: rows }, { data: missing }] = await Promise.all([
@@ -88,12 +134,14 @@ export const useEtims = () => {
       await Promise.all([
         loadConfig(),
         loadQueue(),
+        loadStock(),
+        loadPurchases(),
         aId ? loadClassifications(aId) : Promise.resolve(),
       ]);
     } catch (err) {
       setError(err.message);
     }
-  }, [adminId, loadConfig, loadQueue, loadClassifications]);
+  }, [adminId, loadConfig, loadQueue, loadStock, loadPurchases, loadClassifications]);
 
   useEffect(() => {
     const boot = async () => {
@@ -242,6 +290,91 @@ export const useEtims = () => {
     }
   }, [loadQueue]);
 
+  // ── Stock ─────────────────────────────────────────────────────────────────
+  /**
+   * Tell KRA that stock moved for a reason a sale cannot explain — received,
+   * written off, broken, transferred.
+   *
+   * The reason is required of the operator rather than inferred, because a
+   * change in quantity does not say why it changed and each reason is a
+   * different code on a tax filing. This does NOT change the item's quantity in
+   * the asset register: it records what to tell KRA about a change the tenant
+   * has already made there.
+   */
+  const recordStockAdjustment = useCallback(
+    async ({ assetId, direction, quantity, movementCode = null, note = null }) => {
+      setSaving(true);
+      setError(null);
+      try {
+        const { data, error: err } = await supabase.rpc('etims_record_stock_adjustment', {
+          p_asset: assetId,
+          p_direction: direction,
+          p_quantity: Number(quantity),
+          p_movement_code: movementCode || null,
+          p_note: note || null,
+        });
+        if (err) throw new Error(err.message);
+        await loadStock();
+        return data;
+      } catch (err) {
+        setError(err.message);
+        throw err;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [loadStock],
+  );
+
+  // ── Purchases ─────────────────────────────────────────────────────────────
+  /** Refresh the supplier inbox from KRA. A read; it files nothing. */
+  const pullPurchases = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const { data, error: err } = await supabase.functions.invoke('etims-transmit', {
+        body: { action: 'pull_purchases' },
+      });
+      if (err) {
+        const detail = await err?.context?.json?.().catch(() => null);
+        throw new Error(detail?.error || err.message);
+      }
+      await loadPurchases();
+      return data;
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  }, [loadPurchases]);
+
+  /**
+   * Accept or reject a purchase a supplier filed against this PIN.
+   *
+   * Accepting claims input VAT, so nothing is auto-accepted and there is no
+   * bulk button here: the liability for claiming tax on a supply that never
+   * happened is the tenant's, and it should cost one deliberate click each.
+   */
+  const decidePurchase = useCallback(async (purchaseId, decision, note = null) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: err } = await supabase.rpc('etims_decide_purchase', {
+        p_purchase: purchaseId,
+        p_decision: decision,
+        p_note: note || null,
+      });
+      if (err) throw new Error(err.message);
+      await loadPurchases();
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  }, [loadPurchases]);
+
   // ── Classification ────────────────────────────────────────────────────────
   const saveClassification = useCallback(async (row) => {
     setSaving(true);
@@ -293,6 +426,10 @@ export const useEtims = () => {
     config,
     summary,
     recent,
+    stockSummary,
+    stockRecent,
+    purchases,
+    purchaseSummary,
     classifications,
     unclassified,
     readiness,
@@ -305,6 +442,9 @@ export const useEtims = () => {
     sendNow,
     resolveDocument,
     raiseCreditNote,
+    recordStockAdjustment,
+    pullPurchases,
+    decidePurchase,
     saveClassification,
   };
 };

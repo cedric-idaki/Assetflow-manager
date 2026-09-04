@@ -238,6 +238,36 @@ export const signingVerdict = (status, docKind) =>
   || SIGNING_VERDICTS[status]
   || { tone: 'muted', label: 'Unknown', detail: '' };
 
+/**
+ * The words a kind's release step is described with.
+ *
+ * "Issue the certificate" is right for a document the society hands out and
+ * wrong for one it receives: nobody issues a guarantee to themselves. The
+ * screens that drive the release are shared across every kind, so the wording
+ * they use is named here rather than branched on in each of them.
+ */
+const CERTIFICATE_WORDS = {
+  issuedLabel: 'Issued',
+  signedCopy: 'Signed copy',
+  release: 'Issue certificate',
+  releasing: 'Issuing…',
+  released: 'Certificate issued.',
+  releasedBySync: 'Signed by everyone — the certificate has been issued.',
+};
+
+const RELEASE_WORDS = {
+  guarantee_agreement: {
+    issuedLabel: 'Executed',
+    signedCopy: 'Executed copy',
+    release: 'Release as executed',
+    releasing: 'Releasing…',
+    released: 'The executed agreement is now the copy of record.',
+    releasedBySync: 'Signed by every party — the executed agreement has been released.',
+  },
+};
+
+export const releaseWords = (docKind) => RELEASE_WORDS[docKind] || CERTIFICATE_WORDS;
+
 /** Terminal states: nothing more will happen without somebody starting again. */
 export const isTerminal = (status) =>
   ['released', 'declined', 'cancelled', 'expired', 'failed'].includes(status);
