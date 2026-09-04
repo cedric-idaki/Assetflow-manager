@@ -398,6 +398,11 @@ async function processOne(
     paymentMethod: built.paymentMethod,
     saleDate: built.saleDate,
     operator,
+    // Both are recorded on the row when a credit note is raised, and both are
+    // ignored by the builder for an ordinary sale. A null reason code becomes
+    // '05' (other) there rather than here, so the default lives in one place.
+    refundReasonCode: doc.refund_reason_code ?? null,
+    remark: doc.remark ?? null,
   });
 
   if (!document.ok) {
@@ -530,9 +535,17 @@ async function buildFromSale(
     credRow: Creds;
     operator: { id: string; name: string };
   },
+// A union rather than `ok: boolean` with optional fields: on the success branch
+// every field below is always present, and saying so is what lets the caller
+// read `built.unregistered` after its `if (!built.ok) return` without a guard
+// that would be dead code. The old shape made all of them optional on BOTH
+// branches, so the types permitted a future early return that omitted
+// `unregistered` — and the loop at the call site would have thrown on it.
 ): Promise<
-  & { ok: boolean; problems: string[] }
-  & Partial<{
+  | { ok: false; problems: string[] }
+  | {
+    ok: true;
+    problems: string[];
     seller: Record<string, unknown>;
     buyer: Record<string, unknown>;
     lines: Array<Record<string, unknown>>;
@@ -540,7 +553,7 @@ async function buildFromSale(
     saleDate: string;
     originalInvoiceNumber: number | null;
     unregistered: any[];
-  }>
+  }
 > {
   const problems: string[] = [];
 

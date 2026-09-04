@@ -12,6 +12,10 @@ import { computePayroll, payrollInputForEmployee, payrollRecordFrom, resolveRate
 import { payslipDocument } from '../../utils/payslipDocument';
 import { buildP10Rows, p10Totals, p10Exceptions, P10_COLUMNS } from '../../utils/payeReturns';
 import { downloadCSV } from '../../utils/exportUtils';
+import { useStatutoryCalendar } from '../../hooks/useStatutoryCalendar';
+import { dueDateFor } from '../../utils/statutoryCalendar';
+import { findReturn } from '../../config/statutoryReturns';
+import StatutoryCalendarPanel from './components/StatutoryCalendarPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -1403,6 +1407,12 @@ const HRPage = () => {
   const adminIdRef = useRef(null);
   const hasLoaded  = useRef(false);
 
+  // Statutory deadlines. Its figures come from statutory_payroll_periods(),
+  // which aggregates in Postgres — NOT from payrollRecords above, which is
+  // capped at 200 rows. A tenant with 250 staff would otherwise be shown a
+  // PAYE liability a fifth short of what they owe.
+  const statutory = useStatutoryCalendar();
+
   // Derive modal state from context
   const showModal    = !!modals.hrEmployee;
   const editEmployee = modals.hrEmployee === true ? null : modals.hrEmployee;
@@ -1577,6 +1587,21 @@ const HRPage = () => {
       paye:  sum(p => p.paye),
       remittance: (nssf * 2) + shif + (ahl * 2),
     };
+  })();
+
+  // What the PAYE card says underneath the figure. One month on screen gets its
+  // own deadline; several get the range's, which is the one that matters,
+  // because it is the earliest thing still unfiled. No months at all falls back
+  // to naming the rule rather than a date that would belong to no period.
+  const payeDeadlineNote = (() => {
+    const months = [...new Set(filteredPayroll.map(p => p.pay_month).filter(Boolean))].sort();
+    if (!months.length) return 'By the 9th of the following month';
+    const due = dueDateFor(findReturn('paye'), months[0]);
+    if (!due) return 'By the 9th of the following month';
+    const shown = fmtDate(due.dueDate);
+    return months.length === 1
+      ? `Due ${shown}`
+      : `Earliest due ${shown} (${months.length} months shown)`;
   })();
 
   const hasPayrollFilters = !!(payrollFilter || payrollStatus !== 'all' || payrollDept !== 'all' || payrollRole !== 'all' || payrollSearch || payrollFrom || payrollTo);
@@ -2031,6 +2056,22 @@ const HRPage = () => {
               </div>
             )}
 
+            {/* Statutory deadlines. Above the summary cards and the table on
+                purpose: what is overdue matters more than what was paid, and
+                putting it below a 200-row table means it is never seen. */}
+            <StatutoryCalendarPanel
+              loading={statutory.loading}
+              error={statutory.error}
+              saving={statutory.saving}
+              calendar={statutory.calendar}
+              history={statutory.history}
+              summary={statutory.summary}
+              settings={statutory.settings}
+              onFile={statutory.markFiled}
+              onUnfile={statutory.unmarkFiled}
+              onSaveSettings={statutory.saveSettings}
+            />
+
             {/* Payroll summary cards for selected month */}
             {filteredPayroll.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -2039,8 +2080,14 @@ const HRPage = () => {
                     sub: `${filteredPayroll.length} employee(s)` },
                   { label: 'Total Net Pay', value: fmt(payrollTotals.net),   color: 'text-emerald-600',
                     sub: 'Paid to staff' },
+                  // The deadline is now a real date rather than the sentence
+                  // "By the 9th of next month" that used to sit here: that
+                  // string was true of whatever month you were looking at only
+                  // by coincidence, and said nothing when the filter spanned
+                  // several. Resolved through the same schedule the calendar
+                  // panel and the reminder emails use.
                   { label: 'PAYE Due to KRA', value: fmt(payrollTotals.paye), color: 'text-red-500',
-                    sub: 'By the 9th of next month' },
+                    sub: payeDeadlineNote },
                   // NSSF and the housing levy are matched by the employer, so the
                   // cash that actually leaves the business is roughly double what
                   // was withheld. Showing only the withheld half understates the

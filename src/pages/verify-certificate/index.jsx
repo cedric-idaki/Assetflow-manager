@@ -65,20 +65,6 @@ const VerifyCertificatePage = () => {
           ))}
         </div>
 
-        <div className="bg-muted/30 border border-border rounded-xl p-5">
-          <h2 className="text-sm font-bold text-foreground mb-2">What a result means</h2>
-          <ul className="space-y-2 text-xs text-muted-foreground">
-            <li><strong className="text-foreground">Genuine and current</strong> — the serial is on the register and the record still matches the seal taken when it was issued.</li>
-            <li><strong className="text-foreground">Superseded</strong> — genuine, but a later certificate has replaced it. A share certificate is superseded every time the holding changes.</li>
-            <li><strong className="text-foreground">Revoked</strong> — the issuer withdrew it. The reason they gave is shown.</li>
-            <li><strong className="text-foreground">No certificate with that serial</strong> — nothing has ever been issued under that number on this platform.</li>
-            <li><strong className="text-foreground">Record does not match its own seal</strong> — the serial exists but the stored record has been altered since issue. Treat the document as unverified and report it.</li>
-          </ul>
-          <p className="text-[11px] text-muted-foreground mt-3">
-            Every check is recorded against the certificate, with who ran it and when.
-          </p>
-        </div>
-
       </div>
     </MainLayout>
   );

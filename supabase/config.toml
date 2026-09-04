@@ -56,6 +56,21 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/esign-reminders/index.ts"
 
+# Statutory return deadlines (PAYE, NSSF, SHIF, the housing levy and VAT).
+# Invoked by the scheduler with the service-role key (no user JWT), so
+# verify_jwt must be false — same shape as agent-followup-reminders.
+#
+# RUN IT ONCE A DAY, and early: the lead days are whole days (7, 3, 1, 0), so a
+# run is either on a reminder day or it is not, and a second run the same day
+# sends nothing — uq_statutory_reminder_once refuses the duplicate claim. Two
+# runs a day is therefore harmless but pointless; ZERO runs on the 9th means a
+# tenant hears nothing on the day PAYE is due. A morning slot (say 06:00 EAT)
+# leaves the whole working day to act on what it says.
+[functions.statutory-return-reminders]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/statutory-return-reminders/index.ts"
+
 # Website → Ararat vehicle sync. Authenticated by a per-dealer API key in the
 # x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the caller
 # is the dealer's website, not a logged-in user. The function resolves the tenant

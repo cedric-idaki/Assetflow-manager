@@ -272,6 +272,26 @@ describe('credit notes', () => {
     expect(build().payload.orgInvcNo).toBe(0);
     expect(build().payload.rcptTyCd).toBe('S');
   });
+
+  // etims_raise_credit_note stores these on the row and etims-transmit passes
+  // them through; the default lives here rather than in either of those, so
+  // there is one answer to "what reason did we file under".
+  it('files under the reason code it was given', () => {
+    expect(creditNote({ refundReasonCode: '02' }).payload.rfdRsnCd).toBe('02');
+  });
+
+  it('falls back to 05 (other) when no reason code was chosen', () => {
+    expect(creditNote().payload.rfdRsnCd).toBe('05');
+    expect(creditNote({ refundReasonCode: null }).payload.rfdRsnCd).toBe('05');
+  });
+
+  it('carries the operator remark to KRA', () => {
+    expect(creditNote({ remark: 'Goods returned' }).payload.remark).toBe('Goods returned');
+  });
+
+  it('does not put a refund reason on an ordinary sale', () => {
+    expect(build({ refundReasonCode: '02' }).payload.rfdRsnCd).toBeNull();
+  });
 });
 
 describe('dates are East Africa Time', () => {

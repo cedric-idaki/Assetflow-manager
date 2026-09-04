@@ -63,6 +63,18 @@ export const sendAdminRegistrationConfirmation = async (toEmail, data) => {
 };
 
 /**
+ * Tell a sacco member they have been nominated as a guarantor on someone
+ * else's loan. The in-app bell is written server-side by the guarantee
+ * register's trigger; this is the half that reaches a member who is not in the
+ * portal today, which is most of them.
+ * @param {string} toEmail - The nominated guarantor's email
+ * @param {{ guarantorName, borrowerName, borrowerNo, saccoName, refNo, amount, principal, termMonths, purpose, note, portalUrl }} data
+ */
+export const sendGuaranteeRequest = async (toEmail, data) => {
+  return callEmailFunction('sacco_guarantee_request', toEmail, data);
+};
+
+/**
  * Send a one-time signing OTP code to a signer's email.
  * @param {string} toEmail - Recipient email
  * @param {{ signerName, code, documentName, expiresMinutes }} data

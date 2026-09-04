@@ -276,6 +276,87 @@ const ResolvePanel = ({ row, saving, onResolve, onClose }) => {
   );
 };
 
+// ── Credit notes ─────────────────────────────────────────────────────────────
+
+/**
+ * Reverse a filed invoice.
+ *
+ * Deliberately offers no amount to edit. A credit note here reverses the whole
+ * invoice, because the figures are rebuilt from the original sale server-side
+ * and there is no returns flow to say which lines came back — inventing a
+ * partial amount in this panel is exactly what the design forbids. It is stated
+ * on the panel so nobody goes looking for the box.
+ *
+ * There is no reason-code dropdown for the same reason there is no picker on
+ * the classification form: KRA's list comes from selectCodeList, which nothing
+ * fetches yet, and a hand-written list of guesses would be presented as KRA's
+ * vocabulary. Left blank the document files under 05 ("other"), which is always
+ * accepted, and the remark carries the human explanation.
+ */
+const CreditNotePanel = ({ row, saving, onRaise, onClose }) => {
+  const [reasonCode, setReasonCode] = useState('');
+  const [remark, setRemark] = useState('');
+  const [err, setErr] = useState('');
+
+  const submit = async () => {
+    setErr('');
+    try {
+      await onRaise(row.id, { reasonCode: reasonCode || null, remark: remark || null });
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  return (
+    <div className="mt-2 rounded-md border border-border bg-muted/40 p-4 text-sm">
+      <div className="font-medium text-foreground">
+        Reverse invoice {row.invoice_number ?? '—'} with a credit note
+      </div>
+      <p className="mt-1 text-muted-foreground">
+        This credits the whole invoice — KES {fmtMoney(row.total_amount)}
+        {row.total_tax != null ? `, including ${fmtMoney(row.total_tax)} of tax` : ''}. The
+        amounts are recalculated from the original sale when it is filed, so there is nothing
+        to type. Partial credits are not possible yet.
+      </p>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field
+          label="KRA refund reason code"
+          hint="Optional, two digits. Leave blank to file under 05 (other)."
+        >
+          <input
+            className={inputCls}
+            value={reasonCode}
+            inputMode="numeric"
+            maxLength={2}
+            placeholder="05"
+            onChange={(e) => setReasonCode(e.target.value.replace(/\D/g, '').slice(0, 2))}
+          />
+        </Field>
+        <Field label="Reason" hint="Sent to KRA with the document.">
+          <input
+            className={inputCls}
+            value={remark}
+            maxLength={200}
+            placeholder="Goods returned by the customer"
+            onChange={(e) => setRemark(e.target.value)}
+          />
+        </Field>
+      </div>
+
+      {err && <div className="mt-2 text-red-700">{err}</div>}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button size="sm" disabled={saving} onClick={submit}>
+          {saving ? 'Queueing…' : 'Queue the credit note'}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
+      </div>
+    </div>
+  );
+};
+
 // ── Item classification ──────────────────────────────────────────────────────
 
 const ClassificationRow = ({ row, saving, onSave }) => {
@@ -394,10 +475,24 @@ const EtimsTab = () => {
   const {
     config, summary, recent, classifications, unclassified, readiness,
     loading, saving, error,
-    saveDevice, disableDevice, sendNow, resolveDocument, saveClassification,
+    saveDevice, disableDevice, sendNow, resolveDocument, raiseCreditNote, saveClassification,
   } = useEtims();
 
   const [resolving, setResolving] = useState(null);
+  const [crediting, setCrediting] = useState(null);
+
+  // Which invoices already have a credit note, so the button is not offered
+  // twice. Derived from the loaded page only, so an invoice credited before the
+  // 50-row window would still show the button — the unique index refuses it and
+  // the panel reports "already been credited", which is the correct answer
+  // rather than a silent second reversal.
+  const credited = useMemo(
+    () => new Set(
+      recent.filter((r) => r.doc_type === 'credit_note' && r.reverses_id && r.status !== 'cancelled')
+        .map((r) => r.reverses_id),
+    ),
+    [recent],
+  );
 
   const canManage = ['admin', 'sacco_admin', 'super_admin'].includes(userProfile?.role);
 
@@ -588,6 +683,33 @@ const EtimsTab = () => {
                       <div className="mt-2">
                         <Button size="sm" variant="outline" onClick={() => setResolving(row.id)}>
                           Decide what to do
+                        </Button>
+                      </div>
+                    )
+                  )}
+
+                  {/* Only a filed invoice can be reversed: KRA identifies the
+                      reversed document by the invoice number the original was
+                      accepted under, so there is nothing to point at until it
+                      has one. An invoice already credited offers no button —
+                      the unique index would refuse a second one anyway, but a
+                      button that always errors is worse than no button. */}
+                  {row.status === 'sent' && row.doc_type === 'sale' && (
+                    credited.has(row.id) ? (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Reversed by a credit note.
+                      </div>
+                    ) : crediting === row.id ? (
+                      <CreditNotePanel
+                        row={row}
+                        saving={saving}
+                        onRaise={raiseCreditNote}
+                        onClose={() => setCrediting(null)}
+                      />
+                    ) : (
+                      <div className="mt-2">
+                        <Button size="sm" variant="ghost" onClick={() => setCrediting(row.id)}>
+                          Raise a credit note
                         </Button>
                       </div>
                     )

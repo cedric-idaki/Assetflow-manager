@@ -138,6 +138,12 @@ var Sidebar = function(props) {
     { label: 'Dashboard',     path: '/sacco-dashboard', icon: 'LayoutDashboard', tab: 'overview' },
     { label: 'Shares',        path: '/sacco-dashboard', icon: 'PieChart',        tab: 'shares', modules: ['shares'] },
     { label: 'Asset Register', path: '/sacco-dashboard', icon: 'Package',        tab: 'assets', modules: ['fixed_assets'] },
+    // Deliberately not module-gated: share certificates are the ones a society
+    // hands over and gets asked to vouch for, so the desk stays reachable even
+    // where the shares module is frozen. Company rails leave it out entirely —
+    // their staff can still verify a settlement or e-signature serial from a
+    // direct link.
+    { label: 'Verify Certificate', path: '/verify-certificate', icon: 'ShieldCheck', prefix: true },
     // Shared back-office modules (same pages as a company admin; data stays
     // tenant-isolated). Sales agents are created under Staff & System.
     { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool',  modules: ['esign'] },
@@ -150,6 +156,7 @@ var Sidebar = function(props) {
   // loans, shares, voting, contracts, documents, statement, profile).
   var saccoMemberItems = [
     { label: 'Member Portal', path: '/sacco-member-portal', icon: 'LayoutDashboard' },
+    { label: 'Verify Certificate', path: '/verify-certificate', icon: 'ShieldCheck', prefix: true },
   ];
 
   var navItems =
@@ -173,7 +180,8 @@ var Sidebar = function(props) {
     });
   }
 
-  var isActive = function(path, tab) {
+  var isActive = function(path, tab, prefix) {
+    if (prefix) return location.pathname.startsWith(path);
     if (!tab) return location.pathname === path;
     var params = new URLSearchParams(location.search);
     return location.pathname === path && (params.get('tab') === tab || (!params.get('tab') && tab === 'overview'));
@@ -263,7 +271,7 @@ var Sidebar = function(props) {
       {/* Navigation */}
       <nav style={{ flex: 1, overflowY: 'auto', padding: '10px 8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
         {navItems.map(function(item) {
-          var active = isActive(item.path, item.tab);
+          var active = isActive(item.path, item.tab, item.prefix);
           return (
             <Link
               key={item.path + (item.tab || '')}
@@ -467,43 +475,6 @@ var Sidebar = function(props) {
               </p>
             </div>
           </div>
-        )}
-
-        {/* Certificate verification desk — sacco portals only.
-            Kept out of the role nav lists because neither sacco role's list is
-            module-gated the way this needs, and out of the company rail
-            entirely: share certificates are the ones a society hands over and
-            gets asked to vouch for. The route itself stays reachable, so
-            company staff can still verify a settlement or e-signature serial
-            from a direct link. */}
-        {(role === 'sacco_admin' || role === 'sacco_member') && (
-          <Link
-            to="/verify-certificate"
-            onClick={close}
-            title={isCollapsed ? 'Verify Certificate' : ''}
-            style={{
-              display: 'flex', alignItems: 'center', height: '36px',
-              padding: '0 10px', borderRadius: '7px', width: '100%',
-              gap: isCollapsed ? 0 : '10px',
-              justifyContent: isCollapsed ? 'center' : 'flex-start',
-              textDecoration: 'none',
-              background: location.pathname.startsWith('/verify-certificate') ? B.activeBg : 'transparent',
-              border: location.pathname.startsWith('/verify-certificate')
-                ? `1px solid ${B.borderSubtle}` : '1px solid transparent',
-            }}
-          >
-            <Icon name="ShieldCheck" size={17}
-              color={location.pathname.startsWith('/verify-certificate') ? B.accent : B.textDim} />
-            {!isCollapsed && (
-              <span style={{
-                fontSize: '13px',
-                color: location.pathname.startsWith('/verify-certificate') ? B.accent : B.textMid,
-                fontFamily: 'Open Sans, Arial, sans-serif',
-              }}>
-                Verify Certificate
-              </span>
-            )}
-          </Link>
         )}
 
         <button

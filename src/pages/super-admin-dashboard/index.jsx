@@ -25,6 +25,7 @@ import KYCReviewTab from './components/KYCReviewTab';
 import MpesaSettingsTab from './components/MpesaSettingsTab';
 import OnboardingTab from './components/OnboardingTab';
 import SuperAdminCrmTab from '../../components/crm/SuperAdminCrmTab';
+import SalesTeamPanel from '../../components/sales/SalesTeamPanel';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -82,6 +83,9 @@ const SuperAdminDashboard = () => {
 
   const [activeTab, setActiveTab] = useState('overview');
   const [showCreateAgent, setShowCreateAgent] = useState(false);
+  // Which half of the Sales Agents tab is showing: the flat roster, or the
+  // org chart of who reports to whom.
+  const [agentView, setAgentView] = useState('roster');
 
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -316,16 +320,43 @@ const SuperAdminDashboard = () => {
         {/* SALES AGENTS TAB */}
         {activeTab === 'agents' && (
           <div className="space-y-4">
-            {loading ? <Sk className="h-64" /> : (
-              <SalesAgentsList
-                agents={salesAgents}
-                rejections={assistRejections}
-                onCreateNew={() => setShowCreateAgent(true)}
-                onExport={exportCSV}
-                onUpgradeAgent={upgradeSalesAgentToGold}
-                onDowngradeAgent={downgradeSalesAgentToBronze}
-              />
-            )}
+            {/* Roster and org chart are two views of the same people, so they
+                share a tab. The roster stays the default: it is what this tab
+                has always shown. */}
+            <div className="flex rounded-xl border border-border overflow-hidden w-fit">
+              {[
+                { id: 'roster', label: 'Agents',         icon: 'Users' },
+                { id: 'teams',  label: 'Team structure', icon: 'Network' },
+              ].map(v => (
+                <button
+                  key={v.id}
+                  onClick={() => setAgentView(v.id)}
+                  className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold transition-colors ${
+                    agentView === v.id
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-card text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  <Icon name={v.icon} size={13} color="currentColor" />
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            {agentView === 'teams'
+              // SalesTeamPanel loads through its own hook and carries its own
+              // loading state, so it is not gated on `loading` here.
+              ? <SalesTeamPanel onExport={exportCSV} />
+              : loading ? <Sk className="h-64" /> : (
+                <SalesAgentsList
+                  agents={salesAgents}
+                  rejections={assistRejections}
+                  onCreateNew={() => setShowCreateAgent(true)}
+                  onExport={exportCSV}
+                  onUpgradeAgent={upgradeSalesAgentToGold}
+                  onDowngradeAgent={downgradeSalesAgentToBronze}
+                />
+              )}
           </div>
         )}
 

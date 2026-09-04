@@ -278,59 +278,74 @@ export const useSuperAdminDashboard = () => {
     }
   }, []);
 
-  const approveWithdrawalRequest = useCallback(async (requestId) => {
+  /**
+   * Settle one withdrawal request — the shared body of approve and reject.
+   *
+   * Two things here are load-bearing, and both exist because this releases
+   * money and a false "done" is worse than a visible failure:
+   *
+   *   `.select('id')`. Without it PostgREST answers an UPDATE with 204 No
+   *   Content and `error` stays NULL EVEN WHEN THE STATEMENT MATCHED NO ROW.
+   *   A row-level-security policy that refuses the write is therefore
+   *   indistinguishable from a successful one, and the caller would report the
+   *   money as released while nothing changed. Asking for the affected ids is
+   *   what turns a silent denial back into something detectable. It is not
+   *   hypothetical: until 20260904120000 this table had no UPDATE policy at
+   *   all, so EVERY approval took that path.
+   *
+   *   Throwing rather than returning when the row is unknown. This used to be
+   *   a bare `return`, so clicking Approve on a request that had just been
+   *   settled in another tab did nothing at all and said nothing about it.
+   *
+   * Callers must surface what this throws — see WithdrawalRequestsTab, which
+   * is where the message reaches the person who clicked.
+   */
+  const settleWithdrawalRequest = useCallback(async (requestId, decision) => {
     const request = withdrawalRequests.find(r => r.id === requestId);
-    if (!request) return;
+    if (!request) {
+      throw new Error('That withdrawal request is no longer in the queue. Refresh and try again.');
+    }
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('agent_wallets')
       .update({
-        status: 'approved',
+        status: decision,
         reviewed_at: new Date().toISOString(),
         reviewed_by: 'super_admin',
       })
-      .eq('id', requestId);
+      .eq('id', requestId)
+      .select('id');
 
     if (error) throw error;
 
+    if (!data || data.length === 0) {
+      throw new Error(
+        `The withdrawal was not ${decision} — the database accepted the request but changed no row. ` +
+        'This usually means row-level security refused the update. Nothing has been paid out.'
+      );
+    }
+
     await auditLogsService.log(
-      'approve',
+      decision === 'approved' ? 'approve' : 'reject',
       'agent_wallets',
-      `Super admin approved withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
+      `Super admin ${decision} withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
       requestId,
       null,
-      { amount: request.total_withdrawn, agent_id: request.agent_id, status: 'approved' }
+      { amount: request.total_withdrawn, agent_id: request.agent_id, status: decision }
     );
 
     await fetchWithdrawalRequests();
   }, [withdrawalRequests, fetchWithdrawalRequests]);
 
-  const rejectWithdrawalRequest = useCallback(async (requestId) => {
-    const request = withdrawalRequests.find(r => r.id === requestId);
-    if (!request) return;
+  const approveWithdrawalRequest = useCallback(
+    (requestId) => settleWithdrawalRequest(requestId, 'approved'),
+    [settleWithdrawalRequest],
+  );
 
-    const { error } = await supabase
-      .from('agent_wallets')
-      .update({
-        status: 'rejected',
-        reviewed_at: new Date().toISOString(),
-        reviewed_by: 'super_admin',
-      })
-      .eq('id', requestId);
-
-    if (error) throw error;
-
-    await auditLogsService.log(
-      'reject',
-      'agent_wallets',
-      `Super admin rejected withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
-      requestId,
-      null,
-      { amount: request.total_withdrawn, agent_id: request.agent_id, status: 'rejected' }
-    );
-
-    await fetchWithdrawalRequests();
-  }, [withdrawalRequests, fetchWithdrawalRequests]);
+  const rejectWithdrawalRequest = useCallback(
+    (requestId) => settleWithdrawalRequest(requestId, 'rejected'),
+    [settleWithdrawalRequest],
+  );
 
   const fetchContracts = useCallback(async () => {
     const adminId = await getAdminId();

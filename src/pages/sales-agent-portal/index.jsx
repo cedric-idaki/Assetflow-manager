@@ -29,9 +29,12 @@ import CustomerRecord from '../../components/crm/CustomerRecord';
 import LostReasonModal from './components/LostReasonModal';
 import LostDealsPanel from './components/LostDealsPanel';
 import OpportunitiesPanel from './components/OpportunitiesPanel';
+import TeamPanel from './components/TeamPanel';
 import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
 import { deriveStaleLeads } from '../../hooks/useCrmInteractions';
 import { channelMeta, PIPELINE_STAGE_VALUES } from '../../config/crmVocabulary';
+import { isManager } from '../../config/salesHierarchy';
+import { downloadCSV } from '../../utils/exportUtils';
 import {
   leadValue, leadProbability, weightedValue, formatMoney, formatCompactMoney,
 } from '../../utils/pipelineValue';
@@ -710,6 +713,18 @@ const SalesAgentPortal = () => {
   // points. Admin-created (client) agents stay on their own tenant's clients,
   // and sacco-side agents already register saccos as their default.
   const canRegisterSacco = agentMode === 'company';
+  // A sales manager is an ordinary agents row with agent_role = 'manager' --
+  // they keep their own book, code, target and wallet, and gain a team. The
+  // same column is what the managers_read_team_* policies key on, so this flag
+  // and the data the team view can actually read come from one fact.
+  const isTeamLead = isManager(agentProfile);
+
+  /** The team roster as a file. Same CSV path the rest of the portal uses. */
+  const exportTeamCSV = (rows, filename) => {
+    if (!rows?.length) return;
+    downloadCSV(rows, `${filename}_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
   // Only super-admin BRONZE agents can ask a gold agent to onboard an admin.
   const isBronzeCompanyAgent = agentMode === 'company' && (agentProfile?.agent_plan || 'bronze') === 'bronze';
   // Gold agents are on the receiving end — they get the request inbox.
@@ -1225,7 +1240,10 @@ const SalesAgentPortal = () => {
               </span>
             </div>
 
-            {/* View toggle */}
+            {/* View toggle. "My Team" appears only for a sales manager --
+                agents.agent_role says so, and the same fact is what the RLS
+                policies key on, so a button that showed for anyone else would
+                lead to an empty screen rather than to somebody's data. */}
             <div className="flex rounded-xl border border-border overflow-hidden">
               <button
                 onClick={() => setActiveView('portal')}
@@ -1237,6 +1255,19 @@ const SalesAgentPortal = () => {
               >
                 Portal
               </button>
+              {isTeamLead && (
+                <button
+                  onClick={() => setActiveView('team')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold transition-colors ${
+                    activeView === 'team'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-card text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  <Icon name="Users" size={13} color="currentColor" />
+                  My Team
+                </button>
+              )}
               <button
                 onClick={() => setActiveView('activity')}
                 className={`px-3 py-2 text-xs font-semibold transition-colors ${
@@ -1288,6 +1319,9 @@ const SalesAgentPortal = () => {
 
         {/* ── Activity Trail View ── */}
         {activeView === 'activity' && <AgentActivityTrail />}
+
+        {/* ── Team View (sales managers only) ── */}
+        {activeView === 'team' && isTeamLead && <TeamPanel onExport={exportTeamCSV} />}
 
         {/* ── Portal View ── */}
         {activeView === 'portal' && (

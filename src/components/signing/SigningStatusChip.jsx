@@ -33,7 +33,9 @@ const SigningStatusChip = ({ request, requireSignature = false, className = '' }
     );
   }
 
-  const verdict = signingVerdict(request.status);
+  // docKind travels with the status so a kind with its own vocabulary gets its
+  // own words — a guarantee agreement is "Executed", never "Issued".
+  const verdict = signingVerdict(request.status, request.docKind);
   const tone = TONES[verdict.tone] || TONES.muted;
   const inFlight = ['sent', 'viewed'].includes(request.status);
   const count = inFlight && request.signersTotal

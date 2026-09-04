@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
+import { useToast } from '../../../components/Toast';
 
 const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -11,7 +12,41 @@ const formatDate = (value) => {
 };
 
 const WithdrawalRequestsTab = ({ requests = [], onExport, onApprove, onReject }) => {
+  const toast = useToast();
+  const [processingId, setProcessingId] = useState(null);
   const pendingCount = requests.filter(r => (r.status || 'pending') === 'pending').length;
+
+  /**
+   * Settle a request and TELL THE USER WHAT HAPPENED.
+   *
+   * Both buttons used to be `onClick={() => onApprove?.(req.id)}` — the promise
+   * was neither awaited nor caught, so when the approve threw (which, before
+   * migration 20260904120000, it did every single time: agent_wallets had no
+   * `status` column) the rejection went unhandled and the screen showed
+   * nothing at all. No toast, no error, no change. A super admin clicking
+   * Approve had no way to tell the money had not moved.
+   *
+   * Awaiting it also gives us the in-flight lock below, so a slow round trip
+   * cannot be double-submitted into two audit entries.
+   */
+  const settle = async (req, decision) => {
+    if (processingId) return;
+    setProcessingId(req.id);
+    try {
+      await (decision === 'approve' ? onApprove?.(req.id) : onReject?.(req.id));
+      toast.success(
+        `Withdrawal of ${fmt(req.total_withdrawn)} ${decision === 'approve' ? 'approved' : 'rejected'}.`,
+      );
+    } catch (err) {
+      // The hook's message says what went wrong and whether anything changed;
+      // prefer it over a generic line, and never swallow it.
+      toast.error(
+        err?.message || `Could not ${decision} the withdrawal. Nothing was changed.`,
+      );
+    } finally {
+      setProcessingId(null);
+    }
+  };
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -57,6 +92,7 @@ const WithdrawalRequestsTab = ({ requests = [], onExport, onApprove, onReject })
             <tbody className="divide-y divide-border">
               {requests.map(req => {
                 const status = (req.status || 'pending').toLowerCase();
+                const busy = processingId === req.id;
                 const badgeClass = status === 'approved'
                   ? 'bg-emerald-100 text-emerald-700'
                   : status === 'rejected'
@@ -86,16 +122,16 @@ const WithdrawalRequestsTab = ({ requests = [], onExport, onApprove, onReject })
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => onApprove?.(req.id)}
-                          disabled={status === 'approved'}
+                          onClick={() => settle(req, 'approve')}
+                          disabled={status === 'approved' || busy}
                           className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-700 transition-colors"
                         >
-                          Approve
+                          {busy ? 'Working…' : 'Approve'}
                         </button>
                         <button
                           type="button"
-                          onClick={() => onReject?.(req.id)}
-                          disabled={status === 'rejected'}
+                          onClick={() => settle(req, 'reject')}
+                          disabled={status === 'rejected' || busy}
                           className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-red-600 text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-red-700 transition-colors"
                         >
                           Reject

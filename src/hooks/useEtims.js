@@ -58,7 +58,7 @@ export const useEtims = () => {
         .select(
           'id, sale_id, doc_type, status, invoice_number, kra_invoice_number, attempts, ' +
             'next_attempt_at, last_error, last_result_code, environment, total_tax, total_amount, ' +
-            'receipt_signature, transmitted_at, created_at',
+            'receipt_signature, transmitted_at, created_at, reverses_id',
         )
         .order('created_at', { ascending: false })
         .limit(RECENT_LIMIT),
@@ -213,6 +213,35 @@ export const useEtims = () => {
     }
   }, [loadQueue]);
 
+  /**
+   * Reverse a filed invoice with a credit note.
+   *
+   * Note what is not sent: no amount, no lines, no date. The reversal's figures
+   * are rebuilt server-side from the original sale and negated by the shared
+   * builder, so this call cannot state what to credit — only which document,
+   * and why. That is the same rule as the rest of this file: a browser supplies
+   * inputs to filing, never the figures a receipt asserts.
+   */
+  const raiseCreditNote = useCallback(async (invoiceId, { reasonCode = null, remark = null } = {}) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const { data, error: err } = await supabase.rpc('etims_raise_credit_note', {
+        p_invoice: invoiceId,
+        p_reason_code: reasonCode || null,
+        p_remark: remark || null,
+      });
+      if (err) throw new Error(err.message);
+      await loadQueue();
+      return data;
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    } finally {
+      setSaving(false);
+    }
+  }, [loadQueue]);
+
   // ── Classification ────────────────────────────────────────────────────────
   const saveClassification = useCallback(async (row) => {
     setSaving(true);
@@ -275,6 +304,7 @@ export const useEtims = () => {
     disableDevice,
     sendNow,
     resolveDocument,
+    raiseCreditNote,
     saveClassification,
   };
 };

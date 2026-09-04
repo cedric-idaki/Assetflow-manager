@@ -100,6 +100,13 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [treasury,      setTreasury]      = useState(null);
   // Share engine (20260801200000_sacco_share_engine)
   const [shareSettings, setShareSettings] = useState(null);
+  // Guarantee policy — the exposure cap the member portal enforces
+  // (20260904160000_sacco_loan_guarantees). Null until that migration is
+  // applied; the DB defaults govern either way.
+  const [guaranteeSettings, setGuaranteeSettings] = useState(null);
+  // The guarantee register itself. Staff read every row of their own tenant;
+  // the member portal reads only the two sides of each agreement.
+  const [guarantees,    setGuarantees]    = useState([]);
   const [shareTxns,     setShareTxns]     = useState([]);
   const [certificates,  setCertificates]  = useState([]);
   const [dividends,     setDividends]     = useState([]);
@@ -306,6 +313,35 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  // How much of their own security a member may stand behind. Absent until the
+  // guarantees migration is applied — every consumer treats null as "the table
+  // defaults", which is exactly what the server falls back to.
+  const fetchGuaranteeSettings = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_guarantee_settings').select('*')
+        .eq('admin_id', adminId).limit(1).maybeSingle();
+      setGuaranteeSettings(data);
+    } catch (_) {}
+  }, []);
+
+  // The guarantee register — who is standing behind whose borrowing, and how
+  // far each agreement has got. Read whole rather than paged: a society's open
+  // guarantees are bounded by its live loans, and the Loans tab resolves the
+  // guarantors of a loan out of this array.
+  const fetchGuarantees = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_loan_guarantees')
+        .select(`*,
+          borrower:sacco_members!borrower_member_id(id, full_name, member_no, email),
+          guarantor:sacco_members!guarantor_member_id(id, full_name, member_no, email),
+          loan:sacco_loans(id, principal, annual_interest_rate, term_months, status, purpose)`)
+        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
+      setGuarantees(data || []);
+    } catch (_) {}
+  }, []);
+
   // The immutable per-holder share ledger — powers cost basis, history and
   // every analytics chart. Capped: it grows with every trade.
   const fetchShareTxns = useCallback(async () => {
@@ -501,7 +537,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       fetchTransfers(), fetchTreasury(), fetchSharePrices(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(),
       fetchElectionVoters(), fetchElectionAudit(),
-      fetchShareSettings(), fetchShareTxns(), fetchCertificates(),
+      fetchShareSettings(), fetchGuaranteeSettings(), fetchGuarantees(), fetchShareTxns(), fetchCertificates(),
       fetchDividends(), fetchDividendAllocations(), fetchShareAudit(),
       fetchWithholdings(), fetchWithholdingEvents(),
     ]);
@@ -514,7 +550,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     fetchTransfers, fetchTreasury, fetchSharePrices, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
     fetchElections, fetchElectionPositions, fetchElectionCandidates,
     fetchElectionVoters, fetchElectionAudit,
-    fetchShareSettings, fetchShareTxns, fetchCertificates,
+    fetchShareSettings, fetchGuaranteeSettings, fetchGuarantees, fetchShareTxns, fetchCertificates,
     fetchDividends, fetchDividendAllocations, fetchShareAudit,
     fetchWithholdings, fetchWithholdingEvents,
   ]);
@@ -524,11 +560,11 @@ export const SaccoDashboardProvider = ({ children }) => {
   const refreshShares = useCallback(async () => {
     await Promise.all([
       fetchShares(), fetchListings(), fetchTransfers(), fetchTreasury(),
-      fetchShareSettings(), fetchShareTxns(), fetchCertificates(), fetchShareAudit(),
+      fetchShareSettings(), fetchGuaranteeSettings(), fetchShareTxns(), fetchCertificates(), fetchShareAudit(),
       fetchWithholdings(), fetchWithholdingEvents(), fetchStatsRow(),
     ]);
   }, [fetchStatsRow, fetchShares, fetchListings, fetchTransfers, fetchTreasury,
-      fetchShareSettings, fetchShareTxns, fetchCertificates, fetchShareAudit,
+      fetchShareSettings, fetchGuaranteeSettings, fetchShareTxns, fetchCertificates, fetchShareAudit,
       fetchWithholdings, fetchWithholdingEvents]);
 
   const refreshDividends = useCallback(async () => {
@@ -1009,6 +1045,15 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchShareSettings();
     return data;
   }, [rpc, fetchShareSettings]);
+
+  // The society's guarantee policy. Patched column by column server-side, and
+  // re-read after — the RPC creates the row on first save, so the screen has to
+  // pick up an id it did not have.
+  const saveGuaranteeSettings = useCallback(async (patch) => {
+    const data = await rpc('sacco_guarantee_save_settings', { p_patch: patch });
+    await fetchGuaranteeSettings();
+    return data;
+  }, [rpc, fetchGuaranteeSettings]);
 
   const setTradingSuspended = useCallback(async (suspended, reason) => {
     const data = await rpc('sacco_share_set_trading', { p_suspended: suspended, p_reason: reason || null });
@@ -1619,6 +1664,9 @@ export const SaccoDashboardProvider = ({ children }) => {
       mk('members', 'sacco_members', () => { fetchMembers(); fetchStatsRow(); }),
       mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionAudit(); fetchStatsRow(); }),
       mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); fetchStatsRow(); }),
+      // A guarantor answering in their own portal has to reach the loans desk
+      // without a reload — an officer is often on the phone to the borrower.
+      mk('guarantees', 'sacco_loan_guarantees', fetchGuarantees),
       mk('shares', 'sacco_shares', () => { fetchShares(); fetchStatsRow(); }),
       mk('share_prices', 'sacco_share_prices', fetchSharePrices),
       // The order book has to move under the admin's feet as members trade.
@@ -1650,7 +1698,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     sacco, members, membersTruncated, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,
     shares, sharesTruncated, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
     currentMarketValue, marketCap, totalSharesHeld, totalSharesIssued, treasuryShares,
-    shareSettings, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
+    shareSettings, guaranteeSettings, guarantees, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
     withholdings, withholdingEvents, withholdingsTruncated,
     elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     stats, loading, connectionStatus,
@@ -1658,6 +1706,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     // Refresh the members list WITHOUT flipping the dashboard into its loading
     // skeleton (fetchAll would unmount the active tab and kill open modals).
     refreshMembers: fetchMembers,
+    refreshGuarantees: fetchGuarantees,
     addMember, updateMember, recordContribution,
     approveContribution, reverseContribution, editContribution,
     getCollections, getDefaulters, getMemberContributionStats,
@@ -1667,7 +1716,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     saveTreasury, treasuryBuyBack,
     // Share engine
     refreshShares, refreshDividends,
-    saveShareSettings, setTradingSuspended,
+    saveShareSettings, saveGuaranteeSettings, setTradingSuspended,
     issueShares, retireShares, adjustTreasury, freezeMember,
     withholdShares, releaseWithholding, listWithheldShares, getWithholdingSummary,
     placeOrder, updateOrder, cancelOrder, executeOrder,

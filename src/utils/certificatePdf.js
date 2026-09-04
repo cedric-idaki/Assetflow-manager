@@ -27,7 +27,7 @@
  * looks issued. The issued document is the file SignNow returns.
  */
 
-import { signatureBlocks, A4, fieldsForSigners } from './certificateSigning';
+import { signatureBlocks, A4, SIG_BLOCK, fieldsForSigners } from './certificateSigning';
 import { loadJsPDF } from './jsPdfLoader';
 
 const KES = (n) => 'KES ' + (parseFloat(n) || 0).toLocaleString('en-KE', {
@@ -491,6 +491,256 @@ export const buildAssetValuationPdf = async ({
 };
 
 // ===========================================================================
+// LOAN GUARANTEE AGREEMENT — the confirmed undertaking, as an instrument
+//
+// EVERY WORD ON THIS PAGE COMES FROM THE SERVER
+// ---------------------------------------------
+// `terms` is exactly what sacco_loan_guarantee_terms() returned — the same
+// object the member read in the portal, carrying the clause text and the hash
+// of it. Nothing here composes wording of its own, for the same reason
+// GuaranteesTab does not: a second copy of the clauses in JavaScript is a
+// second copy to drift, and the hash the guarantor is bound by covers the
+// server's copy. If this file paraphrased a clause, the paper and the digest
+// would disagree and the digest would be the one that was right.
+//
+// WHY IT PAGINATES AND THE CERTIFICATES DO NOT
+// --------------------------------------------
+// A certificate is a fixed design that fits by construction. This is a
+// contract: the clause list is versioned server-side and will get longer.
+// Overflowing off the foot of a fixed page would push the signature blocks
+// somewhere SignNow places a signing box nobody can reach — so the flow breaks
+// pages, and the signature row is laid out on whichever page turns out to be
+// last.
+// ===========================================================================
+
+export const buildGuaranteeAgreementPdf = async ({
+  terms, saccoName, signatureName, serial, signers = [], draft = true,
+}) => {
+  const JsPDF = await loadJsPDF();
+  const geometry = A4.portrait;
+  const doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const { width: W, height: H } = geometry;
+  const M = 48;
+
+  const society = saccoName || terms?.sacco_name || 'Sacco Society';
+  const loan = terms?.loan || {};
+  const borrower = terms?.borrower || {};
+  const guarantor = terms?.guarantor || {};
+  const clauses = Array.isArray(terms?.clauses) ? terms.clauses : [];
+
+  // The foot of the type area. Everything below this belongs to the signature
+  // row and the footer, so the flow breaks before it rather than into it.
+  const FLOOR = H - 150;
+  let y = 0;
+
+  const newPage = () => {
+    doc.addPage();
+    y = 64;
+  };
+
+  /** Break to a fresh page unless `need` points still fit above the floor. */
+  const room = (need) => { if (y + need > FLOOR) newPage(); };
+
+  // ── Page 1 masthead ──────────────────────────────────────────────────────
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(...INK);
+  doc.text(String(society), M, 60);
+
+  doc.setDrawColor(...TEAL);
+  doc.setLineWidth(2);
+  doc.line(M, 74, W - M, 74);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.text('LOAN GUARANTEE AGREEMENT', W / 2, 106, { align: 'center', charSpace: 1 });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...SLATE);
+  doc.text(
+    `Guarantor's undertaking${terms?.ref_no ? ` · ${terms.ref_no}` : ''}`,
+    W / 2, 122, { align: 'center' },
+  );
+
+  if (serial) {
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...SLATE);
+    doc.text(`Serial ${serial}`, W - M, 144, { align: 'right' });
+  }
+
+  y = 168;
+
+  // ── The parties and the facility ─────────────────────────────────────────
+  const row = (k, v) => {
+    room(17);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...SLATE);
+    doc.text(`${k}:`, M, y);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...INK);
+    doc.text(String(v ?? '—'), M + 150, y, { maxWidth: W - M * 2 - 158 });
+    y += 17;
+  };
+
+  const heading = (text) => {
+    room(30);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...SLATE);
+    doc.text(text.toUpperCase(), M, y, { charSpace: 1 });
+    y += 14;
+  };
+
+  const withNo = (p) => (p?.name
+    ? `${p.name}${p.member_no ? ` (${p.member_no})` : ''}`
+    : '—');
+
+  heading('The parties');
+  row('Guarantor', withNo(guarantor));
+  row('Borrower', withNo(borrower));
+  row('Society', society);
+  y += 6;
+
+  heading('The facility guaranteed');
+  row('Loan', loan.ref || '—');
+  row('Product', loan.product || '—');
+  row('Principal', KES(loan.principal));
+  row('Interest', `${parseFloat(loan.rate || 0)}% p.a.`);
+  row('Term', loan.term_months ? `${int(loan.term_months)} months` : '—');
+  if (loan.purpose) row('Purpose', loan.purpose);
+  y += 6;
+
+  // The figure this agreement exists to fix. Read from the same field the hash
+  // covers, so the number on the paper is the number that was agreed.
+  room(76);
+  doc.setFillColor(236, 250, 253);
+  doc.rect(M, y, W - M * 2, 62, 'F');
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(...SLATE);
+  doc.text('AMOUNT GUARANTEED', W / 2, y + 18, { align: 'center', charSpace: 1 });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(...TEAL);
+  doc.text(KES(terms?.amount_guaranteed), W / 2, y + 40, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(...SLATE);
+  doc.text(
+    'The Guarantor’s liability under this agreement is limited to this amount.',
+    W / 2, y + 54, { align: 'center' },
+  );
+  y += 84;
+
+  // ── The undertaking ──────────────────────────────────────────────────────
+  room(48);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...INK);
+  const recital = doc.splitTextToSize(
+    `${guarantor.name || 'The Guarantor'}, a member of ${society}, agrees to guarantee the facility described above on the terms set out below, and consents to their own deposits and shares being attached to the extent of the amount guaranteed.`,
+    W - M * 2,
+  );
+  doc.text(recital, M, y);
+  y += recital.length * 12 + 14;
+
+  heading('Terms of the guarantee');
+
+  clauses.forEach((c, i) => {
+    const body = doc.splitTextToSize(String(c?.body || ''), W - M * 2 - 18);
+    // Heading and first lines stay together — a clause title alone at the foot
+    // of a page reads as though the clause it names was left out.
+    room(18 + Math.min(body.length, 2) * 12 + 6);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...INK);
+    doc.text(`${i + 1}.`, M, y);
+    doc.text(String(c?.heading || ''), M + 18, y);
+    y += 13;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...SLATE);
+    body.forEach((line) => {
+      room(12);
+      doc.text(line, M + 18, y);
+      y += 12;
+    });
+    y += 8;
+  });
+
+  // ── What the member already did, in the portal ───────────────────────────
+  //
+  // This is not decoration and it is not the signature: it is the record of the
+  // two-step acceptance that made the agreement final, which is what entitles
+  // the society to send this document out at all. The digest is printed in
+  // full because it is the agreement's identity — the terms that bind are the
+  // ones that reproduce it, and a reader can have that checked.
+  room(96);
+  doc.setDrawColor(...SLATE);
+  doc.setLineWidth(0.4);
+  doc.rect(M, y, W - M * 2, 74);
+  const boxTop = y;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(...SLATE);
+  doc.text('CONFIRMED BY THE GUARANTOR IN THE MEMBER PORTAL', M + 12, boxTop + 16, { charSpace: 0.5 });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(...INK);
+  doc.text(
+    terms?.accepted_at
+      ? `Read and confirmed on ${longDate(terms.accepted_at)}${signatureName ? `, signed as ${signatureName}` : ''}.`
+      : 'Not yet confirmed in the portal.',
+    M + 12, boxTop + 32, { maxWidth: W - M * 2 - 24 },
+  );
+  doc.setFontSize(7.5);
+  doc.setTextColor(...SLATE);
+  doc.text(`Agreement version ${terms?.version || '—'}`, M + 12, boxTop + 46);
+  doc.setFont('courier', 'normal');
+  doc.setFontSize(6.5);
+  doc.text(`SHA-256 ${terms?.hash || '—'}`, M + 12, boxTop + 60, { maxWidth: W - M * 2 - 24 });
+  y = boxTop + 74 + 18;
+
+  // ── Signatures, on whichever page turned out to be last ──────────────────
+  const bottomOffset = 120;
+  const sigTop = H - bottomOffset - SIG_BLOCK.height;
+  // The blocks are positioned from the foot of the page, so if the flow has
+  // already reached that far the row would be drawn over the text.
+  if (y > sigTop - 24) newPage();
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(...SLATE);
+  doc.text('Signed by the parties:', M, Math.min(y, sigTop - 14));
+
+  drawSignatureRow(doc, signers, geometry, bottomOffset);
+
+  // ── Footer and DRAFT on every page ───────────────────────────────────────
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p += 1) {
+    doc.setPage(p);
+    drawFooter(doc, geometry, serial,
+      `Page ${p} of ${pages} — this agreement binds the Guarantor only as executed by every signatory below.`);
+    if (draft) drawDraftStamp(doc, geometry);
+  }
+
+  return finish(doc, {
+    filename: `Guarantee_Agreement_${terms?.ref_no || terms?.guarantee_id || 'draft'}.pdf`,
+    geometry,
+    signers,
+    // 0-based, which is what SignNow and signnow-documents both expect.
+    page: pages - 1,
+    bottomOffset,
+  });
+};
+
+// ===========================================================================
 // CONTRACTS — an execution page appended to a document that already exists
 // ===========================================================================
 
@@ -633,4 +883,5 @@ export const CERTIFICATE_BUILDERS = {
   share_certificate: buildShareCertificatePdf,
   settlement_certificate: buildSettlementCertificatePdf,
   asset_valuation: buildAssetValuationPdf,
+  guarantee_agreement: buildGuaranteeAgreementPdf,
 };

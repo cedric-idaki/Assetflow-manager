@@ -39,6 +39,15 @@ export const DOC_KINDS = {
     sourceTable: 'sacco_fixed_assets',
     blurb: 'States what an asset on the register is worth, and who stands behind that figure.',
   },
+  guarantee_agreement: {
+    label: 'Loan guarantee agreement',
+    sourceTable: 'sacco_loan_guarantees',
+    blurb: 'The undertaking a member signs to stand behind another member’s loan, and the only thing the society can produce when it comes to recover.',
+    // Welded to sacco_loan_guarantees by signing_requests_kind_source_chk, so
+    // this flag hides a kind that is unusable for a company tenant rather than
+    // being the thing that keeps them out. The database is the gate.
+    saccoOnly: true,
+  },
   contract: {
     label: 'Contracts & agreements',
     sourceTable: 'generated_contracts',
@@ -47,6 +56,19 @@ export const DOC_KINDS = {
 };
 
 export const docKindLabel = (k) => DOC_KINDS[k]?.label || 'Document';
+
+/** Kinds a tenant with no sacco can never use. */
+export const isSaccoOnlyKind = (k) => !!DOC_KINDS[k]?.saccoOnly;
+
+/**
+ * The role a guarantee agreement's own guarantor signs under.
+ *
+ * Named once because three things have to agree about it: the panel the send
+ * screen pins, the caption printed under the signature line, and the role SignNow
+ * ties the signing box to. A typo in any one of them puts the guarantor's box
+ * over the society's line.
+ */
+export const GUARANTOR_ROLE = 'Guarantor';
 
 /**
  * The panel a document kind is signed by, when the tenant has not named one.
@@ -69,6 +91,14 @@ export const DEFAULT_PANELS = {
   asset_valuation: [
     { role: 'Valuer', order: 1 },
     { role: 'Treasurer', order: 2 },
+  ],
+  // The guarantor signs their own undertaking; the society countersigns it as
+  // the party taking the benefit of it. A guarantee signed only by the society
+  // is not a guarantee, and one signed only by the guarantor is not accepted —
+  // so both are the default, and the guarantor goes first.
+  guarantee_agreement: [
+    { role: GUARANTOR_ROLE, order: 1 },
+    { role: 'Authorised Officer', order: 2 },
   ],
   contract: [
     { role: 'Authorised Officer', order: 1 },
@@ -178,8 +208,35 @@ export const SIGNING_VERDICTS = {
   failed: { tone: 'danger', label: 'Failed to send', detail: 'The document never reached SignNow.' },
 };
 
-export const signingVerdict = (status) =>
-  SIGNING_VERDICTS[status] || { tone: 'muted', label: 'Unknown', detail: '' };
+/**
+ * Where the certificate vocabulary is simply the wrong word.
+ *
+ * A guarantee agreement is not "issued" — nobody issues an undertaking to
+ * themselves. It is EXECUTED, and the distinction is the whole point of routing
+ * it through SignNow: an issued certificate is a claim the society makes, an
+ * executed agreement is one the guarantor made. Only the states where the two
+ * vocabularies actually differ are overridden.
+ */
+const KIND_VERDICTS = {
+  guarantee_agreement: {
+    signed: {
+      tone: 'success',
+      label: 'Signed',
+      detail: 'Every party has signed. Awaiting release as the executed agreement.',
+    },
+    released: {
+      tone: 'success',
+      label: 'Executed',
+      detail: 'Signed by every party and stored as the executed agreement of record.',
+    },
+    failed: { tone: 'danger', label: 'Failed to send', detail: 'The agreement never reached SignNow.' },
+  },
+};
+
+export const signingVerdict = (status, docKind) =>
+  KIND_VERDICTS[docKind]?.[status]
+  || SIGNING_VERDICTS[status]
+  || { tone: 'muted', label: 'Unknown', detail: '' };
 
 /** Terminal states: nothing more will happen without somebody starting again. */
 export const isTerminal = (status) =>

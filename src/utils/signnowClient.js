@@ -128,6 +128,64 @@ export const signingStatusFor = async (sourceTable, sourceIds) => {
   }]));
 };
 
+// ===========================================================================
+// GUARANTEE AGREEMENTS — the sacco-only kind
+// ===========================================================================
+
+/**
+ * Execution state for a page of guarantees.
+ *
+ * A separate RPC from signingStatusFor() because the people who most need this
+ * answer are not staff: is_staff_member() excludes sacco members, so
+ * signing_status_for() returns them nothing at all. This one answers for the
+ * PARTIES to each agreement as well as the society's staff, which is why the
+ * member portal and the sacco dashboard can both read it.
+ *
+ * `required` rides along per row: "nothing sent yet" means one thing when the
+ * society requires execution and something else entirely when it does not.
+ */
+export const guaranteeSigningStates = async (guaranteeIds) => {
+  const ids = (guaranteeIds || []).filter(Boolean);
+  if (ids.length === 0) return {};
+
+  const { data, error } = await supabase.rpc('sacco_guarantee_signing_states', {
+    p_guarantee_ids: ids,
+  });
+  if (error) throw error;
+
+  return Object.fromEntries((data || []).map((r) => [r.guarantee_id, {
+    required: !!r.required,
+    requestId: r.request_id,
+    // A guarantee with no request at all comes back as a row of nulls, because
+    // `required` is worth knowing even then. Callers test `status`.
+    status: r.status,
+    docKind: 'guarantee_agreement',
+    documentName: r.document_name,
+    signedPath: r.signed_path,
+    signersTotal: r.signers_total,
+    signersSigned: r.signers_signed,
+    sentAt: r.sent_at,
+    signedAt: r.signed_at,
+    releasedAt: r.released_at,
+    declineReason: r.decline_reason,
+  }]));
+};
+
+/**
+ * Why this guarantee cannot be sent for signature, as a sentence, or null.
+ *
+ * The server's own rule, asked rather than re-derived — signing_request_open()
+ * calls the identical function, so the screen and the RPC cannot disagree about
+ * who may be sent out. See sacco_guarantee_signing_block().
+ */
+export const guaranteeSigningBlock = async (guaranteeId) => {
+  const { data, error } = await supabase.rpc('sacco_guarantee_signing_block', {
+    p_guarantee_id: guaranteeId,
+  });
+  if (error) throw error;
+  return data || null;
+};
+
 /** The per-signer detail and the event trail for one request. */
 export const loadSigningRequest = async (requestId) => {
   const [{ data: request }, { data: signers }, { data: events }] = await Promise.all([
@@ -166,6 +224,16 @@ export const mintSerialFor = async (docKind, sourceId) => {
   if (docKind === 'settlement_certificate') {
     const { data, error } = await supabase.rpc('settlement_certificate_issue', {
       p_plan_id: sourceId,
+    });
+    if (error) throw error;
+    return data || null;
+  }
+  if (docKind === 'guarantee_agreement') {
+    // Refuses for a guarantee the member has not confirmed, and that refusal
+    // is the right answer: an unconfirmed agreement is not a document the
+    // registry should be asserting anything about.
+    const { data, error } = await supabase.rpc('sacco_guarantee_agreement_serial', {
+      p_guarantee_id: sourceId,
     });
     if (error) throw error;
     return data || null;
