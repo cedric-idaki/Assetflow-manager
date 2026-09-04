@@ -127,6 +127,12 @@ const BADGE_TONES = {
   voting_open: 'bg-emerald-100 text-emerald-700', voting_closed: 'bg-amber-100 text-amber-700',
   results_published: 'bg-emerald-100 text-emerald-700', cancelled: 'bg-red-100 text-red-700',
   withdrawn: 'bg-slate-100 text-slate-600',
+  // Share withholding register: held back, on the market, done with.
+  withheld: 'bg-amber-100 text-amber-700', for_sale: 'bg-sky-100 text-sky-700',
+  // Loan guarantees: asked, being read, binding, over.
+  requested: 'bg-amber-100 text-amber-700', under_review: 'bg-indigo-100 text-indigo-700',
+  accepted: 'bg-emerald-100 text-emerald-700', declined: 'bg-red-100 text-red-700',
+  released: 'bg-slate-100 text-slate-600',
 };
 export const Badge = ({ status }) => (
   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize ${BADGE_TONES[status] || 'bg-slate-100 text-slate-600'}`}>

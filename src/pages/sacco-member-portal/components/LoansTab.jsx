@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useToast } from '../../../components/Toast';
+import Icon from '../../../components/AppIcon';
 import { generateSchedule } from '../../../utils/saccoAmortization';
+import { buildLoanRepaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 import {
   Card, StatCard, Badge, Table, EmptyState, PrimaryButton, GhostButton,
   Modal, Field, TextInput, NumberInput, Select, KES, fmtDate,
@@ -17,12 +19,39 @@ const METHOD_LABELS = {
 const emptyForm = { product_id: '', principal: '', term_months: '12', purpose: '' };
 
 const LoansTab = ({ ctx }) => {
-  const { loans, schedules, loanProducts, applyLoan, exportCSV } = ctx;
+  const { me, sacco, loans, schedules, loanProducts, applyLoan, exportCSV } = ctx;
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(null); // loan id whose schedule is shown
+  const [receipting, setReceipting] = useState(null);
+
+  /**
+   * The borrower's own copy of an installment, with the interest/principal
+   * split that explains why a payment moved the balance as little as it did.
+   * A paid row downloads as a receipt, an unpaid one as an installment notice —
+   * the builder decides, so this can never hand out proof of a payment that
+   * has not happened.
+   *
+   * The loan row carries no member join here (every loan on this page is mine),
+   * so `me` is attached for the borrower block.
+   */
+  const downloadReceipt = async (loan, row) => {
+    setReceipting(row.id);
+    try {
+      const filename = await downloadAccountingDocument(buildLoanRepaymentReceipt({
+        installment: row,
+        loan: { ...loan, member: loan.member || me },
+        sacco,
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the receipt');
+    } finally {
+      setReceipting(null);
+    }
+  };
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
   const product = loanProducts.find((p) => p.id === form.product_id);
@@ -137,7 +166,7 @@ const LoansTab = ({ ctx }) => {
                           <div className="flex justify-end mb-2">
                             <GhostButton icon="Download" onClick={() => exportCSV(rows, `loan_schedule_${l.id.slice(0, 8)}`)}>Export schedule</GhostButton>
                           </div>
-                          <Table columns={['#', 'Due', 'Opening', 'Interest', 'Principal', 'Payment', 'Closing', 'Status']}>
+                          <Table columns={['#', 'Due', 'Opening', 'Interest', 'Principal', 'Payment', 'Closing', 'Status', '']}>
                             {rows.map((r) => (
                               <tr key={r.id} className={`border-b border-border/60 ${rowTone(r, nextDueId)}`}>
                                 <td className="py-2 pr-4 text-muted-foreground">{r.period_no}</td>
@@ -149,6 +178,19 @@ const LoansTab = ({ ctx }) => {
                                 <td className="py-2 pr-4 text-foreground">{KES(r.closing_balance)}</td>
                                 <td className="py-2 pr-4">
                                   <Badge status={r.paid ? 'paid' : (r.due_date && r.due_date < today ? 'overdue' : 'pending')} />
+                                </td>
+                                <td className="py-2 pr-0 text-right">
+                                  <button
+                                    onClick={() => downloadReceipt(l, r)}
+                                    disabled={receipting === r.id}
+                                    title={r.paid
+                                      ? `Download the receipt for installment ${r.period_no}`
+                                      : `Download the notice for installment ${r.period_no}`}
+                                    className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                                  >
+                                    <Icon name={receipting === r.id ? 'Loader' : 'Download'} size={13} color="currentColor"
+                                      className={receipting === r.id ? 'animate-spin' : ''} />
+                                  </button>
                                 </td>
                               </tr>
                             ))}

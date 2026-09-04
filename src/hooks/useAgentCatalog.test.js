@@ -86,7 +86,13 @@ describe('useAgentCatalog — who gets a catalogue', () => {
   it('opens a realtime channel only for a company agent', async () => {
     const { result } = renderHook(() => useAgentCatalog(AGENT, true));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(channels).toEqual(['agent_share_links_agent-1']);
+    // Matched by prefix, not equality: the name carries a module-level counter
+    // suffix so a remount never reuses a still-subscribed channel name. The
+    // counter is shared across every renderHook in this file, so its value is
+    // not meaningful here — what matters is that exactly one channel opened and
+    // it is scoped to this agent.
+    expect(channels).toHaveLength(1);
+    expect(channels[0]).toMatch(/^agent_share_links_agent-1_\d+$/);
   });
 });
 

@@ -1,6 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useToast } from '../../../../components/Toast';
+import { buildShareTransactionReceipt, downloadAccountingDocument } from '../../../../utils/accountingDocument';
 import Icon from '../../../../components/AppIcon';
+import { supabase } from '../../../../lib/supabase';
+import { fetchAllRows } from '../../../../lib/fetchAllRows';
+import Pagination from '../../../../components/ui/Pagination';
+import { useClientPager } from '../../../../hooks/useClientPager';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
   TextInput, NumberInput, Select, EmptyState, KES, fmtDate,
@@ -9,6 +14,9 @@ import {
   KESshort, pct, int, num, gainTone, gainSign, memberPosition, TXN_LABELS,
   withDefaults, printCertificate,
 } from './_util';
+
+/** Holders per page in the register. */
+const PAGE_SIZE = 25;
 
 const SORTS = {
   shares: (a, b) => int(b.shares_held) - int(a.shares_held),
@@ -24,7 +32,7 @@ const SORTS = {
  */
 const HoldingsPanel = ({ ctx, ov }) => {
   const {
-    shares = [], members = [], shareTxns = [], certificates = [],
+    shares = [], sharesTruncated = false, members = [], certificates = [],
     dividendAllocations = [], dividends = [], listings = [], transfers = [],
     shareSettings, sacco, saveShares, freezeMember, reissueCertificate, exportCSV,
   } = ctx;
@@ -54,6 +62,50 @@ const HoldingsPanel = ({ ctx, ov }) => {
       .sort(SORTS[sort] || SORTS.shares);
   }, [shares, q, sort, members]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The register is the whole book now, so it is paged for rendering only —
+  // `totals` and the export below still run over every row.
+  const pager = useClientPager(rows, PAGE_SIZE, `${q.trim().toLowerCase()}|${sort}`);
+
+  /**
+   * One member's own trading history, read completely when their portfolio
+   * opens.
+   *
+   * These lists used to be filtered out of the dashboard's capped arrays, so a
+   * long-standing holder's portfolio silently omitted their older purchases,
+   * sales and transfers — the same failure as a short member statement, on the
+   * screen a member is most likely to check against their certificate.
+   */
+  const [portfolio, setPortfolio] = useState(null);
+  const [portfolioError, setPortfolioError] = useState(null);
+  const openMemberId = openMember?.member_id || null;
+
+  useEffect(() => {
+    if (!openMemberId) { setPortfolio(null); setPortfolioError(null); return undefined; }
+    let cancelled = false;
+    setPortfolio(null);
+    setPortfolioError(null);
+
+    (async () => {
+      try {
+        const [txns, orders, trades] = await Promise.all([
+          fetchAllRows(() => supabase.from('sacco_share_transactions').select('*')
+            .eq('member_id', openMemberId).order('created_at', { ascending: false })),
+          fetchAllRows(() => supabase.from('sacco_share_listings').select('*')
+            .or(`seller_member_id.eq.${openMemberId},buyer_member_id.eq.${openMemberId}`)
+            .order('created_at', { ascending: false })),
+          fetchAllRows(() => supabase.from('sacco_share_transfers').select('*')
+            .or(`seller_member_id.eq.${openMemberId},buyer_member_id.eq.${openMemberId}`)
+            .order('created_at', { ascending: false })),
+        ]);
+        if (!cancelled) setPortfolio({ txns, orders, trades });
+      } catch (e) {
+        if (!cancelled) { setPortfolio(null); setPortfolioError(e?.message || 'Could not load this portfolio.'); }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [openMemberId]);
+
   const totals = rows.reduce((acc, r) => {
     const p = memberPosition(r, ov.effective, ov.totalIssued);
     acc.held += p.held; acc.invested += p.invested; acc.value += p.value;
@@ -77,7 +129,7 @@ const HoldingsPanel = ({ ctx, ov }) => {
     const m = r.member || memberOf(r.member_id) || {};
     return {
       member_no: m.member_no || '', member: m.full_name || '', kyc: m.kyc_status || '',
-      shares: p.held, locked: p.locked, avg_buy_price: p.avg.toFixed(2),
+      shares: p.held, locked: p.locked, withheld: p.withheld, avg_buy_price: p.avg.toFixed(2),
       total_invested: p.invested.toFixed(2), market_value: p.value.toFixed(2),
       unrealized_gain: p.unrealized.toFixed(2), realized_gain: p.realized.toFixed(2),
       dividends_earned: p.dividends.toFixed(2), ownership_percent: p.ownership.toFixed(3),
@@ -126,12 +178,23 @@ const HoldingsPanel = ({ ctx, ov }) => {
           </div>
         </div>
 
+        {sharesTruncated && (
+          <div className="mb-4 flex items-start gap-2 p-3 rounded-lg border border-warning/30 bg-warning/10">
+            <Icon name="AlertTriangle" size={15} color="#ca8a04" className="mt-0.5 shrink-0" />
+            <p className="text-xs text-foreground">
+              This register is unusually large and is not fully loaded, so totals below may be short.
+              Contact support before relying on these figures.
+            </p>
+          </div>
+        )}
+
         {rows.length === 0 ? (
           <EmptyState icon="PieChart" title={q ? 'No holder matches that search' : 'No share holdings yet'}
             hint={q ? 'Try a different name or member number.' : 'Record an opening holding, or allot shares from the treasury — trades from then on keep themselves up to date.'} />
         ) : (
+          <>
           <Table columns={['Member', 'Shares', 'Avg buy price', 'Current value', 'Unrealised gain', 'Dividends earned', 'Status', '']}>
-            {rows.map((r) => {
+            {pager.rows.map((r) => {
               const p = memberPosition(r, ov.effective, ov.totalIssued);
               const m = r.member || memberOf(r.member_id) || {};
               return (
@@ -146,6 +209,7 @@ const HoldingsPanel = ({ ctx, ov }) => {
                   <td className="py-2.5 pr-4 text-foreground">
                     {p.held.toLocaleString()}
                     {p.locked > 0 && <span className="block text-xs text-amber-600">{p.locked.toLocaleString()} listed</span>}
+                    {p.withheld > 0 && <span className="block text-xs text-amber-600">{p.withheld.toLocaleString()} withheld</span>}
                   </td>
                   <td className="py-2.5 pr-4 text-muted-foreground">{p.avg > 0 ? KES(p.avg) : '—'}</td>
                   <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(p.value)}</td>
@@ -166,6 +230,16 @@ const HoldingsPanel = ({ ctx, ov }) => {
               );
             })}
           </Table>
+          <Pagination
+            page={pager.page}
+            pageCount={pager.pageCount}
+            from={pager.from}
+            to={pager.to}
+            total={pager.total}
+            onPageChange={pager.setPage}
+            noun={q.trim() ? 'matching holders' : 'holders'}
+          />
+          </>
         )}
       </Card>
 
@@ -176,12 +250,17 @@ const HoldingsPanel = ({ ctx, ov }) => {
           ov={ov}
           settings={s}
           saccoName={sacco?.name}
-          txns={shareTxns.filter((t) => t.member_id === openMember.member_id)}
+          sacco={sacco}
+          // Read for this member specifically, so the history is complete
+          // rather than whatever survived the dashboard's display caps.
+          txns={portfolio?.txns || []}
+          orders={portfolio?.orders || []}
+          trades={portfolio?.trades || []}
+          loading={!portfolio && !portfolioError}
+          loadError={portfolioError}
           certificates={certificates.filter((c) => c.member_id === openMember.member_id)}
           allocations={dividendAllocations.filter((a) => a.member_id === openMember.member_id)}
           dividends={dividends}
-          orders={listings.filter((l) => l.seller_member_id === openMember.member_id || l.buyer_member_id === openMember.member_id)}
-          trades={transfers.filter((t) => t.seller_member_id === openMember.member_id || t.buyer_member_id === openMember.member_id)}
           onClose={() => setOpenMember(null)}
           onFreeze={async (frozen, reason) => {
             await freezeMember(openMember.member_id, frozen, reason);
@@ -234,8 +313,8 @@ const TABS = [
 ];
 
 const MemberPortfolio = ({
-  holding, member, ov, settings, saccoName, txns, certificates, allocations,
-  dividends, orders, trades, onClose, onFreeze, onReissue, exportCSV,
+  holding, member, ov, settings, saccoName, sacco, txns, certificates, allocations,
+  dividends, orders, trades, loading, loadError, onClose, onFreeze, onReissue, exportCSV,
 }) => {
   const toast = useToast();
   const [tab, setTab] = useState('position');
@@ -255,6 +334,26 @@ const MemberPortfolio = ({
     try { await onFreeze(!holding.is_frozen, reason); }
     catch (e) { toast.error(e.message || 'Could not change the freeze.'); }
     finally { setBusy(false); setFreezeOpen(false); }
+  };
+
+  /**
+   * The office's copy of a share movement, for the member's file. The register
+   * could be exported wholesale as a CSV and no single movement could be taken
+   * off the screen as paper.
+   */
+  const [docBusy, setDocBusy] = useState(null);
+  const downloadTxn = async (t) => {
+    setDocBusy(t.id);
+    try {
+      const filename = await downloadAccountingDocument(buildShareTransactionReceipt({
+        txn: t, member, sacco: sacco || { name: saccoName },
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the document');
+    } finally {
+      setDocBusy(null);
+    }
   };
 
   const printCert = (c) => {
@@ -277,6 +376,20 @@ const MemberPortfolio = ({
         <PrimaryButton icon="X" onClick={onClose}>Close</PrimaryButton>
       </>}>
       <div className="space-y-4">
+        {/* A history still loading must not look like a member who has never
+            traded — that is the reading the old capped filter produced. */}
+        {loading && (
+          <p className="text-sm text-muted-foreground">Loading this member's full trading history…</p>
+        )}
+        {loadError && (
+          <div className="flex items-start gap-2 p-3 rounded-lg border border-destructive/30 bg-destructive/10">
+            <Icon name="AlertTriangle" size={15} color="#dc2626" className="mt-0.5 shrink-0" />
+            <p className="text-xs text-foreground">
+              This history could not be loaded in full, so the lists below may be incomplete. {loadError}
+            </p>
+          </div>
+        )}
+
         {holding.is_frozen && (
           <div className="flex items-center gap-3 p-3 rounded-lg bg-red-50 border border-red-200">
             <Icon name="Snowflake" size={16} color="#dc2626" />
@@ -324,6 +437,8 @@ const MemberPortfolio = ({
                   <Row k="KYC status" v={member.kyc_status || 'pending'} />
                   <Row k="Free to trade" v={`${p.free.toLocaleString()} shares`} />
                   <Row k="Locked in open orders" v={`${p.locked.toLocaleString()} shares`} />
+                  <Row k="Withheld by the society" v={`${p.withheld.toLocaleString()} shares`}
+                    tone={p.withheld > 0 ? 'text-amber-600' : 'text-foreground'} />
                   <Row k="Voting rights" v={num(settings.votes_per_share) > 0
                     ? `${votes.toLocaleString()} vote${votes === 1 ? '' : 's'} (${settings.votes_per_share}/share)`
                     : 'One member, one vote'} />
@@ -357,7 +472,7 @@ const MemberPortfolio = ({
                     balance_after: t.balance_after, realized_gain: t.realized_gain,
                   })), `share_history_${member.member_no || 'member'}`)}>Export</GhostButton>
                 </div>
-                <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance']}>
+                <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance', '']}>
                   {txns.map((t) => (
                     <tr key={t.id} className="border-b border-border/60">
                       <td className="py-2.5 pr-4 text-muted-foreground whitespace-nowrap">{fmtDate(t.created_at)}</td>
@@ -369,6 +484,17 @@ const MemberPortfolio = ({
                       <td className="py-2.5 pr-4 text-muted-foreground">{num(t.price_per_share) > 0 ? KES(t.price_per_share) : '—'}</td>
                       <td className="py-2.5 pr-4 text-foreground">{num(t.amount) > 0 ? KES(t.amount) : '—'}</td>
                       <td className="py-2.5 pr-4 text-foreground">{int(t.balance_after).toLocaleString()}</td>
+                      <td className="py-2.5 pr-0 text-right">
+                        <button
+                          onClick={() => downloadTxn(t)}
+                          disabled={docBusy === t.id}
+                          title={`Download the document for ${t.txn_no || 'this movement'}`}
+                          className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                        >
+                          <Icon name={docBusy === t.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                            className={docBusy === t.id ? 'animate-spin' : ''} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </Table>

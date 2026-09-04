@@ -63,13 +63,13 @@ const CommissionDashboard = ({ kpis, walletTransactions, agentProfile, onRequest
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
 
-      {/* ── Wallet card ── */}
+      {/* ── Income card ── */}
       <div
         style={{ background: 'linear-gradient(135deg, #065f46 0%, #047857 50%, #059669 100%)' }}
         className="p-5 text-white"
       >
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold opacity-75 uppercase tracking-wider">Commission Wallet</span>
+          <span className="text-xs font-semibold opacity-75 uppercase tracking-wider">Commission Income</span>
           <div className="flex items-center gap-1.5 text-xs opacity-75">
             <Icon name="Shield" size={12} color="white" />
             <span>Rate: {commissionRate}%</span>

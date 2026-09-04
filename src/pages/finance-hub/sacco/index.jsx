@@ -10,9 +10,11 @@
  * Companies are NOT affected — src/pages/finance-hub/index.jsx routes them to
  * the original company hub, which reads entirely different tables.
  *
- * Operational data (members, contributions, loans, schedules, shares) comes
- * from SaccoDashboardContext, which already has it loaded and live. The
- * accounting tables come from useSaccoFinance.
+ * The member roster comes from SaccoDashboardContext, which holds it in full.
+ * The operational LEDGERS (contributions, loans, schedules, shares) are read
+ * here instead, complete — the dashboard caps those arrays for display, and a
+ * display cap must never become the input to double-entry bookkeeping. See the
+ * ops loader below. The accounting tables come from useSaccoFinance.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -20,6 +22,8 @@ import MainLayout from '../../../layouts/MainLayout';
 import Icon from '../../../components/AppIcon';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useSaccoDashboardContext } from '../../../contexts/SaccoDashboardContext';
+import { supabase } from '../../../lib/supabase';
+import { fetchAllRows } from '../../../lib/fetchAllRows';
 import { useSaccoFinance } from '../../../hooks/useSaccoFinance';
 import { societyType } from '../../../config/saccoAccountingConfig';
 import {
@@ -35,6 +39,9 @@ import StatementsTab       from './components/StatementsTab';
 import ChamaTab            from './components/ChamaTab';
 
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-lg ${className}`} />;
+
+/** Tabs whose figures are derived from `ops` — see the ops loader below. */
+const OPS_TABS = ['ledger', 'journal', 'periods', 'chama'];
 
 const Tab = ({ active, label, icon, badge, onClick }) => (
   <button onClick={onClick}
@@ -66,7 +73,7 @@ const SaccoFinanceHub = () => {
   const { userProfile, getRoleRedirectPath } = useAuth();
   const navigate = useNavigate();
   const sc = useSaccoDashboardContext();
-  const { sacco, members, contributions, loans, schedules, shares } = sc;
+  const { sacco, members } = sc;
 
   const fin = useSaccoFinance(sacco);
 
@@ -117,9 +124,73 @@ const SaccoFinanceHub = () => {
   const type = societyType(fin.config?.society_type);
   const cur  = fin.config?.base_currency || 'KES';
 
-  const ops = useMemo(
-    () => ({ members: members || [], contributions: contributions || [], loans: loans || [], schedules: schedules || [], shares: shares || [] }),
-    [members, contributions, loans, schedules, shares]);
+  /**
+   * The operational data the accounting side runs on — read IN FULL.
+   *
+   * This used to be the sacco dashboard's arrays, which are capped for display.
+   * Everything downstream of `ops` is bookkeeping, and every one of them was
+   * silently working from the newest rows only:
+   *
+   *   • PeriodsTab's accrual and provisioning jobs POST journal entries from
+   *     these numbers, so the amounts written into the books were understated.
+   *   • LedgerTab reconciles control accounts against a member sub-ledger built
+   *     from them, so the comparison could show a discrepancy that is not real
+   *     — or hide one that is.
+   *   • The operations sync only proposes postings for rows it can see, so
+   *     anything older than the cap could never be posted at all.
+   *
+   * A display cap is a reasonable trade. Capping the inputs to double-entry
+   * bookkeeping is not, so the finance hub pays for completeness up front and
+   * shows a loading state until it has everything.
+   *
+   * `members` still comes from the context: that roster is already uncapped,
+   * and every other tab shares it.
+   */
+  const [opsRows, setOpsRows] = useState(null);
+  const [opsError, setOpsError] = useState(null);
+
+  useEffect(() => {
+    if (!sacco?.id) return undefined;
+    let cancelled = false;
+    setOpsError(null);
+
+    (async () => {
+      try {
+        const [contributionRows, loanRows, scheduleRows, shareRows] = await Promise.all([
+          fetchAllRows(() => supabase.from('sacco_contributions')
+            .select('*, member:sacco_members(id, full_name, member_no)')),
+          fetchAllRows(() => supabase.from('sacco_loans')
+            .select('*, member:sacco_members(id, full_name, member_no), product:sacco_loan_products(name)')),
+          fetchAllRows(() => supabase.from('sacco_loan_schedule').select('*')),
+          fetchAllRows(() => supabase.from('sacco_shares')
+            .select('*, member:sacco_members(id, full_name, member_no)')),
+        ]);
+        if (!cancelled) {
+          setOpsRows({
+            contributions: contributionRows,
+            loans: loanRows,
+            schedules: scheduleRows,
+            shares: shareRows,
+          });
+        }
+      } catch (e) {
+        if (!cancelled) { setOpsRows(null); setOpsError(e?.message || 'Could not read the sacco ledgers.'); }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [sacco?.id]);
+
+  const opsLoading = !!sacco?.id && !opsRows && !opsError;
+  const opsReady   = !opsLoading && !opsError;
+
+  const ops = useMemo(() => ({
+    members:       members || [],
+    contributions: opsRows?.contributions || [],
+    loans:         opsRows?.loans || [],
+    schedules:     opsRows?.schedules || [],
+    shares:        opsRows?.shares || [],
+  }), [members, opsRows]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([fin.refetch(), loadTrialBalances()]);
@@ -290,19 +361,45 @@ const SaccoFinanceHub = () => {
               <StatementsTab fin={fin} periodTb={periodMap} openingTb={openingMap} closingTb={closingMap}
                 priorTb={tbPrior.length ? priorMap : null} range={range} saccoName={sacco?.name || 'Society'} />
             )}
-            {activeTab === 'ledger' && (
+            {/* The four tabs below compute or POST bookkeeping from `ops`.
+                Rendering them against a half-loaded set would show wrong
+                reconciliations and let a period-close job post understated
+                accruals, so they wait for the whole history or say why not. */}
+            {OPS_TABS.includes(activeTab) && opsLoading && (
+              <div className="bg-card border border-border rounded-xl p-8 text-center">
+                <Sk className="h-4 w-56 mx-auto" />
+                <p className="text-sm text-muted-foreground mt-3">
+                  Reading the full transaction history…
+                </p>
+              </div>
+            )}
+            {OPS_TABS.includes(activeTab) && opsError && (
+              <div className="bg-card border border-destructive/30 rounded-xl p-6">
+                <div className="flex items-start gap-2">
+                  <Icon name="AlertTriangle" size={16} color="#dc2626" className="mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Could not read the sacco ledgers</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Accounting figures are hidden rather than shown from partial data. {opsError}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'ledger' && opsReady && (
               <LedgerTab fin={fin} ops={ops} trialBalanceRows={tbClosing} asAt={range.to} />
             )}
-            {activeTab === 'journal' && (
-              <JournalTab fin={fin} ops={ops} onLedgerChange={loadTrialBalances} />
+            {activeTab === 'journal' && opsReady && (
+              <JournalTab fin={fin} ops={ops} sacco={sacco} onLedgerChange={loadTrialBalances} />
             )}
             {activeTab === 'coa' && (
               <ChartOfAccountsTab fin={fin} trialBalanceRows={tbClosing} currency={cur} />
             )}
-            {activeTab === 'periods' && (
+            {activeTab === 'periods' && opsReady && (
               <PeriodsTab fin={fin} ops={ops} netSurplusForPeriod={netSurplus} onLedgerChange={loadTrialBalances} />
             )}
-            {activeTab === 'chama' && (
+            {activeTab === 'chama' && opsReady && (
               <ChamaTab fin={fin} ops={ops} trialBalanceRows={tbClosing} onLedgerChange={loadTrialBalances} />
             )}
             {activeTab === 'setup' && <SetupTab fin={fin} />}

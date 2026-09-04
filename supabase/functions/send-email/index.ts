@@ -781,6 +781,65 @@ const buildMotionClosedEmail = (data: any) => {
 </body></html>`;
 };
 
+// Being nominated as a guarantor is the one sacco notification that must leave
+// the app: the member is being asked to put their own deposits and shares
+// behind somebody else's debt, and the answer is theirs to give — so the email
+// deliberately does NOT carry a one-click "accept". It states the ask, names
+// the three answers, and sends them to the portal to read the agreement first.
+// `esc` is used throughout because the borrower writes the note.
+const buildGuaranteeRequestEmail = (data: any) => {
+  const {
+    guarantorName, borrowerName, borrowerNo, saccoName, refNo,
+    amount, principal, termMonths, purpose, note, portalUrl,
+  } = data;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
+      <span style="font-size:28px">🤝</span>
+    </div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">You have been asked to guarantee a loan</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${esc(refNo) || "Guarantee request"}${saccoName ? ` · ${esc(saccoName)}` : ""}</p>
+  </div>
+  <div style="padding:28px 0 0">
+    <p style="margin:0 0 16px;font-size:15px;color:#374151">Dear <strong>${esc(guarantorName) || "Member"}</strong>,</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+      <strong>${esc(borrowerName) || "A fellow member"}</strong>${borrowerNo ? ` (${esc(borrowerNo)})` : ""}
+      has asked you to stand as a guarantor on their loan application.
+    </p>
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin-bottom:20px">
+      <table style="width:100%;font-size:13px;color:#374151;border-collapse:collapse">
+        <tr><td style="padding:4px 0;color:#6b7280">You are asked to guarantee</td><td style="padding:4px 0;text-align:right;font-weight:700">${formatCurrency(Number(amount) || 0)}</td></tr>
+        <tr><td style="padding:4px 0;color:#6b7280">Loan applied for</td><td style="padding:4px 0;text-align:right">${formatCurrency(Number(principal) || 0)}</td></tr>
+        ${termMonths ? `<tr><td style="padding:4px 0;color:#6b7280">Term</td><td style="padding:4px 0;text-align:right">${esc(termMonths)} months</td></tr>` : ""}
+        ${purpose ? `<tr><td style="padding:4px 0;color:#6b7280">Purpose</td><td style="padding:4px 0;text-align:right">${esc(purpose)}</td></tr>` : ""}
+      </table>
+    </div>
+    ${note ? `<div style="border-left:3px solid #e5e7eb;padding:4px 0 4px 12px;margin-bottom:20px">
+      <p style="margin:0;font-size:13px;color:#6b7280;font-style:italic">"${esc(note)}"</p>
+      <p style="margin:4px 0 0;font-size:12px;color:#9ca3af">— ${esc(borrowerName) || "the borrower"}</p>
+    </div>` : ""}
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px;margin-bottom:24px">
+      <p style="margin:0;font-size:13px;color:#92400e;line-height:1.6">
+        A guarantee is a promise to repay this amount out of your own deposits and shares
+        if the borrower does not. Read the agreement in your member portal before you answer —
+        you can reply <strong>Yes</strong>, <strong>No</strong>, or <strong>Wait</strong> if you need more time.
+      </p>
+    </div>
+    ${portalUrl ? `<div style="text-align:center;margin-bottom:24px">
+      <a href="${safeUrl(portalUrl)}" style="display:inline-block;background:#1a56db;color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px">Read it and answer</a>
+    </div>` : ""}
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+      <p style="margin:0;font-size:13px;color:#6b7280">Nobody is bound by anything until you confirm it yourself in the portal.</p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 const buildSigningOtpEmail = (data: any) => {
   const { signerName, code, documentName, expiresMinutes } = data;
   const digits = String(code || "").split("").map((d: string) =>
@@ -919,6 +978,28 @@ const buildSigningReminderEmail = (data: any) => {
 </body></html>`;
 };
 
+// How the follow-up will happen, in words that survive being dropped into a
+// sentence. `phrase` carries its own article because "a email" is wrong, and
+// `preposition` because you send an email TO someone but have a meeting WITH
+// them. Mirrors CONTACT_CHANNELS in src/config/crmVocabulary.js — the labels
+// have to agree with what the agent picked in the portal.
+const FOLLOW_UP_CHANNELS: Record<string, { label: string; phrase: string; preposition: string }> = {
+  follow_up:  { label: "Check-in",    phrase: "a check-in",          preposition: "with" },
+  call:       { label: "Phone call",  phrase: "a phone call",        preposition: "with" },
+  whatsapp:   { label: "WhatsApp",    phrase: "a WhatsApp message",  preposition: "to"   },
+  sms:        { label: "SMS",         phrase: "an SMS",              preposition: "to"   },
+  email:      { label: "Email",       phrase: "an email",            preposition: "to"   },
+  meeting:    { label: "Meeting",     phrase: "a meeting",           preposition: "with" },
+  site_visit: { label: "Site visit",  phrase: "a site visit",        preposition: "with" },
+  proposal:   { label: "Proposal",    phrase: "a proposal",          preposition: "for"  },
+  other:      { label: "Follow-up",   phrase: "a follow-up",         preposition: "with" },
+  // The pre-20260829140000 spellings. Rows written before the channel vocabulary
+  // was unified are normalised in the database, but a reminder can be sent from
+  // a queue that was already built, so both names have to resolve.
+  phone_call:     { label: "Phone call", phrase: "a phone call", preposition: "with" },
+  office_meeting: { label: "Meeting",    phrase: "a meeting",    preposition: "with" },
+};
+
 // Sales-agent follow-up reminder. Sent by the agent-followup-reminders worker
 // when a scheduled follow-up comes due, and addressed to the AGENT (not the
 // lead) — it is the agent's own diary nudge.
@@ -929,7 +1010,18 @@ const buildFollowUpReminderEmail = (data: any) => {
   const accentDark  = isOverdue ? "#b91c1c" : "#1e429f";
   const bannerBg    = isOverdue ? "#fef2f2" : "#eff6ff";
   const bannerLine  = isOverdue ? "#fecaca" : "#bfdbfe";
-  const typeLabel   = (appointmentType || "follow_up").replace(/_/g, " ");
+
+  const channel = FOLLOW_UP_CHANNELS[String(appointmentType || "follow_up").toLowerCase()]
+    || { label: String(appointmentType || "Follow-up").replace(/_/g, " "), phrase: "a follow-up", preposition: "with" };
+  const typeLabel = channel.label;
+
+  // The reminder is only useful if it can be acted on from the phone that shows
+  // it: tapping the number should dial, tapping the address should compose.
+  // Both hrefs are built from a strict character set rather than the raw value.
+  const telHref  = String(leadPhone ?? "").replace(/[^\d+]/g, "");
+  const mailHref = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(leadEmail ?? "").trim())
+    ? String(leadEmail).trim()
+    : "";
   const when = scheduledAt
     ? new Date(scheduledAt).toLocaleString("en-KE", {
         weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
@@ -947,9 +1039,9 @@ const buildFollowUpReminderEmail = (data: any) => {
     <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${isOverdue ? "This one has already passed" : "Coming up on your schedule"}</p>
   </div>
 
-  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${agentName || "there"}</strong>,</p>
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${esc(agentName) || "there"}</strong>,</p>
   <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
-    You scheduled a <strong>${typeLabel}</strong> with <strong>${leadName || "a lead"}</strong>.
+    You scheduled <strong>${channel.phrase}</strong> ${channel.preposition} <strong>${esc(leadName) || "a lead"}</strong>.
     ${isOverdue ? "It was due and is still open — close it out or push it to a new date." : "Here are the details so you're ready."}
   </p>
 
@@ -959,16 +1051,121 @@ const buildFollowUpReminderEmail = (data: any) => {
   </div>
 
   <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
-    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Lead</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadName || "—"}</td></tr>
-    ${leadPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadPhone}</td></tr>` : ""}
-    ${leadEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${leadEmail}</td></tr>` : ""}
-    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Type</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;text-transform:capitalize">${typeLabel}</td></tr>
-    ${location ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Location</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${location}</td></tr>` : ""}
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Lead</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(leadName) || "—"}</td></tr>
+    ${leadPhone ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Phone</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${telHref ? `<a href="tel:${telHref}" style="color:${accent};text-decoration:none">${esc(leadPhone)}</a>` : esc(leadPhone)}</td></tr>` : ""}
+    ${leadEmail ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Email</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${mailHref ? `<a href="mailto:${esc(mailHref)}" style="color:${accent};text-decoration:none">${esc(leadEmail)}</a>` : esc(leadEmail)}</td></tr>` : ""}
+    <tr><td style="padding:8px 0;color:#6b7280;font-size:13px">How</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(typeLabel)}</td></tr>
+    ${location ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px">Location</td><td style="padding:8px 0;color:#111827;font-size:13px;font-weight:600;text-align:right">${esc(location)}</td></tr>` : ""}
   </table>
 
-  ${notes ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Your notes</p><p style="margin:0;font-size:13px;color:#374151">${notes}</p></div>` : ""}
+  ${notes ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:24px"><p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Your notes</p><p style="margin:0;font-size:13px;color:#374151">${esc(notes)}</p></div>` : ""}
 
   ${portalUrl ? `<div style="text-align:center;margin-bottom:8px"><a href="${portalUrl}" style="display:inline-block;background:${accent};color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open my portal</a></div>` : ""}
+</div>
+</body></html>`;
+};
+
+// ─── Statutory return deadline ────────────────────────────────────────────────
+// One email per deadline day, covering every return that falls due on it —
+// PAYE, NSSF and SHIF all land on the 9th, so three separate emails on the same
+// morning would be three chances to filter the lot.
+//
+// The tone escalates with the deadline rather than shouting from seven days
+// out: a reminder that looks identical whether something is a week away or a
+// fortnight late teaches people to ignore it.
+//
+// `returns` is [{ label, period, amountLabel, amount, dueDate, instrument,
+// penalty, authority, portal, fallsOnNonWorkingDay, nextWorkingDay }].
+const buildStatutoryReturnEmail = (data: any) => {
+  const { tenantName, dueDate, daysRemaining, isOverdue, daysOverdue, returns = [], portalUrl } = data;
+
+  const urgent = isOverdue || daysRemaining <= 1;
+  const accent     = isOverdue ? "#dc2626" : urgent ? "#d97706" : "#1a56db";
+  const accentDark = isOverdue ? "#b91c1c" : urgent ? "#b45309" : "#1e429f";
+  const bannerBg   = isOverdue ? "#fef2f2" : urgent ? "#fffbeb" : "#eff6ff";
+  const bannerLine = isOverdue ? "#fecaca" : urgent ? "#fde68a" : "#bfdbfe";
+
+  const countdown = isOverdue
+    ? `${daysOverdue} day${daysOverdue === 1 ? "" : "s"} overdue`
+    : daysRemaining === 0
+    ? "Due today"
+    : `${daysRemaining} day${daysRemaining === 1 ? "" : "s"} to file`;
+
+  // A return whose amount this platform cannot state (VAT — see the header of
+  // statutory_reminder_workload) says so rather than printing a zero. A zero is
+  // a claim that nothing is payable.
+  const amountCell = (r: any) =>
+    r.amount === null || r.amount === undefined
+      ? `<span style="color:#6b7280;font-weight:500">Check the portal</span>`
+      : r.amount < 0
+      ? `${formatCurrency(Math.abs(r.amount))} <span style="color:#059669;font-weight:600">credit</span>`
+      : formatCurrency(r.amount);
+
+  const rows = (returns as any[]).map((r) => `
+    <tr>
+      <td style="padding:12px 0;border-top:1px solid #e5e7eb">
+        <p style="margin:0;font-size:14px;font-weight:700;color:#111827">${esc(r.label)}</p>
+        <p style="margin:2px 0 0;font-size:12px;color:#6b7280">${esc(r.period)} &middot; ${esc(r.authority)}${r.portal ? ` &middot; ${esc(r.portal)}` : ""}</p>
+      </td>
+      <td style="padding:12px 0;border-top:1px solid #e5e7eb;text-align:right;white-space:nowrap">
+        <p style="margin:0;font-size:14px;font-weight:700;color:${accent}">${amountCell(r)}</p>
+        <p style="margin:2px 0 0;font-size:11px;color:#6b7280">${esc(r.amountLabel || "")}</p>
+      </td>
+    </tr>`).join("");
+
+  // The authority for the deadline and the cost of missing it, once each, at
+  // the bottom. Repeating them per row would bury the figures.
+  const citations = [...new Set((returns as any[]).map((r) => r.instrument).filter(Boolean))];
+  const penalties = [...new Set((returns as any[]).map((r) => r.penalty).filter(Boolean))];
+
+  const weekendNote = (returns as any[]).find((r) => r.fallsOnNonWorkingDay);
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="background:linear-gradient(135deg,${accent} 0%,${accentDark} 100%);border-radius:12px 12px 0 0;padding:28px 32px;text-align:center;color:#ffffff;margin:-32px -32px 28px">
+    <div style="font-size:36px;margin-bottom:8px">${isOverdue ? "🔴" : urgent ? "🟠" : "🗓️"}</div>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${isOverdue ? "Statutory return overdue" : "Statutory returns due"}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">${returns.length} return${returns.length === 1 ? "" : "s"} for filing by ${formatDate(dueDate)}</p>
+  </div>
+
+  <p style="margin:0 0 16px;font-size:15px;color:#374151">Hi <strong>${esc(tenantName) || "there"}</strong>,</p>
+  <p style="margin:0 0 20px;font-size:14px;color:#6b7280;line-height:1.6">
+    ${isOverdue
+      ? "The returns below were due and have not been marked as filed. Penalties and interest accrue from the deadline, so file as soon as you can and record the acknowledgement in the portal."
+      : "These returns are coming up. The figures below are taken from the payroll you have already run — check them, file, then mark each one as filed in the portal so these reminders stop."}
+  </p>
+
+  <div style="background:${bannerBg};border:1px solid ${bannerLine};border-radius:10px;padding:20px;text-align:center;margin-bottom:24px">
+    <p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Deadline</p>
+    <p style="margin:0;font-size:26px;font-weight:800;color:${accent}">${countdown}</p>
+    <p style="margin:6px 0 0;font-size:13px;color:#6b7280">${formatDate(dueDate)}</p>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+    <tr>
+      <td style="padding:0 0 8px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Return</td>
+      <td style="padding:0 0 8px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;text-align:right">Amount</td>
+    </tr>
+    ${rows}
+  </table>
+
+  ${weekendNote ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:20px"><p style="margin:0;font-size:13px;color:#374151;line-height:1.5">The statutory deadline falls on a ${esc(weekendNote.nonWorkingReason === "weekend" ? "weekend" : weekendNote.nonWorkingReason)}. In practice the authority normally accepts filing on the next working day (${formatDate(weekendNote.nextWorkingDay)}), but that is practice rather than the rule — filing by the statutory date is the only safe course.</p></div>` : ""}
+
+  ${citations.length ? `<div style="background:#f8fafc;border-radius:8px;padding:14px;margin-bottom:12px"><p style="margin:0 0 6px;font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Authority</p>${citations.map((c) => `<p style="margin:0 0 4px;font-size:12px;color:#374151">${esc(c)}</p>`).join("")}</div>` : ""}
+
+  ${penalties.length ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px;margin-bottom:24px"><p style="margin:0 0 6px;font-size:11px;color:#991b1b;text-transform:uppercase;letter-spacing:0.05em">If you file late</p>${penalties.map((p) => `<p style="margin:0 0 4px;font-size:12px;color:#7f1d1d;line-height:1.5">${esc(p)}</p>`).join("")}</div>` : ""}
+
+  ${portalUrl ? `<div style="text-align:center;margin-bottom:16px"><a href="${portalUrl}" style="display:inline-block;background:${accent};color:#fff;text-decoration:none;font-size:14px;font-weight:700;padding:13px 32px;border-radius:8px">Open the statutory calendar</a></div>` : ""}
+
+  <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
+    <p style="margin:0;font-size:12px;color:#6b7280;line-height:1.5">
+      Ararat does not file returns on your behalf and cannot confirm that any authority has received one.
+      These figures come from your own payroll records — check them against your books before filing.
+    </p>
+  </div>
 </div>
 </body></html>`;
 };
@@ -1401,6 +1598,10 @@ serve(async (req) => {
         subject = `${data?.status === "passed" ? "✅ Motion passed" : "❌ Motion not carried"} – ${data?.motionTitle || "sacco motion"}${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
         html = buildMotionClosedEmail(data);
         break;
+      case "sacco_guarantee_request":
+        subject = `🤝 ${data?.borrowerName || "A member"} has asked you to guarantee a loan${data?.saccoName ? ` · ${data.saccoName}` : ""}`;
+        html = buildGuaranteeRequestEmail(data);
+        break;
       case "staff_welcome":
         subject = `Your ${data?.companyName ? `${data.companyName} ` : ""}staff portal login`;
         html = buildStaffCredentialsEmail(data);
@@ -1419,6 +1620,18 @@ serve(async (req) => {
           : `🔔 Follow-up reminder – ${data?.leadName || "a lead"}`;
         html = buildFollowUpReminderEmail(data);
         break;
+      // The subject line carries the deadline, because that is the only part
+      // most recipients read before deciding whether to open it.
+      case "statutory_return_reminder": {
+        const names = (data?.returns || []).map((r: any) => r.label).join(", ") || "Statutory returns";
+        subject = data?.isOverdue
+          ? `🔴 OVERDUE: ${names} – ${data?.daysOverdue} day${data?.daysOverdue === 1 ? "" : "s"} late`
+          : data?.daysRemaining === 0
+          ? `🟠 DUE TODAY: ${names}`
+          : `🗓️ ${names} due in ${data?.daysRemaining} day${data?.daysRemaining === 1 ? "" : "s"}`;
+        html = buildStatutoryReturnEmail(data);
+        break;
+      }
       case "signing_invite":
         subject = `Signature requested${data?.documentName ? `: ${data.documentName}` : ""}`;
         html = buildSigningInviteEmail(data);

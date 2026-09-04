@@ -9,6 +9,12 @@
  *   await generateReceiptPDF({ saleData, client, asset, companyProfile, schedule });
  */
 
+import { vatRateOn } from '../config/taxRegulations';
+import { loadJsPDF } from './jsPdfLoader';
+
+/** The standard rate today — the fallback for a sale that stored none. */
+const vatPercentOn = (asOf = null) => vatRateOn(asOf);
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (n) =>
   'KES ' + (parseFloat(n) || 0).toLocaleString('en-KE', {
@@ -41,24 +47,6 @@ const PAYMENT_LABELS = {
   card:          'Card / POS',
   cheque:        'Cheque',
 };
-
-// ── Load jsPDF dynamically ────────────────────────────────────────────────────
-const loadJsPDF = () => new Promise((resolve, reject) => {
-  if (window.jspdf?.jsPDF) return resolve(window.jspdf.jsPDF);
-  if (document.getElementById('jspdf-script')) {
-    // Already loading — wait for it
-    const wait = setInterval(() => {
-      if (window.jspdf?.jsPDF) { clearInterval(wait); resolve(window.jspdf.jsPDF); }
-    }, 100);
-    return;
-  }
-  const script = document.createElement('script');
-  script.id = 'jspdf-script';
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-  script.onload = () => resolve(window.jspdf.jsPDF);
-  script.onerror = () => reject(new Error('Failed to load jsPDF'));
-  document.head.appendChild(script);
-});
 
 // ── Main generator ────────────────────────────────────────────────────────────
 export const generateReceiptPDF = async ({
@@ -216,7 +204,11 @@ export const generateReceiptPDF = async ({
   }
 
   if (saleData?.vatAmount > 0) {
-    rows.push({ label: 'VAT (16%)', value: fmt(saleData?.vatAmount), bold: false });
+    // The rate the sale was actually taxed at, carried on the sale itself. A
+    // receipt is the customer's evidence of the tax charged, so the percentage
+    // printed here has to be the one the amount beside it was computed with —
+    // never a literal that a rate change would leave behind.
+    rows.push({ label: `VAT (${saleData?.vatPercent ?? vatPercentOn()}%)`, value: fmt(saleData?.vatAmount), bold: false });
   }
 
   rows.push({ label: 'TOTAL AMOUNT', value: fmt(saleData?.totalAmount), bold: true, highlight: true });

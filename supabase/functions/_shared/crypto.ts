@@ -40,6 +40,23 @@ export const KEY_NAMES = {
   mpesa: "MPESA_CRED_ENC_KEY",
   /** Employee payroll / identity PII on user_profiles. */
   pii: "PII_ENC_KEY",
+  /**
+   * A tenant's SignNow API credentials and webhook secret
+   * (signnow_connections). Held apart from the M-Pesa key because these
+   * authorise something different in kind: SignNow can send legally binding
+   * signature invites in the tenant's own name, so one leaked key must not
+   * open both.
+   */
+  signnow: "SIGNNOW_CRED_ENC_KEY",
+  /**
+   * A tenant's KRA eTIMS device communication key (etims_credentials). Held
+   * apart from the other three for the same reason they are held apart from
+   * each other, and more so: this key files TAX DOCUMENTS in the tenant's name
+   * with a revenue authority. A document filed wrongly is the tenant's
+   * liability and cannot be quietly withdrawn — only reversed by a credit note
+   * that is itself a filing. One leaked key must not reach this.
+   */
+  etims: "ETIMS_CRED_ENC_KEY",
 } as const;
 
 export type KeyPurpose = keyof typeof KEY_NAMES;

@@ -7,6 +7,21 @@ import PricingOverview from './components/PricingOverview';
 import SubscriptionCalculator from './components/SubscriptionCalculator';
 import ClientSubscriptionList from './components/ClientSubscriptionList';
 import EditSubscriptionModal from './components/EditSubscriptionModal';
+import { CORPORATE_TIERS, SACCO_TIERS } from '../../config/subscriptionPricing';
+import { VAT_RATE, VAT_INCLUSIVE_PRICES } from '../../config/systemBilling';
+
+// Headline ranges, derived from the catalogue rather than typed. The badge used
+// to read "KES 240–390/user" against a catalogue that charges 305–360.
+const range = (values) => {
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  return lo === hi ? `KES ${lo.toLocaleString()}` : `KES ${lo.toLocaleString()}–${hi.toLocaleString()}`;
+};
+
+const CORPORATE_RANGE = `${range(Object.values(CORPORATE_TIERS).map((t) => t.pricePerUser))}/user`;
+const SACCO_RANGE = `${range(Object.values(SACCO_TIERS).map((t) => t.baseFee))} base + ${range(
+  Object.values(SACCO_TIERS).map((t) => t.perMemberFee),
+)}/member`;
 
 // ── Tab helper ─────────────────────────────────────────────────────────────────
 const Tab = ({ active, label, icon, onClick }) => (
@@ -61,11 +76,15 @@ const SubscriptionBilling = () => {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-border bg-card text-xs font-medium text-muted-foreground">
               <Icon name="Building2" size={12} color="currentColor" />
-              Corporate · KES 240–390/user
+              Corporate · {CORPORATE_RANGE}
             </span>
             <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-border bg-card text-xs font-medium text-muted-foreground">
               <Icon name="Users" size={12} color="currentColor" />
-              SACCO · Base + KES 50/member
+              SACCO · {SACCO_RANGE}
+            </span>
+            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-border bg-card text-xs font-medium text-muted-foreground">
+              <Icon name="Receipt" size={12} color="currentColor" />
+              {VAT_RATE}% VAT {VAT_INCLUSIVE_PRICES ? 'incl.' : 'extra'}
             </span>
           </div>
         </div>

@@ -41,16 +41,17 @@ const UserRegistrationScreen = () => {
         <div className="relative z-10 flex-1 flex flex-col justify-center">
           <div className="w-12 h-0.5 mb-6" style={{ background: '#C9A84C' }} />
           <h2 className="text-3xl font-bold text-white leading-tight mb-4" style={{ fontFamily: 'Merriweather, serif' }}>
-            Join Ararat Today
+            Open Your Client Account
           </h2>
           <p className="text-sm leading-relaxed mb-8" style={{ color: '#A8BDD4' }}>
-            Create your account to access the full suite of financial management tools designed for your business.
+            Register directly with the company you deal with. You will need the registration
+            code from their link or card — and a sales agent's code only if one referred you.
           </p>
           <div className="space-y-3">
             {[
-              { icon: 'CheckCircle', text: 'Secure role-based access control' },
-              { icon: 'CheckCircle', text: 'Real-time data and notifications' },
-              { icon: 'CheckCircle', text: 'Comprehensive audit trail' },
+              { icon: 'CheckCircle', text: 'Track your assets, balances and statements' },
+              { icon: 'CheckCircle', text: 'Pay instalments and upload KYC documents' },
+              { icon: 'CheckCircle', text: 'No agent needed — register direct' },
             ]?.map((item, i) => (
               <div key={i} className="flex items-center gap-3">
                 <Icon name={item?.icon} size={16} color="#C9A84C" />
@@ -83,7 +84,7 @@ const UserRegistrationScreen = () => {
           {/* Form header */}
           <div className="mb-6">
             <h2 className="text-2xl font-bold mb-1" style={{ color: '#0A1628', fontFamily: 'Merriweather, serif' }}>Create Account</h2>
-            <p className="text-sm" style={{ color: '#5A6A85' }}>Fill in your details to get started</p>
+            <p className="text-sm" style={{ color: '#5A6A85' }}>Register as a client of your company</p>
             <div className="mt-3 w-10 h-0.5" style={{ background: '#C9A84C' }} />
           </div>
 

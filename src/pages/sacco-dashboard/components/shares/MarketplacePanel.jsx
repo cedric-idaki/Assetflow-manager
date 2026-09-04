@@ -150,6 +150,15 @@ const MarketplacePanel = ({ ctx, ov }) => {
         {int(l.filled_shares) > 0 && (
           <span className="block text-xs text-muted-foreground">{int(l.filled_shares).toLocaleString()} already filled</span>
         )}
+        {/* A forced sale of withheld shares, not the member's own offer — worth
+            saying, because withdrawing it returns them to withholding rather
+            than to the member. */}
+        {l.withholding_id && (
+          <span className="inline-flex items-center gap-1 mt-0.5 text-xs text-amber-600 font-medium">
+            <Icon name="Lock" size={11} color="currentColor" />
+            Withheld shares
+          </span>
+        )}
       </td>
       <td className="py-2.5 pr-4 text-foreground">{remaining(l).toLocaleString()}</td>
       <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(l.price_per_share)}</td>

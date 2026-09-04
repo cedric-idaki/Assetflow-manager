@@ -5,17 +5,22 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { formatKEPhone } from '../../utils/phoneUtils';
-import { planForUsers, subscriptionPriceFor, planById } from '../../config/companyPlans';
+import { planForUsers, subscriptionPriceFor, planById, MIN_BILLABLE_USERS } from '../../config/companyPlans';
 import { tierById } from '../../config/saccoTiers';
 import useAdminSubscription from '../../hooks/useAdminSubscription';
 import { useSaccoDashboardContext } from '../../contexts/SaccoDashboardContext';
 import SaccoBillingSection from '../sacco-dashboard/components/BillingTab';
 import { PASSWORD_POLICY } from '../../utils/validation';
-import { html } from '../../utils/htmlEscape';
+import { html, rawHtml } from '../../utils/htmlEscape';
+import { invoiceForSubscription } from '../../utils/systemInvoice';
 import DevicesCard from './components/DevicesCard';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 const fmtKES  = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
+// Invoice money keeps its cents: backing VAT out of a gross rarely lands on
+// a whole shilling, and a tax invoice whose lines do not add up to its total
+// is the one document that must never be approximated.
+const fmtKES2 = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
 const TIER_META = {
@@ -310,10 +315,10 @@ const PasswordCard = ({ email }) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 const PlanCard = ({ sub }) => {
   const { subscription, seats, planName, monthlyCost, status, startDate, endDate, daysRemaining, expired, changeSeats, refetch } = sub;
-  const [draft, setDraft] = useState(seats || 1);
+  const [draft, setDraft] = useState(seats || MIN_BILLABLE_USERS);
   const [busy, setBusy]   = useState(false);
   const [msg, setMsg]     = useState(null);
-  React.useEffect(() => { setDraft(seats || 1); }, [seats]);
+  React.useEffect(() => { setDraft(seats || MIN_BILLABLE_USERS); }, [seats]);
 
   const meta        = tierMeta(planName);
   const draftPlan   = planForUsers(draft);
@@ -380,18 +385,18 @@ const PlanCard = ({ sub }) => {
       <div className="rounded-xl border border-border p-4">
         <div className="text-sm font-semibold text-foreground mb-1">Upgrade or downgrade users</div>
         <p className="text-xs text-muted-foreground mb-4">
-          Changes take effect once the current subscription period ends — your current plan stays active until then. The tier adjusts automatically to the number of users.
+          Changes take effect once the current subscription period ends — your current plan stays active until then. The tier adjusts automatically to the number of users, and billing starts at a {MIN_BILLABLE_USERS}-user minimum.
         </p>
 
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <label className="block text-xs font-semibold text-muted-foreground mb-1.5">User seats</label>
             <div className="flex items-center gap-2">
-              <button className={btnSec} style={{ padding: '0.5rem' }} disabled={draft <= 1} onClick={() => setDraft((d) => Math.max(1, d - 1))}>
+              <button className={btnSec} style={{ padding: '0.5rem' }} disabled={draft <= MIN_BILLABLE_USERS} onClick={() => setDraft((d) => Math.max(MIN_BILLABLE_USERS, d - 1))}>
                 <Icon name="Minus" size={16} color="currentColor" />
               </button>
-              <input type="number" min={1} className={`${inputCls} w-20 text-center`} value={draft}
-                onChange={(e) => setDraft(Math.max(1, parseInt(e.target.value, 10) || 1))} />
+              <input type="number" min={MIN_BILLABLE_USERS} className={`${inputCls} w-20 text-center`} value={draft}
+                onChange={(e) => setDraft(Math.max(MIN_BILLABLE_USERS, parseInt(e.target.value, 10) || MIN_BILLABLE_USERS))} />
               <button className={btnSec} style={{ padding: '0.5rem' }} onClick={() => setDraft((d) => d + 1)}>
                 <Icon name="Plus" size={16} color="currentColor" />
               </button>
@@ -501,8 +506,14 @@ const invoiceNo = (row) => {
   return `INV-${ym}-${short}`;
 };
 
-const buildInvoiceHtml = (row, billTo) => {
+// Exported so the printed document itself is testable — a tax invoice whose
+// columns do not add up is the one page a customer always checks.
+export const buildInvoiceHtml = (row, billTo, modules = null) => {
   const meta = tierMeta(row.plan_name);
+  // Itemised by src/config/systemBilling.js: base system price, licensed users,
+  // additional modules, one-time installation, then VAT. Rows raised before the
+  // breakdown columns existed are re-derived and reconciled to what was paid.
+  const bill = invoiceForSubscription(row, modules);
   const statusColor = row.status === 'active' || row.status === 'paid' ? '#15803d' : row.status === 'pending' ? '#b45309' : '#b91c1c';
   // Escaped by default — billTo comes from tenant-entered company/sacco details.
   return html`<!doctype html><html><head><meta charset="utf-8"><title>${invoiceNo(row)}</title>
@@ -510,8 +521,7 @@ const buildInvoiceHtml = (row, billTo) => {
   *{box-sizing:border-box;font-family:'Segoe UI',Arial,sans-serif;}
   body{margin:0;padding:40px;color:#0c2037;}
   .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1A56DB;padding-bottom:20px;}
-  .brand{font-size:24px;font-weight:800;color:#0c2037;}
-  .brand span{color:#1A56DB;}
+  .brand{font-family:Georgia,serif;font-size:24px;font-weight:700;letter-spacing:-0.01em;color:#0c2037;}
   .muted{color:#5a7185;font-size:12px;}
   .grid{display:flex;justify-content:space-between;margin:24px 0;}
   .grid div{font-size:13px;line-height:1.7;}
@@ -521,10 +531,14 @@ const buildInvoiceHtml = (row, billTo) => {
   .right{text-align:right;}
   .total{font-size:18px;font-weight:800;color:#1A56DB;}
   .badge{display:inline-block;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase;color:${statusColor};background:${statusColor}1a;}
+  .totals{width:300px;margin-left:auto;margin-top:16px;}
+  .totals tr td{border:0;padding:6px 12px;}
+  .totals .lbl{color:#5a7185;}
+  .totals .sum td{border-top:2px solid #1A56DB;padding-top:10px;}
   .foot{margin-top:40px;font-size:11px;color:#9aa7b4;text-align:center;border-top:1px solid #e5ebf1;padding-top:16px;}
 </style></head><body>
   <div class="head">
-    <div><div class="brand">Asset<span>Flow</span></div><div class="muted">Platform Subscription</div></div>
+    <div><div class="brand">Ararat</div><div class="muted">Platform Subscription — Tax Invoice</div></div>
     <div class="right"><div style="font-size:20px;font-weight:800;">INVOICE</div><div class="muted">${invoiceNo(row)}</div></div>
   </div>
   <div class="grid">
@@ -536,20 +550,22 @@ const buildInvoiceHtml = (row, billTo) => {
     </div>
   </div>
   <table>
-    <thead><tr><th>Description</th><th class="right">Users</th><th class="right">Amount</th></tr></thead>
+    <thead><tr><th>Description</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Amount</th></tr></thead>
     <tbody>
-      <tr>
-        <td>${meta.label} plan subscription</td>
-        <td class="right">${row.max_users ?? '—'}</td>
-        <td class="right">${fmtKES(row.price_paid)}</td>
-      </tr>
+      ${rawHtml(bill.lines.map((l) => html`<tr>
+        <td>${l.label}</td>
+        <td class="right">${l.qty || '—'}</td>
+        <td class="right">${l.unit ? fmtKES2(l.unit) : '—'}</td>
+        <td class="right">${fmtKES2(l.gross)}</td>
+      </tr>`).join(''))}
     </tbody>
   </table>
-  <div class="grid" style="margin-top:8px;">
-    <div></div>
-    <div class="right">Total<br><span class="total">${fmtKES(row.price_paid)}</span></div>
-  </div>
-  <div class="foot">Thank you for using Ararat. Generated on ${new Date().toLocaleDateString('en-GB')}.</div>
+  <table class="totals">
+    <tr><td class="lbl">Taxable value (excl. VAT)</td><td class="right">${fmtKES2(bill.subtotal)}</td></tr>
+    <tr><td class="lbl">VAT @ ${bill.vatRate}%</td><td class="right">${fmtKES2(bill.vatAmount)}</td></tr>
+    <tr class="sum"><td class="lbl"><strong>Total (incl. VAT)</strong></td><td class="right"><span class="total">${fmtKES2(bill.total)}</span></td></tr>
+  </table>
+  <div class="foot">${meta.label} plan · ${row.max_users ?? '—'} licensed user(s). Thank you for using Ararat. Generated on ${new Date().toLocaleDateString('en-GB')}.</div>
   <script>window.onload=function(){window.print();}</script>
 </body></html>`;
 };
@@ -583,19 +599,25 @@ const HistoryCard = ({ history, billTo }) => {
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Period</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Plan</th>
                 <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Users</th>
-                <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Amount</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Subtotal</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">VAT</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Total</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Status</th>
                 <th className="text-right px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase">Invoice</th>
               </tr>
             </thead>
             <tbody>
-              {history.map((row) => (
+              {history.map((row) => {
+                const bill = invoiceForSubscription(row);
+                return (
                 <tr key={row.id} className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
                   <td className="px-4 py-3 font-medium text-foreground">{invoiceNo(row)}</td>
                   <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{fmtDate(row.start_date)} – {fmtDate(row.end_date)}</td>
                   <td className="px-4 py-3 text-muted-foreground capitalize">{tierMeta(row.plan_name).label}</td>
                   <td className="px-4 py-3 text-right text-muted-foreground">{row.max_users ?? '—'}</td>
-                  <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtKES(row.price_paid)}</td>
+                  <td className="px-4 py-3 text-right text-muted-foreground">{fmtKES(bill.subtotal)}</td>
+                  <td className="px-4 py-3 text-right text-muted-foreground">{fmtKES(bill.vatAmount)}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtKES(bill.total)}</td>
                   <td className="px-4 py-3">{statusBadge(row.status)}</td>
                   <td className="px-4 py-3 text-right">
                     <button className={btnSec} style={{ padding: '0.4rem 0.7rem' }} onClick={() => download(row)}>
@@ -604,7 +626,8 @@ const HistoryCard = ({ history, billTo }) => {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

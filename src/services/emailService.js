@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
  * Calls the send-email Edge Function via Supabase
  */
 const callEmailFunction = async (type, to, data) => {
-  const { data: result, error } = await supabase?.functions?.invoke('send-email', {
+  const { data: result, error } = await supabase.functions.invoke('send-email', {
     body: { type, to, data },
   });
 
@@ -60,6 +60,18 @@ export const sendPaymentReminder = async (toEmail, { client, payment, asset, day
  */
 export const sendAdminRegistrationConfirmation = async (toEmail, data) => {
   return callEmailFunction('admin_registration_confirmation', toEmail, data);
+};
+
+/**
+ * Tell a sacco member they have been nominated as a guarantor on someone
+ * else's loan. The in-app bell is written server-side by the guarantee
+ * register's trigger; this is the half that reaches a member who is not in the
+ * portal today, which is most of them.
+ * @param {string} toEmail - The nominated guarantor's email
+ * @param {{ guarantorName, borrowerName, borrowerNo, saccoName, refNo, amount, principal, termMonths, purpose, note, portalUrl }} data
+ */
+export const sendGuaranteeRequest = async (toEmail, data) => {
+  return callEmailFunction('sacco_guarantee_request', toEmail, data);
 };
 
 /**

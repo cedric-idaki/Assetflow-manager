@@ -1,5 +1,13 @@
 import React from 'react';
 import Icon from './AppIcon';
+import { logger } from '../utils/logger';
+
+// Generated once per caught error, not per render. The old code built this
+// inline in render() from Date.now(), so the "Error ID" shown to the user
+// changed on every re-render and was never written to any log — support could
+// not match a reported ID to anything.
+const newErrorId = () =>
+  (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).toUpperCase();
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -9,24 +17,29 @@ class ErrorBoundary extends React.Component {
       error: null,
       errorInfo: null,
       retryCount: 0,
+      errorId: null,
     };
     this.handleRetry = this.handleRetry.bind(this);
     this.handleGoHome = this.handleGoHome.bind(this);
   }
 
   static getDerivedStateFromError(error) {
-    return { hasError: true, error: error };
+    return { hasError: true, error: error, errorId: newErrorId() };
   }
 
   componentDidCatch(error, errorInfo) {
     this.setState({ errorInfo: errorInfo });
 
-    // Log error details
-    console.error('[ErrorBoundary] Component error caught:', {
-      message: error.message,
-      stack: error.stack,
-      componentStack: errorInfo.componentStack,
-      timestamp: new Date().toISOString(),
+    // Through the logger, not console.error directly: this is the one place a
+    // crash surfaces, and going straight to the console meant component crashes
+    // never reached the monitoring sink at all. errorId ties the code on the
+    // user's screen to this record.
+    logger.error('[ErrorBoundary] Component error caught', {
+      errorId: this.state.errorId,
+      message: error?.message,
+      stack: error?.stack,
+      componentStack: errorInfo?.componentStack,
+      path: typeof window !== 'undefined' ? window.location?.pathname : undefined,
     });
 
     // Mark error for any global handlers
@@ -43,6 +56,7 @@ class ErrorBoundary extends React.Component {
         error: null,
         errorInfo: null,
         retryCount: prev.retryCount + 1,
+        errorId: null,
       };
     });
   }
@@ -150,7 +164,7 @@ class ErrorBoundary extends React.Component {
             )}
 
             <p style={{ fontSize: '0.7rem', color: '#d1d5db', marginTop: '1.5rem' }}>
-              Error ID: {Date.now().toString(36).toUpperCase()}
+              Error ID: {this.state.errorId}
             </p>
           </div>
         </div>

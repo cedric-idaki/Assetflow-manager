@@ -1,5 +1,18 @@
 import { supabase } from '../lib/supabase';
 
+// Module-level counter for the subscribeToChanges() helpers below. Each of them
+// used a FIXED channel name, so two concurrent subscribers — or one component
+// remounting before the previous removeChannel() settled — would get handed the
+// same already-subscribed channel back, and .on() throws "cannot add
+// `postgres_changes` callbacks after `subscribe()`". These helpers currently
+// have no callers, which is exactly why this is worth fixing now rather than
+// discovering it from the first one.
+var _serviceChannelSeq = 0;
+var nextChannelName = function(base) {
+  _serviceChannelSeq += 1;
+  return base + '_' + _serviceChannelSeq;
+};
+
 // ── Error Handler ─────────────────────────────────────────────────────────────
 var handleError = function(error, context) {
   if (!error) return;
@@ -136,7 +149,7 @@ export var clientsService = {
 
   subscribeToChanges: function(callback) {
     return supabase
-      .channel('clients_changes')
+      .channel(nextChannelName('clients_changes'))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, callback)
       .subscribe();
   },
@@ -243,7 +256,7 @@ export var assetsService = {
 
   subscribeToChanges: function(callback) {
     return supabase
-      .channel('assets_changes')
+      .channel(nextChannelName('assets_changes'))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, callback)
       .subscribe();
   },
@@ -423,7 +436,7 @@ export var paymentsService = {
 
   subscribeToChanges: function(callback) {
     return supabase
-      .channel('payments_changes')
+      .channel(nextChannelName('payments_changes'))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, callback)
       .subscribe();
   },
@@ -493,7 +506,7 @@ export var agentsService = {
 
   subscribeToChanges: function(callback) {
     return supabase
-      .channel('agents_changes')
+      .channel(nextChannelName('agents_changes'))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' }, callback)
       .subscribe();
   },
@@ -599,7 +612,7 @@ export var auditLogsService = {
 
   subscribeToChanges: function(callback) {
     return supabase
-      .channel('audit_logs_changes')
+      .channel(nextChannelName('audit_logs_changes'))
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs' }, callback)
       .subscribe();
   },

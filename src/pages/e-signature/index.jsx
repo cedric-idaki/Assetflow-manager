@@ -11,10 +11,16 @@ import FieldFiller from "../../components/esign/FieldFiller";
 import WalkInSigning from "../../components/esign/WalkInSigning";
 import ApiEmbedPanel from "../../components/esign/ApiEmbedPanel";
 import TemplatesPanel from "../../components/esign/TemplatesPanel";
+import useDragReorder, { ReorderHandle, newRowUid } from "../../components/esign/useDragReorder";
 import { applySignatureToPDF, applyFieldsToPDF } from "../../utils/applySignatureToPDF";
+import { mintEsignSerial } from "../../utils/esignCertificateSerial";
+import SignNowTab from "../../components/signing/SignNowTab";
 import { detectSignableAreas } from "../../utils/detectSignableAreas";
 import { sendSigningOtp, sendSignatureAlert, sendSigningInvite } from "../../services/emailService";
 import { sendSigningLinkSMS } from "../../services/smsService";
+
+// Module-level counter — see realtime channel naming convention.
+let _esignChannelSeq = 0;
 
 // ── Audit event display mapping ─────────────────────────────────────────────────
 const AUDIT_ACTION_LABEL = {
@@ -100,6 +106,13 @@ const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || "").trim());
 // a signer's chip in allocation matches their field colour during placement.
 const SIGNER_PALETTE = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#db2777"];
 const signerColor = (i) => SIGNER_PALETTE[i % SIGNER_PALETTE.length];
+
+// 1st / 2nd / 3rd — the turn a signatory takes in a sequential chain.
+const ordinal = (n) => {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  return `${n}${["th", "st", "nd", "rd"][n % 10] || "th"}`;
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function StatusBadge({ status }) {
@@ -605,8 +618,9 @@ function SignDocument({ docs, onStartSigning }) {
 function Upload({ setActive, adminId, onUploaded }) {
   const [dragOver, setDragOver] = useState(false);
   const [file, setFile] = useState(null);
-  const [signers, setSigners] = useState([{ name: "", email: "", phone: "", role: "Signer" }]);
+  const [signers, setSigners] = useState([{ uid: newRowUid(), name: "", email: "", phone: "", role: "Signer" }]);
   const [order, setOrder] = useState("sequential");
+  const drag = useDragReorder(setSigners);
   const [message, setMessage] = useState("");
   const [stage, setStage] = useState("setup"); // setup | fields | sent
   const [docMeta, setDocMeta] = useState(null); // { docId, fileUrl, name, signerRows, expires }
@@ -778,7 +792,7 @@ function Upload({ setActive, adminId, onUploaded }) {
         <h2 className="text-2xl font-bold text-foreground mb-2">Document Sent!</h2>
         <p className="text-sm text-muted-foreground mb-6">Secure signing links are on their way — by email, and by SMS where a phone number was provided. In sequential order each signer is invited automatically when the previous one finishes. You'll be notified when each party signs.</p>
         <div className="flex gap-3 justify-center">
-          <button onClick={() => { setStage("setup"); setFile(null); setSigners([{ name: "", email: "", role: "Signer" }]); setDocMeta(null); setMessage(""); }}
+          <button onClick={() => { setStage("setup"); setFile(null); setSigners([{ uid: newRowUid(), name: "", email: "", role: "Signer" }]); setDocMeta(null); setMessage(""); }}
             className="px-4 py-2 border border-border rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
             Upload Another
           </button>
@@ -856,15 +870,31 @@ function Upload({ setActive, adminId, onUploaded }) {
                 {signers.filter(s => s.email.trim()).length} added
               </span>
             </div>
+            {order === "sequential" && signers.length > 1 && (
+              <p className="text-[11px] text-muted-foreground mb-3 -mt-1">
+                Signing runs top to bottom — drag a signatory, or use the arrows, to change who goes first.
+              </p>
+            )}
             {signers.map((s, i) => {
               const invalid = s.email.trim() && !isEmail(s.email);
               return (
-              <div key={i} className="mb-3 pb-3 border-b border-border last:border-0 last:pb-0">
+              <div key={s.uid} {...drag.rowProps(i)}
+                className={`mb-3 pb-3 border-b border-border last:border-0 last:pb-0 transition-all ${drag.rowClass(i)}`}>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: signerColor(i) }} />
-                    Signatory {i+1}
-                  </label>
+                  <div className="flex items-center gap-1.5">
+                    {signers.length > 1 && (
+                      <ReorderHandle {...drag.handleProps(i, signers.length, "signatory")} />
+                    )}
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: signerColor(i) }} />
+                      Signatory {i+1}
+                      {order === "sequential" && signers.length > 1 && (
+                        <span className="text-[10px] font-medium text-muted-foreground/70 bg-muted rounded-full px-1.5 py-0.5">
+                          signs {ordinal(i + 1)}
+                        </span>
+                      )}
+                    </label>
+                  </div>
                   {signers.length > 1 && (
                     <button onClick={() => setSigners(p => p.filter((_, j) => j !== i))}
                       className="text-xs text-red-500 hover:text-red-600">Remove</button>
@@ -886,7 +916,7 @@ function Upload({ setActive, adminId, onUploaded }) {
                 </select>
               </div>
             );})}
-            <button onClick={() => setSigners(p => [...p, { name: "", email: "", role: "Signer" }])}
+            <button onClick={() => setSigners(p => [...p, { uid: newRowUid(), name: "", email: "", role: "Signer" }])}
               className="text-xs text-primary font-medium hover:underline flex items-center gap-1">
               <Icon name="Plus" size={11} color="currentColor" /> Add Signatory
             </button>
@@ -1210,7 +1240,7 @@ export default function ESignaturePage() {
       }, 400);
     };
     const ch = supabase
-      .channel(`esign-live-${adminId}`)
+      .channel(`esign-live-${adminId}_${++_esignChannelSeq}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "esign_signers", filter: `admin_id=eq.${adminId}` }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "esign_documents", filter: `admin_id=eq.${adminId}` }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "esign_notifications", filter: `admin_id=eq.${adminId}` }, refresh)
@@ -1451,8 +1481,9 @@ export default function ESignaturePage() {
             let fq = supabase.from("esign_fields").select("*");
             fq = source === "esign_doc" ? fq.eq("esign_document_id", contractId) : fq.eq("contract_id", contractId).eq("source_type", source);
             const { data: allFields } = await fq;
+            const serial = await mintEsignSerial(source, contractId);
             const blob = await applyFieldsToPDF(selectedContract.file_url, allFields || [], {
-              documentName: docName, hash,
+              documentName: docName, hash, serial,
               signers: (sibs || []).map(s => ({ name: s.name || s.email, role: s.role, signedAt: s.signed_at ? fmtDateTime(s.signed_at) : null, ip: s.ip })),
             });
             const bucket = source === "esign_doc" ? "esign-documents" : "contracts";
@@ -1493,17 +1524,18 @@ export default function ESignaturePage() {
       if (isPdfUrl(selectedContract.file_url)) {
         try {
           let blob;
+          const serial = await mintEsignSerial(source, contractId);
           if (fieldValues && signFields.length) {
             const valMap = Object.fromEntries(fieldValues.map(v => [v.id, v.value]));
             blob = await applyFieldsToPDF(selectedContract.file_url, signFields.map(f => ({ ...f, value: valMap[f.id] })), {
-              documentName: docName, hash,
+              documentName: docName, hash, serial,
               signers: [{ name: actor, role: "Authorized Officer", signedAt: fmtDateTime(signedAt), ip: otpData.ip, device: otpData.device }],
             });
           } else {
             blob = await applySignatureToPDF(selectedContract.file_url, {
               signatureType: signature.type, signatureData: signature.data, font: signature.font,
               signerName: actor, role: "Authorized Officer", documentName: docName,
-              signedAt: fmtDateTime(signedAt), hash, ip: otpData.ip, device: otpData.device,
+              signedAt: fmtDateTime(signedAt), hash, serial, ip: otpData.ip, device: otpData.device,
             });
           }
           const bucket = source === "esign_doc" ? "esign-documents" : "contracts";
@@ -1562,6 +1594,7 @@ export default function ESignaturePage() {
     { id: "upload",    icon: "Upload",          label: "New Document" },
     { id: "templates", icon: "Copy",            label: "Templates" },
     { id: "audit",     icon: "Search",          label: "Audit Trail" },
+    { id: "signnow",   icon: "BadgeCheck",      label: "SignNow" },
     { id: "api",       icon: "Code",            label: "API & Embed" },
   ];
 
@@ -1619,6 +1652,7 @@ export default function ESignaturePage() {
         {/* Tab content */}
         <div>
           {active === "dashboard" && <Dashboard docs={docs} setActive={setActive} setSelectedDoc={(d) => { setSelectedDoc(d); setActive("documents"); }} />}
+          {active === "signnow" && <SignNowTab docs={docs} />}
           {active === "documents" && <Documents docs={docs} setDocs={setLocalDocs} setActive={setActive} adminId={adminId} />}
           {active === "sign" && (
             <>

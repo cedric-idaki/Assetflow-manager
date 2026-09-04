@@ -685,6 +685,33 @@ const uploadContract = useCallback(async (formData, file, onProgress) => {
     // otherwise keep pushing refetches into the new one.
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Action: the tenant's client self-registration switch ─────────────────────
+  // Direct clients register at /user-registration-screen against this company's
+  // signup_code (20260830220000). Two controls, and they are not the same thing:
+  //
+  //   • setSelfSignupEnabled — opens or closes the door. Closing it stops abuse
+  //     AND stops every legitimate registration, so it is a shutdown, not a fix.
+  //   • rotateSignupCode — mints a new code and kills the old one in one
+  //     statement. This is the remedy when a code has been forwarded somewhere
+  //     it should not have been, because the door stays open.
+  // Both go through RPCs rather than an UPDATE on company_profiles. That table
+  // is policed by a migration this repo does not hold, and an UPDATE that RLS
+  // declines matches zero rows and returns NO ERROR -- the switch would look
+  // like it worked and would not have. The RPCs raise instead, and scope
+  // themselves to current_admin_id() so neither can touch another tenant.
+  const setSelfSignupEnabled = useCallback(async (enabled) => {
+    const { error } = await supabase.rpc('set_self_signup', { p_enabled: Boolean(enabled) });
+    if (error) throw error;
+    await fetchCompanyProfile();
+  }, [fetchCompanyProfile]);
+
+  const rotateSignupCode = useCallback(async () => {
+    const { data, error } = await supabase.rpc('rotate_signup_code');
+    if (error) throw error;
+    await fetchCompanyProfile();
+    return data;
+  }, [fetchCompanyProfile]);
+
   // ── Return ───────────────────────────────────────────────────────────────────
   return {
     stats, clients, assets, agents, staff, contracts,
@@ -693,6 +720,7 @@ const uploadContract = useCallback(async (formData, file, onProgress) => {
     refetch: fetchAll,
     createSalesAgent, createAgent,
     inviteClient, inviteStaff, toggleStaffActive, uploadContract,
+    setSelfSignupEnabled, rotateSignupCode,
     exportCSV,
   };
 };

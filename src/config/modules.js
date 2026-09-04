@@ -102,6 +102,16 @@ export const MODULES = [
     requires: [], routes: ['/finance-hub'],
     desc: 'Books that stay balanced without a month-end scramble.',
   },
+  {
+    // NOT in any preset, deliberately — see migration 20260902160000. Filing
+    // tax documents on a tenant's behalf is not a default anyone should acquire
+    // by ticking a box they did not read: a business chooses this because KRA
+    // requires it of them, and it does nothing at all until a device is
+    // registered under Compliance → eTIMS.
+    key: 'etims', label: 'KRA eTIMS', icon: 'Receipt', scope: 'all',
+    requires: [], routes: [],
+    desc: 'File every invoice with KRA and print the compliant tax receipt.',
+  },
 
   // ── Sacco / chama ──────────────────────────────────────────────────────────
   {
@@ -130,6 +140,15 @@ export const MODULES = [
     desc: 'Run AGM and committee votes members can trust.',
   },
   {
+    // Gated on the DOCUMENTS table only, never on sacco_fixed_assets itself —
+    // that table is also the depreciation job's input, so gating it would mean
+    // freezing the register broke the period-end close in `accounting`. See
+    // 20260830200000_sacco_asset_register.sql §7.
+    key: 'fixed_assets', label: 'Asset Register', icon: 'Package', scope: 'sacco',
+    requires: [], routes: [],
+    desc: 'Everything the society owns, what it is worth, and the paperwork for it.',
+  },
+  {
     key: 'welfare', label: 'Welfare Fund', icon: 'HeartHandshake', scope: 'chama',
     requires: ['members'], routes: [],
     desc: 'Contributions and claims register for a welfare group.',
@@ -151,7 +170,7 @@ export const MODULES = [
  */
 export const PRESETS = {
   company: ['clients', 'assets', 'pos', 'hire_purchase', 'payments', 'mpesa', 'kyc', 'esign', 'contracts', 'crm', 'reports'],
-  sacco:   ['members', 'clients', 'contributions', 'loans', 'shares', 'voting', 'payments', 'mpesa', 'accounting', 'esign', 'reports'],
+  sacco:   ['members', 'clients', 'contributions', 'loans', 'shares', 'voting', 'payments', 'mpesa', 'accounting', 'esign', 'reports', 'fixed_assets'],
   chama:   ['members', 'clients', 'contributions', 'mgr', 'welfare', 'payments', 'mpesa', 'reports'],
   custom:  ['clients', 'payments'],
 };

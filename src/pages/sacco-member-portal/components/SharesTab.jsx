@@ -11,7 +11,12 @@ import {
 import {
   KESshort, pct, int, num, gainTone, gainSign, remaining, withDefaults,
   marketIsOpen, memberPosition, TXN_LABELS, printCertificate,
+  memberWithholding, reasonLabel, outstanding, onMarket,
 } from '../../sacco-dashboard/components/shares/_util';
+import { formatSerial } from '../../../utils/certificateSerial';
+import {
+  buildShareTransactionReceipt, buildDividendStatement, downloadAccountingDocument,
+} from '../../../utils/accountingDocument';
 
 const SUB_TABS = [
   { id: 'portfolio', label: 'Portfolio',    icon: 'PieChart' },
@@ -36,8 +41,9 @@ const SharesTab = ({ ctx }) => {
     me, sacco, shares, sharePrices = [], currentMarketValue = 0,
     saccoTotals = { totalShares: 0 }, listings = [], transfers = [], members = [],
     shareSettings, shareTxns = [], certificates = [], dividends = [],
-    dividendAllocations = [], treasury,
+    dividendAllocations = [], treasury, myWithholdings = [],
     createListing, cancelListing, updateListing, buyListing, transferShares, exportCSV,
+    ensureCertificateSerial,
   } = ctx;
   const toast = useToast();
   const s = withDefaults(shareSettings);
@@ -55,6 +61,34 @@ const SharesTab = ({ ctx }) => {
   const setO = (k, v) => setOrderForm((p) => ({ ...p, [k]: v }));
   const setX = (k, v) => setXferForm((p) => ({ ...p, [k]: v }));
 
+  // ── Supporting documents ────────────────────────────────────────────────────
+  // Share movements and dividends are accounting transactions like any other,
+  // and until now the member could take neither off the screen: the history was
+  // exportable only as a CSV of the whole account. Both builders decide receipt
+  // vs advice from the row's own state, so nothing here can hand out proof of a
+  // payment that has not happened.
+  const [docBusy, setDocBusy] = useState(null);
+
+  const withDoc = async (key, build) => {
+    setDocBusy(key);
+    try {
+      const filename = await downloadAccountingDocument(build());
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the document');
+    } finally {
+      setDocBusy(null);
+    }
+  };
+
+  const downloadTxn = (t) => withDoc(t.id, () => buildShareTransactionReceipt({
+    txn: t, member: me, sacco,
+  }));
+
+  const downloadDividend = (a) => withDoc(a.id, () => buildDividendStatement({
+    allocation: a, declaration: a.declaration, member: me, sacco,
+  }));
+
   // ── My position ───────────────────────────────────────────────────────────
   const treasuryPool = int(treasury?.treasury_shares);
   const totalIssued = saccoTotals.totalShares + treasuryPool;
@@ -62,6 +96,10 @@ const SharesTab = ({ ctx }) => {
   const price = currentMarketValue > 0 ? currentMarketValue : par;
   const pos = memberPosition(shares, price, totalIssued || saccoTotals.totalShares);
   const open = marketIsOpen(shareSettings);
+  // Shares the society is holding back from me. Already excluded from pos.free
+  // by memberPosition — this is so the member can see WHY, rather than finding
+  // out when a sell is refused.
+  const withheld = memberWithholding(myWithholdings, me?.id);
   const asOf = sharePrices[0]?.effective_date;
 
   const priceSeries = useMemo(() => [...sharePrices].reverse().map((p) => ({
@@ -110,7 +148,8 @@ const SharesTab = ({ ctx }) => {
     const qty = int(orderForm.shares);
     if (qty <= 0) { toast.error('Enter how many shares.'); return; }
     if (orderForm.side === 'sell' && qty > pos.free) {
-      toast.error(`You have ${pos.free.toLocaleString()} shares free (${pos.locked.toLocaleString()} are already listed).`);
+      toast.error(`You have ${pos.free.toLocaleString()} shares free`
+        + ` (${pos.locked.toLocaleString()} listed, ${pos.withheld.toLocaleString()} withheld by the society).`);
       return;
     }
     if (s.price_floor_is_par && num(orderForm.price_per_share) < num(s.par_value)) {
@@ -160,7 +199,11 @@ const SharesTab = ({ ctx }) => {
   const submitTransfer = async () => {
     const qty = int(xferForm.shares);
     if (!xferForm.to_member) { toast.error('Choose who receives the shares.'); return; }
-    if (qty <= 0 || qty > pos.free) { toast.error(`You have ${pos.free.toLocaleString()} shares free to transfer.`); return; }
+    if (qty <= 0 || qty > pos.free) {
+      toast.error(`You have ${pos.free.toLocaleString()} shares free to transfer`
+        + (pos.withheld > 0 ? ` — ${pos.withheld.toLocaleString()} are withheld by the society.` : '.'));
+      return;
+    }
     setSaving(true);
     try {
       await transferShares(xferForm);
@@ -170,8 +213,17 @@ const SharesTab = ({ ctx }) => {
     } catch (e) { toast.error(e.message || 'The transfer was refused.'); } finally { setSaving(false); }
   };
 
-  const download = (c) => {
-    const ok = printCertificate(c, {
+  // The serial is what makes a downloaded certificate checkable by whoever the
+  // member shows it to, so mint one first if this certificate predates them.
+  const download = async (c) => {
+    let cert = c;
+    if (!cert.serial) {
+      try {
+        const serial = await ensureCertificateSerial(cert.id);
+        if (serial) cert = { ...cert, serial };
+      } catch (_) { /* print it anyway rather than deny the member their paper */ }
+    }
+    const ok = printCertificate(cert, {
       saccoName: sacco?.name, memberName: me?.full_name, memberNo: me?.member_no, marketValue: currentMarketValue,
     });
     if (!ok) toast.error('Allow pop-ups to download your certificate.');
@@ -231,12 +283,45 @@ const SharesTab = ({ ctx }) => {
             </div>
           )}
 
+          {/* Withheld shares stay yours and keep earning dividends, but you
+              cannot sell or transfer them. Saying so here — with the reason and
+              the reference — is better than the member discovering it when a
+              sell order is refused. */}
+          {withheld.live.length > 0 && (
+            <div className="flex gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200">
+              <Icon name="Lock" size={18} color="#ca8a04" />
+              <div className="text-sm text-foreground min-w-0">
+                <p>
+                  <strong>{withheld.outstanding.toLocaleString()} of your shares
+                  {' '}({KES(withheld.outstanding * price)}) are being held by the society.</strong>
+                  {' '}They still earn dividends and count towards your ownership, but you cannot
+                  sell or transfer them until they are released.
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {withheld.live.map((w) => (
+                    <li key={w.id} className="text-xs text-muted-foreground">
+                      <span className="font-mono font-semibold text-foreground">{w.ref_no}</span>
+                      {' · '}{outstanding(w).toLocaleString()} share{outstanding(w) === 1 ? '' : 's'}
+                      {' · '}{reasonLabel(w.reason_type)}
+                      {w.reference ? ` (${w.reference})` : ''}
+                      {' · since '}{fmtDate(w.withheld_on)}
+                      {onMarket(w) > 0 && ` — ${onMarket(w).toLocaleString()} offered for sale by the society`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card title="Your position" className="lg:col-span-1">
               <dl className="space-y-2 text-sm">
                 <Row k="Shares held" v={pos.held.toLocaleString()} />
                 <Row k="Free to trade" v={pos.free.toLocaleString()} />
                 <Row k="Reserved in orders" v={pos.locked.toLocaleString()} />
+                {withheld.outstanding > 0 && (
+                  <Row k="Withheld by the society" v={withheld.outstanding.toLocaleString()} tone="text-amber-600" />
+                )}
                 <Row k="Market price" v={price > 0 ? KES(price) : '—'} />
                 <Row k="Total value" v={KES(pos.value)} bold />
                 <div className="pt-2 border-t border-border" />
@@ -250,6 +335,7 @@ const SharesTab = ({ ctx }) => {
                 <Row k="Ownership" v={pct(pos.ownership, 3)} />
                 <Row k="Voting rights" v={num(s.votes_per_share) > 0 ? `${votes.toLocaleString()} vote${votes === 1 ? '' : 's'}` : 'One member, one vote'} />
                 <Row k="Certificate" v={activeCert?.certificate_no || 'None yet'} />
+                {activeCert?.serial && <Row k="Serial" v={formatSerial(activeCert.serial)} />}
               </dl>
               <div className="flex flex-wrap gap-2 mt-4">
                 <PrimaryButton icon="ShoppingCart" onClick={() => setTab('market')}>Buy shares</PrimaryButton>
@@ -451,7 +537,7 @@ const SharesTab = ({ ctx }) => {
               <EmptyState icon="Coins" title="No dividends yet"
                 hint="When your SACCO declares and calculates a dividend, your share of it appears here." />
             ) : (
-              <Table columns={['Period', 'Record date', 'Shares', 'Gross', 'Tax', 'Net', 'Status']}>
+              <Table columns={['Period', 'Record date', 'Shares', 'Gross', 'Tax', 'Net', 'Status', '']}>
                 {myAllocations.map((a) => (
                   <tr key={a.id} className="border-b border-border/60">
                     <td className="py-2.5 pr-4 font-medium text-foreground">{a.declaration?.period_label || '—'}</td>
@@ -461,6 +547,19 @@ const SharesTab = ({ ctx }) => {
                     <td className="py-2.5 pr-4 text-muted-foreground">{num(a.tax_amount) > 0 ? KES(a.tax_amount) : '—'}</td>
                     <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(a.net_amount)}</td>
                     <td className="py-2.5 pr-4"><Badge status={a.status} /></td>
+                    <td className="py-2.5 pr-0 text-right">
+                      <button
+                        onClick={() => downloadDividend(a)}
+                        disabled={docBusy === a.id}
+                        title={a.status === 'paid'
+                          ? `Download the payment advice for ${a.declaration?.period_label || 'this dividend'}`
+                          : `Download the entitlement advice for ${a.declaration?.period_label || 'this dividend'}`}
+                        className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                      >
+                        <Icon name={docBusy === a.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                          className={docBusy === a.id ? 'animate-spin' : ''} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </Table>
@@ -472,15 +571,20 @@ const SharesTab = ({ ctx }) => {
       {/* ── Certificates ── */}
       {tab === 'certs' && (
         <Card title="My share certificates"
-          subtitle="Reissued automatically whenever your holding changes — download any of them">
+          subtitle="Reissued automatically whenever your holding changes. Each carries a serial anyone can check against the register to confirm it is genuine.">
           {certificates.length === 0 ? (
             <EmptyState icon="Award" title="No certificates yet"
               hint="Your first certificate is generated the moment you acquire shares." />
           ) : (
-            <Table columns={['Certificate no.', 'Shares', 'Par value', 'Value today', 'Issued', 'Status', '']}>
+            <Table columns={['Serial', 'Certificate no.', 'Shares', 'Par value', 'Value today', 'Issued', 'Status', '']}>
               {certificates.map((c) => (
                 <tr key={c.id} className="border-b border-border/60">
-                  <td className="py-2.5 pr-4 font-mono text-xs text-foreground">{c.certificate_no}</td>
+                  <td className="py-2.5 pr-4 font-mono text-xs text-foreground whitespace-nowrap">
+                    {c.serial
+                      ? formatSerial(c.serial)
+                      : <span className="text-muted-foreground italic font-sans">on download</span>}
+                  </td>
+                  <td className="py-2.5 pr-4 font-mono text-xs text-muted-foreground">{c.certificate_no}</td>
                   <td className="py-2.5 pr-4 text-foreground">{int(c.shares).toLocaleString()}</td>
                   <td className="py-2.5 pr-4 text-muted-foreground">{KES(c.par_value)}</td>
                   <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(int(c.shares) * (price || num(c.par_value)))}</td>
@@ -510,7 +614,7 @@ const SharesTab = ({ ctx }) => {
             <EmptyState icon="History" title="Nothing yet"
               hint="Your share movements will be listed here from your first purchase onwards." />
           ) : (
-            <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance']}>
+            <Table columns={['Date', 'Ref', 'Movement', 'Shares', 'Price', 'Amount', 'Balance', '']}>
               {shareTxns.map((t) => (
                 <tr key={t.id} className="border-b border-border/60">
                   <td className="py-2.5 pr-4 text-muted-foreground whitespace-nowrap">{fmtDate(t.created_at)}</td>
@@ -522,6 +626,17 @@ const SharesTab = ({ ctx }) => {
                   <td className="py-2.5 pr-4 text-muted-foreground">{num(t.price_per_share) > 0 ? KES(t.price_per_share) : '—'}</td>
                   <td className="py-2.5 pr-4 text-foreground">{num(t.amount) > 0 ? KES(t.amount) : '—'}</td>
                   <td className="py-2.5 pr-4 text-foreground">{int(t.balance_after).toLocaleString()}</td>
+                  <td className="py-2.5 pr-0 text-right">
+                    <button
+                      onClick={() => downloadTxn(t)}
+                      disabled={docBusy === t.id}
+                      title={`Download the document for ${t.txn_no || 'this movement'}`}
+                      className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                    >
+                      <Icon name={docBusy === t.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                        className={docBusy === t.id ? 'animate-spin' : ''} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </Table>

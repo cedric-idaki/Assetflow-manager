@@ -1,5 +1,6 @@
 import React from 'react';
 import Icon from '../../../components/AppIcon';
+import { leadValue, formatCompactMoney } from '../../../utils/pipelineValue';
 
 const getPriorityStyle = (priority) => {
   switch (priority) {
@@ -13,6 +14,12 @@ const getPriorityStyle = (priority) => {
 const LeadPipelineCard = ({ lead, onDragStart, onLeadClick }) => {
   const initials = lead?.full_name
     ?.split(' ')?.map((n) => n?.[0])?.join('')?.toUpperCase()?.slice(0, 2) || '??';
+
+  // What this card is worth. `source` decides how it reads: a stated value is
+  // the agent's own figure and gets the bold treatment, an estimate read out of
+  // the budget note is greyed and labelled, and a deal with neither says so
+  // instead of showing a confident zero.
+  const { value: dealValue, source: valueSource } = leadValue(lead);
 
   return (
     <div
@@ -40,10 +47,29 @@ const LeadPipelineCard = ({ lead, onDragStart, onLeadClick }) => {
           <span className="text-xs text-muted-foreground truncate">{lead?.asset_interest}</span>
         </div>
       )}
-      {lead?.budget_range && (
+      <div className="flex items-center gap-1.5 mb-1">
+        <Icon name="DollarSign" size={11} color="var(--color-muted-foreground)" />
+        {valueSource === 'stated' ? (
+          <span className="text-xs font-semibold text-foreground">{formatCompactMoney(dealValue)}</span>
+        ) : valueSource === 'estimated' ? (
+          <span className="text-xs text-muted-foreground" title={`Estimated from the budget note: "${lead?.budget_range}"`}>
+            ~{formatCompactMoney(dealValue)}
+          </span>
+        ) : (
+          <span className="text-xs text-amber-600 font-medium">No value set</span>
+        )}
+      </div>
+
+      {/* When the agent expects it to land. Only shown once it has been said —
+          an undated deal is not late, it is just undated. */}
+      {lead?.expected_close_date && (
         <div className="flex items-center gap-1.5 mb-1">
-          <Icon name="DollarSign" size={11} color="var(--color-muted-foreground)" />
-          <span className="text-xs text-muted-foreground">{lead?.budget_range}</span>
+          <Icon name="CalendarCheck" size={11} color="var(--color-muted-foreground)" />
+          <span className="text-xs text-muted-foreground">
+            Closes {new Date(`${lead.expected_close_date}T00:00:00`).toLocaleDateString('en-GB', {
+              day: 'numeric', month: 'short',
+            })}
+          </span>
         </div>
       )}
       {/* Next open follow-up — kept current by the leads_sync_next_follow_up

@@ -1,16 +1,32 @@
-import React, { useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import { useToast } from '../../../components/Toast';
+import Icon from '../../../components/AppIcon';
+import { supabase } from '../../../lib/supabase';
+import { fetchAllRows } from '../../../lib/fetchAllRows';
 import { generateSchedule, AMORTIZATION_METHODS } from '../../../utils/saccoAmortization';
+import Pagination from '../../../components/ui/Pagination';
+import { usePagedQuery } from '../../../hooks/usePagedQuery';
+import { buildLoanRepaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
+import GuaranteePolicyCard from './GuaranteePolicyCard';
+import GuaranteeRegisterCard from './GuaranteeRegisterCard';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
   TextInput, NumberInput, Select, EmptyState, KES, fmtDate,
 } from './_shared';
 
+/** Rows per page in the loans table. */
+const PAGE_SIZE = 25;
+
+// Mirrors the shape the context fetched, so a row from either source renders
+// identically — the tab reads l.member?.full_name and l.product?.name.
+const LOAN_COLUMNS =
+  '*, member:sacco_members(id, full_name, member_no), product:sacco_loan_products(name)';
+
 const methodLabel = (id) => AMORTIZATION_METHODS.find((m) => m.id === id)?.label || id;
 
 // Renders an amortization schedule table with overdue (red) / upcoming (amber)
 // highlighting per BRS AM1.5. Works for both a live preview and a saved loan.
-const ScheduleTable = ({ rows, onPay }) => {
+const ScheduleTable = ({ rows, onPay, onReceipt, receipting }) => {
   const today = new Date().toISOString().slice(0, 10);
   return (
     <Table columns={['#', 'Due', 'Opening', 'Interest', 'Principal', 'Payment', 'Closing', onPay ? 'Status' : '']}>
@@ -31,8 +47,23 @@ const ScheduleTable = ({ rows, onPay }) => {
             <td className="py-2 pr-4 text-foreground">{KES(r.closing_balance ?? r.closingBalance)}</td>
             {onPay && (
               <td className="py-2 pr-0">
-                {paid ? <Badge status="paid" />
-                  : <button onClick={() => onPay(r)} className="text-xs text-primary font-semibold hover:underline">Mark paid</button>}
+                <div className="flex items-center gap-2">
+                  {paid ? <Badge status="paid" />
+                    : <button onClick={() => onPay(r)} className="text-xs text-primary font-semibold hover:underline">Mark paid</button>}
+                  {onReceipt && (
+                    <button
+                      onClick={() => onReceipt(r)}
+                      disabled={receipting === r.id}
+                      title={paid ? `Download the receipt for installment ${r.period_no || r.periodNo}`
+                                  : `Download the notice for installment ${r.period_no || r.periodNo}`}
+                      aria-label={`Download installment ${r.period_no || r.periodNo}`}
+                      className="text-muted-foreground hover:text-foreground disabled:opacity-60"
+                    >
+                      <Icon name={receipting === r.id ? 'Loader' : 'Download'} size={13} color="currentColor"
+                        className={receipting === r.id ? 'animate-spin' : ''} />
+                    </button>
+                  )}
+                </div>
               </td>
             )}
           </tr>
@@ -44,10 +75,26 @@ const ScheduleTable = ({ rows, onPay }) => {
 
 const LoansTab = ({ ctx }) => {
   const {
-    loans, loanProducts, members, schedules,
+    sacco, loanProducts, members, stats,
     createLoan, createLoanProduct, approveLoan, rejectLoan, recordRepayment, exportCSV,
   } = ctx;
   const toast = useToast();
+  const [receipting, setReceipting] = useState(null);
+
+  /**
+   * The loans table is its own paged read rather than a slice of the context
+   * array. sacco_loans is a ledger — it grows for the life of the sacco and is
+   * never used as a lookup — so the page comes from Postgres and the figures
+   * above it come from the stats aggregate, not from reducing what happens to
+   * be loaded.
+   */
+  const loanPage = usePagedQuery({
+    table: 'sacco_loans',
+    columns: LOAN_COLUMNS,
+    order: { column: 'created_at', ascending: false },
+    pageSize: PAGE_SIZE,
+  });
+  const loans = loanPage.rows;
 
   const [loanOpen, setLoanOpen] = useState(false);
   const [prodOpen, setProdOpen] = useState(false);
@@ -90,6 +137,7 @@ const LoansTab = ({ ctx }) => {
     setSaving(true);
     try {
       await createLoan(loanForm);
+      loanPage.refresh();
       toast.success('Loan application created (pending approval).');
       setLoanOpen(false);
       setLoanForm((f) => ({ ...f, principal: '', purpose: '', balloon_amount: '' }));
@@ -110,27 +158,99 @@ const LoansTab = ({ ctx }) => {
   };
 
   const doApprove = async (loan) => {
-    try { await approveLoan(loan); toast.success('Loan approved — amortization schedule generated.'); }
-    catch (e) { toast.error(e.message || 'Approval failed.'); }
+    try {
+      await approveLoan(loan);
+      loanPage.refresh();
+      toast.success('Loan approved — amortization schedule generated.');
+    } catch (e) { toast.error(e.message || 'Approval failed.'); }
   };
   const doReject = async (loan) => {
-    try { await rejectLoan(loan.id); toast.success('Loan rejected.'); }
+    try { await rejectLoan(loan.id); loanPage.refresh(); toast.success('Loan rejected.'); }
     catch (e) { toast.error(e.message || 'Could not reject.'); }
   };
   const doPay = async (row) => {
-    try { await recordRepayment(row); toast.success('Repayment recorded.'); }
+    try { await recordRepayment(row); await loadSchedule(scheduleLoan?.id); toast.success('Repayment recorded.'); }
     catch (e) { toast.error(e.message || 'Could not record repayment.'); }
   };
 
-  const loanSchedule = scheduleLoan ? schedules.filter((s) => s.loan_id === scheduleLoan.id).sort((a, b) => a.period_no - b.period_no) : [];
-  const outstanding = loans.filter((l) => l.status === 'active').reduce((s, l) => s + parseFloat(l.principal || 0), 0);
+  /**
+   * A borrower's proof that an installment was paid — with the interest and
+   * principal split out, which is the only thing that explains why a payment
+   * moved the balance as little as it did.
+   */
+  const doReceipt = async (row) => {
+    setReceipting(row.id);
+    try {
+      const filename = await downloadAccountingDocument(buildLoanRepaymentReceipt({
+        installment: row,
+        loan: scheduleLoan,
+        sacco,
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the receipt');
+    } finally {
+      setReceipting(null);
+    }
+  };
+
+  /**
+   * One loan's schedule, read on demand.
+   *
+   * This used to filter the context's `schedules` array, which is capped: a
+   * loan whose periods fell outside the newest rows opened an EMPTY schedule
+   * modal — indistinguishable from a loan that has none. Fetching by loan_id
+   * is both correct and cheaper than holding every sacco's periods in memory.
+   */
+  const [loanSchedule, setLoanSchedule] = useState([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+
+  const loadSchedule = useCallback(async (loanId) => {
+    if (!loanId) { setLoanSchedule([]); return; }
+    setScheduleLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('sacco_loan_schedule')
+        .select('*')
+        .eq('loan_id', loanId)
+        .order('period_no', { ascending: true });
+      if (error) throw error;
+      setLoanSchedule(data || []);
+    } catch (e) {
+      setLoanSchedule([]);
+      toast.error(e.message || 'Could not load the schedule.');
+    } finally { setScheduleLoading(false); }
+  }, [toast]);
+
+  useEffect(() => { loadSchedule(scheduleLoan?.id); }, [scheduleLoan?.id, loadSchedule]);
+
+  // Whole-book figures from the aggregate, never a reduction over one page.
+  const outstanding = stats?.activeLoanPrincipal ?? 0;
+
+  /**
+   * Exports every loan, not the page on screen. A CSV named sacco_loans.csv
+   * holding 25 of 1,200 rows is worse than no export at all — it looks whole.
+   */
+  const [exporting, setExporting] = useState(false);
+  const exportLoans = async () => {
+    setExporting(true);
+    try {
+      const all = await fetchAllRows(() => supabase
+        .from('sacco_loans')
+        .select(LOAN_COLUMNS)
+        .order('created_at', { ascending: false }));
+      exportCSV(all, 'sacco_loans');
+    } catch (e) {
+      toast.error(e.message || 'Could not build the export.');
+    } finally { setExporting(false); }
+  };
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard label="Active loans" value={loans.filter((l) => l.status === 'active').length} icon="Banknote" tone="warning" />
+        <StatCard label="Active loans" value={stats?.activeLoans ?? 0} icon="Banknote" tone="warning" />
         <StatCard label="Disbursed principal" value={KES(outstanding)} icon="TrendingUp" />
-        <StatCard label="Pending applications" value={loans.filter((l) => l.status === 'pending').length} icon="Clock" tone="muted" />
+        <StatCard label="Pending applications" value={stats?.pendingLoans ?? 0} icon="Clock" tone="muted" />
       </div>
 
       {/* Loan products */}
@@ -156,19 +276,30 @@ const LoansTab = ({ ctx }) => {
         )}
       </Card>
 
+      {/* Guarantee policy — the exposure cap members are held to */}
+      <GuaranteePolicyCard ctx={ctx} />
+
+      {/* The guarantees themselves, and getting each one executed */}
+      <GuaranteeRegisterCard ctx={ctx} />
+
       {/* Loans */}
       <Card
-        title="Loans" subtitle={`${loans.length} total`}
+        title="Loans" subtitle={`${(stats?.totalLoans ?? 0).toLocaleString('en-KE')} total`}
         actions={
           <div className="flex items-center gap-2">
-            <GhostButton icon="Download" onClick={() => exportCSV(loans, 'sacco_loans')}>Export</GhostButton>
+            <GhostButton icon="Download" onClick={exportLoans} disabled={exporting}>
+              {exporting ? 'Preparing…' : 'Export'}
+            </GhostButton>
             <PrimaryButton icon="Plus" onClick={() => setLoanOpen(true)}>New loan</PrimaryButton>
           </div>
         }
       >
-        {loans.length === 0 ? (
+        {loanPage.error ? (
+          <EmptyState icon="AlertTriangle" title="Could not load loans" hint={loanPage.error} />
+        ) : loans.length === 0 ? (
           <EmptyState icon="Banknote" title="No loans yet" hint="Create a loan application; approving it generates the full amortization schedule." />
         ) : (
+          <>
           <Table columns={['Borrower', 'Principal', 'Method', 'Rate', 'Term', 'Status', '']}>
             {loans.map((l) => (
               <tr key={l.id} className="border-b border-border/60">
@@ -192,6 +323,17 @@ const LoansTab = ({ ctx }) => {
               </tr>
             ))}
           </Table>
+          <Pagination
+            page={loanPage.page}
+            pageCount={loanPage.pageCount}
+            from={loanPage.from}
+            to={loanPage.to}
+            total={loanPage.total}
+            onPageChange={loanPage.setPage}
+            loading={loanPage.loading}
+            noun="loans"
+          />
+          </>
         )}
       </Card>
 
@@ -258,9 +400,13 @@ const LoansTab = ({ ctx }) => {
       {/* Schedule viewer */}
       <Modal open={!!scheduleLoan} onClose={() => setScheduleLoan(null)} wide
         title={scheduleLoan ? `Schedule · ${scheduleLoan.member?.full_name || 'Loan'} · ${KES(scheduleLoan.principal)}` : ''}>
-        {loanSchedule.length === 0
-          ? <EmptyState icon="CalendarX" title="No schedule rows" hint="This loan has no generated schedule." />
-          : <ScheduleTable rows={loanSchedule} onPay={doPay} />}
+        {/* "Loading" and "none" must look different — they used to be the same
+            empty table, so a schedule outside the old cap read as "no schedule". */}
+        {scheduleLoading
+          ? <p className="text-sm text-muted-foreground py-6 text-center">Loading schedule…</p>
+          : loanSchedule.length === 0
+            ? <EmptyState icon="CalendarX" title="No schedule rows" hint="This loan has no generated schedule." />
+            : <ScheduleTable rows={loanSchedule} onPay={doPay} onReceipt={doReceipt} receipting={receipting} />}
       </Modal>
     </div>
   );

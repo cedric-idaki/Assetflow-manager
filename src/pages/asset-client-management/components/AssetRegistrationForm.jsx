@@ -4,6 +4,7 @@ import Button from '../../../components/ui/Button';
 import Input from '../../../components/ui/Input';
 import Select from '../../../components/ui/Select';
 import { supabase } from '../../../lib/supabase';
+import { vatRateOn } from '../../../config/taxRegulations';
 
 // Upload a single image to the public 'asset-images' Storage bucket using the
 // user's JWT. Returns the public URL, or null if Storage isn't available (caller
@@ -438,7 +439,10 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     minSellingPrice:        editData?.min_selling_price         || editData?.minSellingPrice         || '',
     maxDiscountPct:         editData?.max_discount_pct          || editData?.maxDiscountPct          || '10',
     vatApplicable:          editData?.vat_applicable            !== false,
-    vatRate:                editData?.vat_rate                  || '16',
+    // A new asset defaults to the rate in force today; one being edited keeps
+    // the rate it was registered with. `??` rather than `||` so an explicit 0 —
+    // a zero-rated asset — is not silently re-standard-rated on edit.
+    vatRate:                String(editData?.vat_rate ?? vatRateOn()),
     installmentPremiumPct:  editData?.installment_premium_pct   || editData?.installmentPremiumPct   || '0',
     installmentInterestRate: editData?.installment_interest_rate || editData?.installmentInterestRate || '12',
     minDepositPct:          editData?.min_deposit_pct           || editData?.minDepositPct           || '20',
@@ -592,7 +596,7 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
       min_selling_price:          pricing.minSellingPrice ? parseFloat(pricing.minSellingPrice) : null,
       max_discount_pct:           parseFloat(pricing.maxDiscountPct) || 10,
       vat_applicable:             pricing.vatApplicable,
-      vat_rate:                   parseFloat(pricing.vatRate) || 16,
+      vat_rate:                   Number.isFinite(parseFloat(pricing.vatRate)) ? parseFloat(pricing.vatRate) : vatRateOn(),
       installment_premium_pct:    parseFloat(pricing.installmentPremiumPct) || 0,
       installment_interest_rate:  parseFloat(pricing.installmentInterestRate) || 12,
       min_deposit_pct:            parseFloat(pricing.minDepositPct) || 20,

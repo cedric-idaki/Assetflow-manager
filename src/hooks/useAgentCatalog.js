@@ -21,6 +21,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { logger } from '../utils/logger';
 
+// Module-level counter — see realtime channel naming convention.
+let _agentCatalogChannelSeq = 0;
+
 // Sold and off-the-road items are not sendable; reserved ones are, because
 // deals fall through and an agent wants a second buyer lined up.
 const SHAREABLE_STATUSES = ['available', 'reserved'];
@@ -107,7 +110,7 @@ export const useAgentCatalog = (agentProfile, isCompanyAgent = false) => {
     if (!agentId) return undefined;
 
     const channel = supabase
-      .channel(`agent_share_links_${agentId}`)
+      .channel(`agent_share_links_${agentId}_${++_agentCatalogChannelSeq}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'asset_share_links', filter: `agent_id=eq.${agentId}` },

@@ -3,6 +3,9 @@ import { supabase } from '../lib/supabase';
 import { auditLogsService } from '../services/supabaseService';
 import { sendTicketOpened, sendTicketReply, sendTicketStatus } from '../services/emailService';
 
+// Module-level counter — see realtime channel naming convention.
+let _agentTicketsChannelSeq = 0;
+
 // Tickets are how a bronze agent and a gold agent talk inside the system. An
 // assist request carries one note and then goes quiet; a ticket keeps the whole
 // exchange — what was asked, what was answered, what was agreed — attached to
@@ -202,8 +205,9 @@ export const useAgentTickets = (agentProfile) => {
   // pool — RLS decides what actually arrives.
   useEffect(() => {
     if (!agentId) return;
+    const t = ++_agentTicketsChannelSeq;
 
-    const ticketsChannel = supabase.channel(`agent_tickets_${agentId}`);
+    const ticketsChannel = supabase.channel(`agent_tickets_${agentId}_${t}`);
     ticketsChannel
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'agent_tickets', filter: `assigned_agent_id=eq.${agentId}` },
@@ -221,7 +225,7 @@ export const useAgentTickets = (agentProfile) => {
     // Replies: unfiltered because a message carries no agent column to filter
     // on. RLS only delivers messages on tickets this agent can already read.
     const messagesChannel = supabase
-      .channel(`agent_ticket_messages_${agentId}`)
+      .channel(`agent_ticket_messages_${agentId}_${t}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'agent_ticket_messages' },
         (payload) => {
           const ticketId = payload?.new?.ticket_id;

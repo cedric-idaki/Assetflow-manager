@@ -1,14 +1,91 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { html } from '../../../utils/htmlEscape';
+import SigningStatusChip from '../../../components/signing/SigningStatusChip';
+import SendForSignatureModal from '../../../components/signing/SendForSignatureModal';
+import SigningRequestDrawer from '../../../components/signing/SigningRequestDrawer';
+import { signingStatusFor, loadSigningPolicies, openSignedCertificate } from '../../../utils/signnowClient';
+import { buildSettlementCertificatePdf } from '../../../utils/certificatePdf';
+import { isIssued } from '../../../utils/certificateSigning';
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 const fmt = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 
+/**
+ * The reference on this certificate used to be `SL-${Date.now().toString(36)}`,
+ * minted here in the browser and stored nowhere: a different number on every
+ * reprint of the same settlement, and not one of them could ever be looked up.
+ *
+ * It now comes from settlement_certificate_issue(), which mints ONE serial per
+ * plan — the same number however often the letter is reprinted, from either
+ * portal — records it in the platform certificate register, and refuses to mint
+ * at all unless the plan really is settled. Printing waits for it: a settlement
+ * certificate nobody can verify is the thing this replaced.
+ */
 const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose }) => {
-  const [letterRef] = useState(`SL-${Date.now().toString(36).toUpperCase()}`);
+  const [letterRef, setLetterRef] = useState(null);
+  const [serialErr, setSerialErr] = useState('');
+  const [minting,   setMinting]   = useState(true);
+
+  // Signing, where the tenant has turned it on for settlement certificates.
+  // A settled plan is often the only proof a buyer ever gets that the asset is
+  // theirs, so this is the document most worth an officer's signature.
+  const [signing,   setSigning]   = useState(null);
+  const [required,  setRequired]  = useState(false);
+  const [sendOpen,  setSendOpen]  = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const refreshSigning = useCallback(async () => {
+    if (!plan?.id) return;
+    try {
+      const map = await signingStatusFor('installment_plans', [plan.id]);
+      setSigning(map[plan.id] || null);
+    } catch (_) { /* a tenant that has never used signing has nothing here */ }
+  }, [plan?.id]);
+
+  useEffect(() => { refreshSigning(); }, [refreshSigning]);
+
+  useEffect(() => {
+    let live = true;
+    loadSigningPolicies()
+      .then((p) => { if (live) setRequired(!!p?.settlement_certificate?.require_signature); })
+      .catch(() => { /* no policy row is the normal case */ });
+    return () => { live = false; };
+  }, []);
+
+  /**
+   * The PDF the officers sign. It carries the same serial as the printed
+   * letter — settlement_certificate_issue() is idempotent per plan, so the
+   * signed document and any reprint quote the same number.
+   */
+  const buildDocument = async ({ serial, signers }) => buildSettlementCertificatePdf({
+    plan, client, asset, company: companyProfile, serial: serial || letterRef, signers, draft: true,
+  });
+
+  const openSigned = async () => {
+    const ok = await openSignedCertificate(signing?.signedPath);
+    if (!ok) window.alert('Allow pop-ups for this site to open the signed certificate.');
+  };
+
+  const mintSerial = useCallback(async () => {
+    if (!plan?.id) { setMinting(false); setSerialErr('This plan has no id to certify.'); return; }
+    setMinting(true); setSerialErr('');
+    try {
+      const { data, error } = await supabase.rpc('settlement_certificate_issue', { p_plan_id: plan.id });
+      if (error) throw error;
+      if (!data) throw new Error('The register returned no serial.');
+      setLetterRef(data);
+    } catch (e) {
+      setSerialErr(e.message || 'Could not reach the certificate register.');
+    } finally {
+      setMinting(false);
+    }
+  }, [plan?.id]);
+
+  useEffect(() => { mintSerial(); }, [mintSerial]);
 
   const handlePrint = () => {
+    if (!letterRef) return;
     const co = companyProfile || {};
     // `html` tagged template: every ${...} below is escaped, so a tenant-supplied
     // name or address cannot inject script into the print window (which shares
@@ -52,7 +129,8 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
           </div>
           <div style="text-align:right">
             <div style="font-size:11px; color:#555">Date: ${fmtDate(new Date().toISOString())}</div>
-            <div style="font-size:11px; color:#555">Ref: <strong>${letterRef}</strong></div>
+            <div style="font-size:11px; color:#555">Certificate Serial</div>
+            <div style="font-size:13px; font-family:'Courier New',monospace; font-weight:bold; letter-spacing:0.5px">${letterRef}</div>
           </div>
         </div>
 
@@ -144,7 +222,8 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
         </div>
 
         <div class="footer">
-          <p>This is an official document issued by ${co.company_name || 'Ararat'}. Letter Reference: ${letterRef}</p>
+          <p>This is an official document issued by ${co.company_name || 'Ararat'}.</p>
+          <p>Certificate Serial <strong>${letterRef}</strong> — verify it against the Ararat certificate register to confirm this document is genuine.</p>
           <p>Generated on ${fmtDate(new Date().toISOString())} | ${co.email || ''} | ${co.phone || ''}</p>
         </div>
       </body>
@@ -188,7 +267,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
               { label: 'Plan',            value: plan?.plan_name || '—' },
               { label: 'Total Settled',   value: fmt(plan?.total_amount) },
               { label: 'Installments',    value: `${plan?.total_installments} × ${fmt(plan?.installment_amount)}` },
-              { label: 'Letter Ref',      value: letterRef },
+              { label: 'Certificate Serial', value: letterRef || (minting ? 'Registering…' : '—') },
             ].map(({ label, value }) => (
               <div key={label} className="flex justify-between text-sm">
                 <span className="text-muted-foreground">{label}</span>
@@ -197,23 +276,112 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
             ))}
           </div>
 
-          <p className="text-xs text-muted-foreground">
-            Clicking <strong>Generate & Print</strong> will open a printable PDF-ready settlement letter confirming full ownership transfer to the client.
-          </p>
+          {required && (
+            <div className="flex items-start gap-3 p-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800">
+              <span className="text-lg leading-none">✍️</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-blue-800 dark:text-blue-300">
+                  This certificate has to be signed before it is issued.
+                </p>
+                <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">
+                  Anything printed before then is watermarked DRAFT — NOT YET ISSUED.
+                </p>
+              </div>
+              <SigningStatusChip request={signing} requireSignature={required} />
+            </div>
+          )}
+
+          {signing && !required && (
+            <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-border bg-muted/30">
+              <span className="text-xs text-muted-foreground">Signature</span>
+              <button onClick={() => setDrawerOpen(true)}>
+                <SigningStatusChip request={signing} requireSignature={required} />
+              </button>
+            </div>
+          )}
+
+          {serialErr ? (
+            <div className="flex items-start gap-3 p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-900/20 dark:border-red-800">
+              <span className="text-lg leading-none">⚠️</span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-red-700 dark:text-red-400">
+                  No serial could be issued for this settlement.
+                </p>
+                <p className="text-xs text-red-600 dark:text-red-500 mt-0.5 break-words">{serialErr}</p>
+                <button onClick={mintSerial}
+                  className="mt-2 text-xs font-semibold text-red-700 dark:text-red-400 hover:underline">
+                  Try again
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Clicking <strong>Generate &amp; Print</strong> will open a printable PDF-ready settlement letter
+              confirming full ownership transfer to the client. It carries certificate serial{' '}
+              <strong className="font-mono">{letterRef || '…'}</strong>, which anyone can check against the
+              register to confirm the document is genuine.
+            </p>
+          )}
         </div>
 
-        {/* Actions */}
+        {/* Actions
+            Which primary action is offered depends on where the document is:
+            an issued certificate opens the SIGNED file, an outstanding one
+            opens its trail, and only a plan whose certificate does not have to
+            be signed still prints straight away. */}
         <div className="flex gap-3 px-6 py-4 border-t border-border">
           <button onClick={onClose}
             className="flex-1 px-4 py-2 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
             Cancel
           </button>
-          <button onClick={handlePrint}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-            🖨️ Generate & Print
-          </button>
+
+          {isIssued(signing?.status) ? (
+            <button onClick={openSigned}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+              📄 Open signed certificate
+            </button>
+          ) : signing ? (
+            <button onClick={() => setDrawerOpen(true)}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+              ✍️ View signing request
+            </button>
+          ) : required ? (
+            <button onClick={() => setSendOpen(true)} disabled={!letterRef}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+              {minting ? 'Registering serial…' : '✍️ Send for signature'}
+            </button>
+          ) : (
+            <>
+              <button onClick={() => setSendOpen(true)} disabled={!letterRef}
+                className="px-4 py-2 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50 transition-colors">
+                ✍️ Send to sign
+              </button>
+              <button onClick={handlePrint} disabled={!letterRef}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                {minting ? 'Registering serial…' : '🖨️ Generate & Print'}
+              </button>
+            </>
+          )}
         </div>
       </div>
+
+      <SendForSignatureModal
+        open={sendOpen}
+        onClose={() => setSendOpen(false)}
+        onSent={refreshSigning}
+        docKind="settlement_certificate"
+        sourceTable="installment_plans"
+        sourceId={plan?.id}
+        documentName={`Certificate of Full Settlement — ${client?.full_name || plan?.plan_name || ''}`.trim()}
+        build={buildDocument}
+      />
+
+      <SigningRequestDrawer
+        open={drawerOpen}
+        requestId={signing?.requestId}
+        onClose={() => setDrawerOpen(false)}
+        onChanged={refreshSigning}
+      />
     </div>
   );
 };

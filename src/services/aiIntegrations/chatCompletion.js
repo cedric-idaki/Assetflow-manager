@@ -62,12 +62,20 @@ export async function getStreamingChatCompletion(
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    const reader = response?.body?.getReader();
+    // The one genuinely nullable receiver in this family: fetch resolves with a
+    // null `body` for a bodyless response, so getReader() is never reached and
+    // `reader` is undefined. `await reader?.read()` would then resolve undefined
+    // and throw on the destructure below — a TypeError blaming the wrong line
+    // instead of the missing stream. Fail here, where the cause is legible.
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Streaming response had no body.');
+    }
     const decoder = new TextDecoder();
     let buffer = '';
 
     while (true) {
-      const { done, value } = await reader?.read();
+      const { done, value } = await reader.read();
       if (done) break;
 
       buffer += decoder?.decode(value, { stream: true });

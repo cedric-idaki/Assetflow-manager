@@ -93,6 +93,7 @@ var Sidebar = function(props) {
     { label: 'POS / New Sale',   path: '/pos',                           icon: 'ShoppingCart',modules: ['pos'] },
     { label: 'E-Signature',       path: '/e-signature',                   icon: 'PenTool',     modules: ['esign'] },
     { label: 'Payments',         path: '/payment-collections-hub',       icon: 'CreditCard',  modules: ['payments'] },
+    { label: 'Finance Hub',      path: '/finance-hub',                   icon: 'Landmark',    modules: ['accounting'] },
     { label: 'KYC Management',   path: '/kyc-management-screen',         icon: 'ShieldCheck', modules: ['kyc'] },
     { label: 'Reports',          path: '/reports-analytics-center',      icon: 'BarChart3',   modules: ['reports'] },
     { label: 'HR Management',     path: '/hr-management',                 icon: 'Users',       modules: ['hr'] },
@@ -136,6 +137,13 @@ var Sidebar = function(props) {
   var saccoAdminItems = [
     { label: 'Dashboard',     path: '/sacco-dashboard', icon: 'LayoutDashboard', tab: 'overview' },
     { label: 'Shares',        path: '/sacco-dashboard', icon: 'PieChart',        tab: 'shares', modules: ['shares'] },
+    { label: 'Asset Register', path: '/sacco-dashboard', icon: 'Package',        tab: 'assets', modules: ['fixed_assets'] },
+    // Deliberately not module-gated: share certificates are the ones a society
+    // hands over and gets asked to vouch for, so the desk stays reachable even
+    // where the shares module is frozen. Company rails leave it out entirely —
+    // their staff can still verify a settlement or e-signature serial from a
+    // direct link.
+    { label: 'Verify Certificate', path: '/verify-certificate', icon: 'ShieldCheck', prefix: true },
     // Shared back-office modules (same pages as a company admin; data stays
     // tenant-isolated). Sales agents are created under Staff & System.
     { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool',  modules: ['esign'] },
@@ -148,6 +156,7 @@ var Sidebar = function(props) {
   // loans, shares, voting, contracts, documents, statement, profile).
   var saccoMemberItems = [
     { label: 'Member Portal', path: '/sacco-member-portal', icon: 'LayoutDashboard' },
+    { label: 'Verify Certificate', path: '/verify-certificate', icon: 'ShieldCheck', prefix: true },
   ];
 
   var navItems =
@@ -171,7 +180,8 @@ var Sidebar = function(props) {
     });
   }
 
-  var isActive = function(path, tab) {
+  var isActive = function(path, tab, prefix) {
+    if (prefix) return location.pathname.startsWith(path);
     if (!tab) return location.pathname === path;
     var params = new URLSearchParams(location.search);
     return location.pathname === path && (params.get('tab') === tab || (!params.get('tab') && tab === 'overview'));
@@ -261,7 +271,7 @@ var Sidebar = function(props) {
       {/* Navigation */}
       <nav style={{ flex: 1, overflowY: 'auto', padding: '10px 8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
         {navItems.map(function(item) {
-          var active = isActive(item.path, item.tab);
+          var active = isActive(item.path, item.tab, item.prefix);
           return (
             <Link
               key={item.path + (item.tab || '')}

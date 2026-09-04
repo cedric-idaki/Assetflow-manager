@@ -1,6 +1,11 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useToast } from '../../../components/Toast';
 import Icon from '../../../components/AppIcon';
+import { supabase } from '../../../lib/supabase';
+import { fetchAllRows } from '../../../lib/fetchAllRows';
+import Pagination from '../../../components/ui/Pagination';
+import { usePagedQuery, sanitizeSearchTerm } from '../../../hooks/usePagedQuery';
+import { buildContributionReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
   TextInput, NumberInput, Select, EmptyState, ProgressBar, ContributionChart,
@@ -21,6 +26,20 @@ const emptyRecordForm = () => ({
   status: 'completed', penalty_amount: '', reference: '', notes: '',
 });
 
+/** Rows per page in the contributions ledger. */
+const PAGE_SIZE = 25;
+
+// Same shape the context fetched, so a row renders identically from either.
+const CONTRIBUTION_COLUMNS = '*, member:sacco_members(id, full_name, member_no)';
+
+/**
+ * Columns the free-text box searches. Top-level only, and mirrored exactly by
+ * sacco_contributions_filtered_summary — if the two ever diverge, the table
+ * and the summary line above it would describe different sets of rows.
+ * Member name is not here on purpose: the member dropdown does that exactly.
+ */
+const LEDGER_SEARCH_COLUMNS = ['txn_no', 'reference', 'notes', 'contribution_type', 'received_by_name'];
+
 const SUBTABS = [
   { id: 'ledger',  label: 'Ledger',  icon: 'List' },
   { id: 'reports', label: 'Reports', icon: 'BarChart3' },
@@ -29,7 +48,7 @@ const SUBTABS = [
 
 const ContributionsTab = ({ ctx }) => {
   const {
-    contributions, members, contributionTypes, contributionAudit,
+    sacco, members, contributionTypes, contributionAudit, stats,
     recordContribution, approveContribution, reverseContribution, editContribution,
     createContributionType, updateContributionType, exportCSV,
     getCollections, getDefaulters, getMemberContributionStats,
@@ -37,6 +56,28 @@ const ContributionsTab = ({ ctx }) => {
   const toast = useToast();
 
   const [sub, setSub] = useState('ledger');
+  const [receipting, setReceipting] = useState(null);
+
+  /**
+   * The slip a member walks away with. A settled contribution downloads as an
+   * official receipt; anything still pending, waived or reversed downloads as
+   * an acknowledgement that says so on its face, so an unsettled entry can
+   * never be waved about as proof of payment.
+   */
+  const downloadReceipt = async (c) => {
+    setReceipting(c.id);
+    try {
+      const filename = await downloadAccountingDocument(buildContributionReceipt({
+        contribution: c,
+        sacco,
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the receipt');
+    } finally {
+      setReceipting(null);
+    }
+  };
 
   // ── Record / edit ──────────────────────────────────────────────────────────
   const [open, setOpen]     = useState(false);
@@ -84,36 +125,114 @@ const ContributionsTab = ({ ctx }) => {
   const customTypes = (contributionTypes || []).filter((t) => t.is_active);
   const typeOptions = [...TYPES, ...customTypes.map((t) => t.name).filter((n) => !TYPES.includes(n))];
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return contributions.filter((c) => {
-      if (fStatus && c.status !== fStatus) return false;
-      if (fMethod && (c.payment_method || '') !== fMethod) return false;
-      if (fMember && c.member_id !== fMember) return false;
-
-      const when = (c.paid_date || c.due_date || c.created_at || '').slice(0, 10);
-      if (fFrom && when < fFrom) return false;
-      if (fTo && when > fTo) return false;
-
-      const amt = parseFloat(c.amount) || 0;
-      if (fMin && amt < parseFloat(fMin)) return false;
-      if (fMax && amt > parseFloat(fMax)) return false;
-
-      if (!needle) return true;
-      return [
-        c.txn_no, c.reference, c.notes, c.contribution_type,
-        c.member?.full_name, c.member?.member_no, c.received_by_name, String(c.amount),
-      ].some((v) => String(v || '').toLowerCase().includes(needle));
-    });
-  }, [contributions, q, fStatus, fMethod, fMember, fFrom, fTo, fMin, fMax]);
+  /**
+   * The ledger is read a page at a time, filtered in Postgres.
+   *
+   * Every one of these filters used to run in the browser over the newest
+   * LIST_CAP rows, so "all contributions in March" meant "the March rows that
+   * happened to be among the newest 500" — an answer that silently shrank as
+   * the sacco grew. Pushing them to the server makes the filter mean what it
+   * says, and lets the table hold one page instead of the whole book.
+   *
+   * The free-text box covers the ledger's own columns. Searching BY MEMBER is
+   * the dedicated dropdown beside it, which is exact rather than a name match.
+   */
+  const ledger = usePagedQuery({
+    table: 'sacco_contributions',
+    columns: CONTRIBUTION_COLUMNS,
+    searchColumns: LEDGER_SEARCH_COLUMNS,
+    search: q,
+    order: { column: 'created_at', ascending: false },
+    pageSize: PAGE_SIZE,
+    applyFilters: (query) => {
+      let out = query;
+      if (fStatus) out = out.eq('status', fStatus);
+      if (fMethod) out = out.eq('payment_method', fMethod);
+      if (fMember) out = out.eq('member_id', fMember);
+      if (fMin)    out = out.gte('amount', Number(fMin));
+      if (fMax)    out = out.lte('amount', Number(fMax));
+      // effective_date is generated as paid → due → created, the same
+      // precedence the tab applied by hand when it filtered in the browser.
+      if (fFrom)   out = out.gte('effective_date', fFrom);
+      if (fTo)     out = out.lte('effective_date', fTo);
+      return out;
+    },
+    deps: [fStatus, fMethod, fMember, fFrom, fTo, fMin, fMax],
+  });
+  const filtered = ledger.rows;
 
   // ── Headline figures ───────────────────────────────────────────────────────
-  const settled     = contributions.filter(isSettled);
-  const totalPaid   = sumAmount(settled);
-  const thisMonthKey = monthKey(todayStr());
-  const thisMonth   = sumAmount(settled.filter((c) => monthKey(c.period_month || c.paid_date) === thisMonthKey));
-  const pendingRows = contributions.filter((c) => c.status === 'pending');
-  const totalPenalty = contributions.reduce((s, c) => s + parseFloat(c.penalty_amount || 0), 0);
+  // All from the whole-book aggregate. These used to reduce over the capped
+  // array, so a sacco past LIST_CAP was shown understated money with nothing
+  // on screen to say so.
+  const totalPaid    = stats?.totalSavings ?? 0;
+  const settledCount = stats?.settledContributions ?? 0;
+  const thisMonth    = stats?.contributionsThisMonth ?? 0;
+  const pendingCount = stats?.pendingContributions ?? 0;
+  const pendingSum   = stats?.pendingContribAmount ?? 0;
+  const totalPenalty = stats?.totalPenalties ?? 0;
+  const totalEntries = stats?.totalContributions ?? 0;
+
+  /**
+   * "Showing <amount> settled across <n> entries" for the CURRENT filters.
+   *
+   * The count rides along on the page request as an exact count, but the money
+   * cannot come from the rows on screen once the table is paged. This asks
+   * Postgres for it with the same filters the table sent, so the two can never
+   * describe different sets. Falls back silently to hiding the amount if the
+   * function is not deployed yet.
+   */
+  const [filteredSum, setFilteredSum] = useState(null);
+  const filterKey = `${q}|${fStatus}|${fMethod}|${fMember}|${fFrom}|${fTo}|${fMin}|${fMax}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!filtersActive) { setFilteredSum(null); return undefined; }
+
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('sacco_contributions_filtered_summary', {
+          p_search: sanitizeSearchTerm(q) || null,
+          p_member: fMember || null,
+          p_method: fMethod || null,
+          p_status: fStatus || null,
+          p_from:   fFrom || null,
+          p_to:     fTo || null,
+          p_min:    fMin ? Number(fMin) : null,
+          p_max:    fMax ? Number(fMax) : null,
+        });
+        if (error) throw error;
+        if (!cancelled) setFilteredSum(data?.[0]?.settled_amount ?? null);
+      } catch (_) {
+        // Pre-migration databases do not have the function. Better to show the
+        // count alone than to show a number computed from one page.
+        if (!cancelled) setFilteredSum(null);
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey, filtersActive]);
+
+  /**
+   * Exports every row the current filters match, not the page on screen — a
+   * file named sacco_contributions.csv holding 25 of 1,240 rows looks complete
+   * and is not.
+   */
+  const [exporting, setExporting] = useState(false);
+  const buildLedgerQuery = () => {
+    let out = supabase.from('sacco_contributions').select(CONTRIBUTION_COLUMNS);
+    if (fStatus) out = out.eq('status', fStatus);
+    if (fMethod) out = out.eq('payment_method', fMethod);
+    if (fMember) out = out.eq('member_id', fMember);
+    if (fMin)    out = out.gte('amount', Number(fMin));
+    if (fMax)    out = out.lte('amount', Number(fMax));
+    if (fFrom)   out = out.gte('effective_date', fFrom);
+    if (fTo)     out = out.lte('effective_date', fTo);
+    const term = sanitizeSearchTerm(q);
+    if (term) out = out.or(LEDGER_SEARCH_COLUMNS.map((c) => `${c}.ilike.%${term}%`).join(','));
+    return out.order('created_at', { ascending: false });
+  };
 
   // ── Save (record new / correct pending) ────────────────────────────────────
   const openNew = () => { setEditing(null); setForm(emptyRecordForm()); setOpen(true); };
@@ -149,9 +268,11 @@ const ContributionsTab = ({ ctx }) => {
           reference: form.reference || null,
           notes: form.notes || null,
         });
+        ledger.refresh();
         toast.success(`${editing.txn_no} corrected.`);
       } else {
         await recordContribution(form);
+        ledger.refresh();
         toast.success('Contribution recorded.');
       }
       setOpen(false);
@@ -169,6 +290,7 @@ const ContributionsTab = ({ ctx }) => {
         reference: approveForm.reference || null,
         paid_at: approveForm.paid_at ? new Date(approveForm.paid_at).toISOString() : null,
       });
+      ledger.refresh();
       toast.success(`${approveFor.txn_no} approved.`);
       setApproveFor(null);
     } catch (e) {
@@ -181,6 +303,7 @@ const ContributionsTab = ({ ctx }) => {
     setReversing(true);
     try {
       await reverseContribution(reverseFor.id, reason.trim());
+      ledger.refresh();
       toast.success(`${reverseFor.txn_no} reversed.`);
       setReverseFor(null); setReason('');
     } catch (e) {
@@ -224,9 +347,19 @@ const ContributionsTab = ({ ctx }) => {
   };
 
   // Export what is on screen, not the whole table — the filters ARE the report.
-  const exportLedger = () => {
-    if (filtered.length === 0) { toast.error('Nothing to export with these filters.'); return; }
-    exportCSV(filtered.map((c) => ({
+  const exportLedger = async () => {
+    if (ledger.total === 0) { toast.error('Nothing to export with these filters.'); return; }
+    setExporting(true);
+    let all;
+    try {
+      all = await fetchAllRows(buildLedgerQuery);
+    } catch (e) {
+      toast.error(e.message || 'Could not build the export.');
+      setExporting(false);
+      return;
+    }
+    setExporting(false);
+    exportCSV(all.map((c) => ({
       transaction_no: c.txn_no,
       member: c.member?.full_name || '',
       member_no: c.member?.member_no || '',
@@ -247,9 +380,9 @@ const ContributionsTab = ({ ctx }) => {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total collected" value={KES(totalPaid)} icon="PiggyBank" tone="success" hint={`${settled.length} settled entries`} />
+        <StatCard label="Total collected" value={KES(totalPaid)} icon="PiggyBank" tone="success" hint={`${settledCount.toLocaleString('en-KE')} settled entries`} />
         <StatCard label="This month" value={KES(thisMonth)} icon="CalendarCheck" tone="primary" />
-        <StatCard label="Awaiting approval" value={pendingRows.length} icon="Clock" tone={pendingRows.length ? 'warning' : 'muted'} hint={pendingRows.length ? KES(sumAmount(pendingRows)) : undefined} />
+        <StatCard label="Awaiting approval" value={pendingCount} icon="Clock" tone={pendingCount ? 'warning' : 'muted'} hint={pendingCount ? KES(pendingSum) : undefined} />
         <StatCard label="Penalties" value={KES(totalPenalty)} icon="AlertTriangle" tone="muted" />
       </div>
 
@@ -264,9 +397,9 @@ const ContributionsTab = ({ ctx }) => {
           >
             <Icon name={t.icon} size={14} color="currentColor" />
             {t.label}
-            {t.id === 'ledger' && pendingRows.length > 0 && (
+            {t.id === 'ledger' && pendingCount > 0 && (
               <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold">
-                {pendingRows.length}
+                {pendingCount}
               </span>
             )}
           </button>
@@ -276,10 +409,14 @@ const ContributionsTab = ({ ctx }) => {
       {sub === 'ledger' && (
         <Card
           title="Contributions ledger"
-          subtitle={filtersActive ? `${filtered.length} of ${contributions.length} entries` : `${contributions.length} entries`}
+          subtitle={filtersActive
+            ? `${ledger.total.toLocaleString('en-KE')} of ${totalEntries.toLocaleString('en-KE')} entries`
+            : `${totalEntries.toLocaleString('en-KE')} entries`}
           actions={
             <div className="flex items-center gap-2 flex-wrap justify-end">
-              <GhostButton icon="Download" onClick={exportLedger}>Export</GhostButton>
+              <GhostButton icon="Download" onClick={exportLedger} disabled={exporting}>
+                {exporting ? 'Preparing…' : 'Export'}
+              </GhostButton>
               <GhostButton icon="ListPlus" onClick={() => setTypesOpen(true)}>Contribution types</GhostButton>
               <PrimaryButton icon="Plus" onClick={openNew}>Record contribution</PrimaryButton>
             </div>
@@ -288,7 +425,9 @@ const ContributionsTab = ({ ctx }) => {
           {/* Requirement 6: search by member, date, amount or payment method */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
             <div className="col-span-2 lg:col-span-2">
-              <TextInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search transaction no, member, reference, officer…" />
+              {/* Names moved to the member dropdown beside this, which matches
+                  exactly instead of by substring. */}
+              <TextInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search transaction no, reference, officer, notes…" />
             </div>
             <Select value={fMember} onChange={(e) => setFMember(e.target.value)}>
               <option value="">All members</option>
@@ -313,19 +452,26 @@ const ContributionsTab = ({ ctx }) => {
           {filtersActive && (
             <div className="flex items-center gap-3 mb-4 text-xs">
               <span className="text-muted-foreground">
-                Showing <strong className="text-foreground">{KES(sumAmount(filtered.filter(isSettled)))}</strong> settled across {filtered.length} entries
+                {filteredSum == null
+                  ? <>Matched <strong className="text-foreground">{ledger.total.toLocaleString('en-KE')}</strong> entries</>
+                  : <>Showing <strong className="text-foreground">{KES(filteredSum)}</strong> settled across {ledger.total.toLocaleString('en-KE')} entries</>}
               </span>
               <button onClick={clearFilters} className="text-primary font-semibold hover:underline">Clear filters</button>
             </div>
           )}
 
-          {filtered.length === 0 ? (
+          {ledger.error ? (
+            // Failed and empty look identical otherwise, and a treasurer acts
+            // very differently on "nothing recorded" than on "did not load".
+            <EmptyState icon="AlertTriangle" title="Could not load the ledger" hint={ledger.error} />
+          ) : filtered.length === 0 ? (
             <EmptyState
               icon="PiggyBank"
               title={filtersActive ? 'No contributions match these filters' : 'No contributions recorded'}
               hint={filtersActive ? 'Widen the date range or clear the filters.' : "Record a member's savings contribution to build their statement."}
             />
           ) : (
+            <>
             <Table columns={['Transaction no', 'Member', 'Date & time', 'Type', 'Account', 'Method', 'Reference', 'Received by', 'Amount', 'Status', '']}>
               {filtered.map((c) => (
                 <tr key={c.id} className={`border-b border-border/60 ${c.status === 'overdue' ? 'bg-red-50/40' : c.status === 'reversed' ? 'opacity-60' : ''}`}>
@@ -373,17 +519,38 @@ const ContributionsTab = ({ ctx }) => {
                     {c.status !== 'reversed' && (
                       <button onClick={() => { setReverseFor(c); setReason(''); }} className="ml-3 text-xs text-red-600 font-semibold hover:underline">Reverse</button>
                     )}
+                    <button
+                      onClick={() => downloadReceipt(c)}
+                      disabled={receipting === c.id}
+                      title={c.status === 'completed'
+                        ? `Download the receipt for ${c.txn_no || 'this contribution'}`
+                        : `Download an acknowledgement for ${c.txn_no || 'this contribution'}`}
+                      className="ml-3 align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                    >
+                      <Icon name={receipting === c.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                        className={receipting === c.id ? 'animate-spin' : ''} />
+                    </button>
                   </td>
                 </tr>
               ))}
             </Table>
+            <Pagination
+              page={ledger.page}
+              pageCount={ledger.pageCount}
+              from={ledger.from}
+              to={ledger.to}
+              total={ledger.total}
+              onPageChange={ledger.setPage}
+              loading={ledger.loading}
+              noun={filtersActive ? 'matching entries' : 'entries'}
+            />
+            </>
           )}
         </Card>
       )}
 
       {sub === 'reports' && (
         <ReportsPanel
-          contributions={contributions}
           members={members}
           getCollections={getCollections}
           getDefaulters={getDefaulters}
@@ -557,7 +724,6 @@ const ContributionsTab = ({ ctx }) => {
       <MemberStatementModal
         member={statementFor}
         stats={statementStats}
-        contributions={contributions.filter((c) => c.member_id === statementFor?.id)}
         onClose={() => { setStatementFor(null); setStatementStats(null); }}
         exportCSV={exportCSV}
       />
@@ -629,7 +795,7 @@ const defaultRange = (bucket) => {
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 };
 
-const ReportsPanel = ({ contributions, members, getCollections, getDefaulters, exportCSV, onOpenStatement }) => {
+const ReportsPanel = ({ members, getCollections, getDefaulters, exportCSV, onOpenStatement }) => {
   const toast = useToast();
   const [bucket, setBucket] = useState('day');
   const [range, setRange]   = useState(() => defaultRange('day'));
@@ -675,21 +841,62 @@ const ReportsPanel = ({ contributions, members, getCollections, getDefaulters, e
     ? String(d).slice(0, 4)
     : bucket === 'month' ? monthLabel(d) : fmtDate(d));
 
-  // Contribution summary by type — what each purse actually collected.
-  const byType = useMemo(() => {
-    const map = new Map();
-    contributions.filter(isSettled).forEach((c) => {
-      const key = c.contribution_type || 'other';
-      const cur = map.get(key) || { type: key, count: 0, total: 0, members: new Set() };
-      cur.count += 1;
-      cur.total += parseFloat(c.amount) || 0;
-      cur.members.add(c.member_id);
-      map.set(key, cur);
-    });
-    return [...map.values()]
-      .map((r) => ({ ...r, members: r.members.size }))
-      .sort((a, b) => b.total - a.total);
-  }, [contributions]);
+  /**
+   * What each purse actually collected, over the whole book.
+   *
+   * This was built in the browser from the capped contributions array, so both
+   * the totals and the distinct-member counts were only ever the newest rows'
+   * worth — and a Set of member ids over a truncated array undercounts in a
+   * way nobody on screen can detect.
+   */
+  const [byType, setByType] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('sacco_contributions_by_type');
+        if (error) throw error;
+        if (cancelled) return;
+        setByType((data || []).map((r) => ({
+          type:    r.contribution_type,
+          count:   Number(r.entry_count || 0),
+          total:   Number(r.total || 0),
+          members: Number(r.member_count || 0),
+        })));
+      } catch (_) {
+        // Pre-migration databases do not have the function. An empty breakdown
+        // reads as "nothing settled yet", which is better than a wrong split.
+        if (!cancelled) setByType([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /**
+   * Settled-to-date per member, keyed by member id. Same reason as byType:
+   * filtering a capped array per row understated a member's savings right
+   * beside their own name.
+   */
+  const [settledByMember, setSettledByMember] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('sacco_contributions_by_member');
+        if (error) throw error;
+        if (cancelled) return;
+        setSettledByMember(Object.fromEntries(
+          (data || []).map((r) => [r.member_id, Number(r.settled_total || 0)])
+        ));
+      } catch (_) {
+        // Pre-migration: show a dash rather than a number that may be short.
+        if (!cancelled) setSettledByMember(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -796,7 +1003,7 @@ const ReportsPanel = ({ contributions, members, getCollections, getDefaulters, e
             <div className="max-h-80 overflow-y-auto">
               <Table columns={['Member', 'Monthly', 'Settled to date', '']}>
                 {members.map((m) => {
-                  const mine = contributions.filter((c) => c.member_id === m.id && isSettled(c));
+                  const settledToDate = settledByMember?.[m.id];
                   return (
                     <tr key={m.id} className="border-b border-border/60">
                       <td className="py-2.5 pr-4">
@@ -806,7 +1013,9 @@ const ReportsPanel = ({ contributions, members, getCollections, getDefaulters, e
                       <td className="py-2.5 pr-4 text-muted-foreground">
                         {parseFloat(m.monthly_contribution) > 0 ? KES(m.monthly_contribution) : '—'}
                       </td>
-                      <td className="py-2.5 pr-4 font-medium text-foreground">{KES(sumAmount(mine))}</td>
+                      <td className="py-2.5 pr-4 font-medium text-foreground">
+                        {settledByMember == null ? '—' : KES(settledToDate || 0)}
+                      </td>
                       <td className="py-2.5 pr-0 text-right">
                         <button onClick={() => onOpenStatement(m)} className="text-xs text-primary font-semibold hover:underline">Statement</button>
                       </td>
@@ -864,7 +1073,46 @@ const ReportsPanel = ({ contributions, members, getCollections, getDefaulters, e
 };
 
 // ── Member statement ─────────────────────────────────────────────────────────
-const MemberStatementModal = ({ member, stats, contributions, onClose, exportCSV }) => {
+/**
+ * A member's full contribution history.
+ *
+ * This used to be handed `contributions.filter(c => c.member_id === ...)` over
+ * the capped context array, which meant a long-standing member's statement
+ * silently omitted their older entries. A statement is the document a member
+ * checks their own savings against — one that is quietly short is the single
+ * worst output this tab can produce, so it reads the member's own rows
+ * directly and completely.
+ */
+const MemberStatementModal = ({ member, stats, onClose, exportCSV }) => {
+  const [contributions, setContributions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const memberId = member?.id || null;
+
+  useEffect(() => {
+    if (!memberId) { setContributions([]); return undefined; }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    (async () => {
+      try {
+        const rows = await fetchAllRows(() => supabase
+          .from('sacco_contributions')
+          .select(CONTRIBUTION_COLUMNS)
+          .eq('member_id', memberId)
+          .order('created_at', { ascending: false }));
+        if (!cancelled) setContributions(rows);
+      } catch (e) {
+        if (!cancelled) { setContributions([]); setError(e?.message || 'Could not load this statement.'); }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [memberId]);
+
   if (!member) return null;
 
   const settled = contributions.filter(isSettled);
@@ -891,6 +1139,20 @@ const MemberStatementModal = ({ member, stats, contributions, onClose, exportCSV
         <PrimaryButton icon="Check" onClick={onClose}>Close</PrimaryButton>
       </>}
     >
+      {/* A statement that is still loading must not read as a complete one
+          that happens to be empty. */}
+      {loading && (
+        <p className="text-sm text-muted-foreground py-2 mb-3">Loading this member's full history…</p>
+      )}
+      {error && (
+        <div className="mb-4 flex items-start gap-2 p-3 rounded-lg border border-destructive/30 bg-destructive/10">
+          <Icon name="AlertTriangle" size={15} color="#dc2626" className="mt-0.5 shrink-0" />
+          <p className="text-xs text-foreground">
+            This statement could not be loaded in full, so the entries below may be incomplete. {error}
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         {[
           ['Total contributions', KES(stats?.total_contributions ?? sumAmount(settled))],

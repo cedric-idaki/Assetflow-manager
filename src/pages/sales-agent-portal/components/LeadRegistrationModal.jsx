@@ -12,6 +12,8 @@ const LeadRegistrationModal = ({ isOpen, onClose, onSubmit }) => {
     phone: '',
     assetInterest: '',
     budgetRange: '',
+    dealValue: '',
+    expectedCloseDate: '',
     priority: 'medium',
     source: '',
     notes: '',
@@ -42,7 +44,7 @@ const LeadRegistrationModal = ({ isOpen, onClose, onSubmit }) => {
     setSubmitError('');
     try {
       await onSubmit(formData);
-      setFormData({ name: '', email: '', phone: '', assetInterest: '', budgetRange: '', priority: 'medium', source: '', notes: '' });
+      setFormData({ name: '', email: '', phone: '', assetInterest: '', budgetRange: '', dealValue: '', expectedCloseDate: '', priority: 'medium', source: '', notes: '' });
       onClose();
     } catch (err) {
       setSubmitError(err?.message || 'Failed to register lead');
@@ -107,6 +109,32 @@ const LeadRegistrationModal = ({ isOpen, onClose, onSubmit }) => {
             value={formData?.assetInterest}
             onChange={(e) => handleChange('assetInterest', e?.target?.value)}
           />
+
+          {/* The deal, as distinct from the buyer's budget above.
+              `budgetRange` is what they said they can spend, in their words;
+              this is what the sale is worth if it lands, as a number that can
+              be summed into a pipeline figure and a forecast. Both optional —
+              a lead taken over the phone in thirty seconds must still be
+              savable, and the opportunities panel chases the blanks later. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Input
+              label="Deal Value (KES)"
+              type="number"
+              min="0"
+              step="1000"
+              placeholder="What the sale is worth"
+              value={formData?.dealValue}
+              onChange={(e) => handleChange('dealValue', e?.target?.value)}
+              hint="Optional — you can add it later from Opportunities"
+            />
+            <Input
+              label="Expected Close Date"
+              type="date"
+              value={formData?.expectedCloseDate}
+              onChange={(e) => handleChange('expectedCloseDate', e?.target?.value)}
+              hint="Optional — drives your month-end forecast"
+            />
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Select

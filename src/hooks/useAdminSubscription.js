@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { planForUsers, planById, subscriptionPriceFor } from '../config/companyPlans';
+import { planForUsers, planById, billableUsers } from '../config/companyPlans';
+import { buildSystemInvoice, monthlyTotal } from '../config/systemBilling';
 
 /**
  * Admin platform subscription, backed by the existing company_subscriptions /
@@ -57,16 +58,49 @@ const applyPendingIfDue = async (sub) => {
         .from('subscription_plans').select('id').eq('name', plan.id).maybeSingle();
       planId = planRow?.id ?? null;
     }
-    await supabase.from('company_subscriptions').insert({
+    // A rollover is a RENEWAL: chargeInstallation stays false, so the one-time
+    // fee is never charged twice.
+    //
+    // `asOf` is the date the new period STARTS, which is what decides its tax
+    // treatment. A rollover can be processed late — the cron catches up, or
+    // the page is opened days after the period turned — and the bill still
+    // belongs to the period it covers, not to the day the row was written.
+    const quote = buildSystemInvoice({
+      productLine: 'company',
+      seats: sub.pending_max_users,
+      tierId: sub.pending_plan_name,
+      chargeInstallation: false,
+      asOf: sub.end_date,
+    });
+    const row = {
       admin_id:   sub.admin_id,
       plan_id:    planId,
       plan_name:  sub.pending_plan_name,
       status:     'active',
-      price_paid: sub.pending_price ?? subscriptionPriceFor(sub.pending_max_users),
+      price_paid: sub.pending_price ?? Math.round(quote.total),
       max_users:  sub.pending_max_users,
       start_date: sub.end_date,
       end_date:   addDays(end, 30).toISOString(),
+    };
+    // Freeze the breakdown on so the invoice prints what was charged. Falls
+    // back cleanly where 20260831160000_system_billing_breakdown.sql has not
+    // been applied — the rollover must happen either way.
+    const { error: insErr } = await supabase.from('company_subscriptions').insert({
+      ...row,
+      base_fee:         quote.baseFee,
+      user_fee:         quote.usageFee,
+      module_fee:       quote.moduleFee,
+      installation_fee: 0,
+      subtotal:         quote.subtotal,
+      vat_rate:         quote.vatRate,
+      vat_amount:       quote.vatAmount,
+      // The regulation that set the rate, so the row records the authority and
+      // not only the number. See 20260902120000_billing_tax_regime.sql.
+      tax_regime:       quote.taxRegime.version,
     });
+    if (insErr && isMissingColumn(insErr)) {
+      await supabase.from('company_subscriptions').insert(row);
+    }
   }
 
   // Clear the pending change on the old row.
@@ -127,7 +161,9 @@ export const useAdminSubscription = () => {
   // Passing the current seat count cancels any pending change.
   const changeSeats = useCallback(async (newSeats) => {
     if (!subscription) return;
-    const seats = Math.max(1, parseInt(newSeats, 10) || 1);
+    // Floored at the Business minimum (companyPlans.js): a scheduled change
+    // must not park a tenant on a seat count the price list will not bill.
+    const seats = billableUsers(Math.max(1, parseInt(newSeats, 10) || 1));
     const clearing = seats === subscription.max_users;
     const plan = planForUsers(seats);
 
@@ -136,7 +172,7 @@ export const useAdminSubscription = () => {
       : {
           pending_max_users:      seats,
           pending_plan_name:      plan?.id ?? subscription.plan_name,
-          pending_price:          subscriptionPriceFor(seats),
+          pending_price:          monthlyTotal({ productLine: 'company', seats }),
           pending_effective_date: subscription.end_date,
         };
 
@@ -176,7 +212,7 @@ export const useAdminSubscription = () => {
   const planName  = subscription?.plan_name || null;
   const plan      = planName ? planById(planName) : null;
   const pricePaid = parseFloat(subscription?.price_paid || 0);
-  const monthlyCost = subscriptionPriceFor(seats); // recurring (excludes install fee)
+  const monthlyCost = monthlyTotal({ productLine: 'company', seats }); // recurring (excludes install fee)
 
   const endDate = parseDate(subscription?.end_date);
   const expired = endDate ? Date.now() > endDate.getTime() : false;

@@ -35,6 +35,104 @@ export const TXN_LABELS = {
   adjustment: 'Adjustment', dividend: 'Dividend', reversal: 'Reversal',
 };
 
+// ── Withholding vocabulary ───────────────────────────────────────────────────
+// Mirrors sacco_share_withholdings.reason_type — the CHECK constraint there is
+// the authority, so a value added to one must be added to the other.
+export const WITHHOLDING_REASONS = [
+  { value: 'loan_security', label: 'Loan security',       hint: 'Held as collateral against a running loan' },
+  { value: 'loan_default',  label: 'Loan default',        hint: 'Held to recover a loan in arrears' },
+  { value: 'exit',          label: 'Member exit',         hint: 'Held while a withdrawal is processed' },
+  { value: 'deceased',      label: 'Deceased member',     hint: 'Held while the estate is settled' },
+  { value: 'disciplinary',  label: 'Disciplinary',        hint: 'Held pending a disciplinary decision' },
+  { value: 'court_order',   label: 'Court order',         hint: 'Held under a court or tribunal order' },
+  { value: 'dispute',       label: 'Ownership dispute',   hint: 'Held while ownership is contested' },
+  { value: 'unpaid_dues',   label: 'Unpaid dues',         hint: 'Held against unpaid contributions or fees' },
+  { value: 'other',         label: 'Other',               hint: '' },
+];
+
+export const reasonLabel = (v) =>
+  WITHHOLDING_REASONS.find((r) => r.value === v)?.label || 'Other';
+
+export const WITHHOLDING_EVENTS = {
+  withheld: 'Withheld',
+  listed:   'Placed for sale',
+  unlisted: 'Taken off the market',
+  sold:     'Sold',
+  released: 'Released to member',
+  reversed: 'Sale reversed',
+};
+
+export const WITHHOLDING_STATUS_HINT = {
+  withheld: 'Held by the society — not tradeable',
+  for_sale: 'On the internal market',
+  closed:   'Fully released or sold',
+};
+
+/**
+ * A withholding reads as three numbers and they must always add up:
+ *
+ *   shares = released + sold + outstanding
+ *   outstanding = onMarket + heldBack
+ *
+ * The database keeps `outstanding_shares` as a generated column; these compute
+ * it from the same parts so a row that has not been round-tripped yet — an
+ * optimistic update, a test fixture — still totals identically.
+ */
+export const outstanding = (w) =>
+  Math.max(0, int(w?.shares) - int(w?.released_shares) - int(w?.sold_shares));
+
+export const onMarket = (w) => Math.min(int(w?.listed_shares), outstanding(w));
+
+export const heldBack = (w) => Math.max(0, outstanding(w) - onMarket(w));
+
+// Not `isLive` — that name already belongs to an order on the book.
+export const isLiveWithholding = (w) => w?.status !== 'closed' && outstanding(w) > 0;
+
+/**
+ * The society's withholding position: how much is held back, what it is worth
+ * today, and what became of everything else. The stat cards, the member rows
+ * and the report all read this, so they cannot disagree.
+ *
+ * `effectivePrice` is the same market-value-or-par figure marketOverview()
+ * uses, which is what makes "withheld value" comparable to "market cap".
+ */
+export const withholdingOverview = (withholdings = [], effectivePrice = 0, totalIssued = 0) => {
+  const live = withholdings.filter(isLiveWithholding);
+  const held   = live.reduce((s, w) => s + heldBack(w), 0);
+  const listed = live.reduce((s, w) => s + onMarket(w), 0);
+  const total  = held + listed;
+
+  return {
+    live,
+    heldBack: held,
+    onMarket: listed,
+    outstanding: total,
+    // Valued at today's price, and at what it was worth the day it was taken —
+    // the gap is what the society gained or lost by holding rather than selling.
+    value: total * num(effectivePrice),
+    bookValue: live.reduce((s, w) => s + outstanding(w) * num(w.unit_value), 0),
+    members: new Set(live.map((w) => w.member_id)).size,
+    count: live.length,
+    releasedShares: withholdings.reduce((s, w) => s + int(w.released_shares), 0),
+    soldShares: withholdings.reduce((s, w) => s + int(w.sold_shares), 0),
+    proceeds: withholdings.reduce((s, w) => s + num(w.proceeds), 0),
+    ownership: totalIssued > 0 ? (total / totalIssued) * 100 : 0,
+  };
+};
+
+/** One member's withheld position, for the holdings register and the portal. */
+export const memberWithholding = (withholdings = [], memberId) => {
+  const mine = withholdings.filter((w) => w.member_id === memberId);
+  const live = mine.filter(isLiveWithholding);
+  return {
+    all: mine,
+    live,
+    heldBack: live.reduce((s, w) => s + heldBack(w), 0),
+    onMarket: live.reduce((s, w) => s + onMarket(w), 0),
+    outstanding: live.reduce((s, w) => s + outstanding(w), 0),
+  };
+};
+
 export const DIVIDEND_STATUS_HINT = {
   draft: 'Not yet declared',
   declared: 'Declared — run the calculation to allocate it',
@@ -133,10 +231,16 @@ export const memberPosition = (holding, effectivePrice, totalIssued) => {
   const held = int(holding?.shares_held);
   const invested = num(holding?.total_invested);
   const value = held * effectivePrice;
+  const locked = int(holding?.locked_shares);
+  // Shares the society is holding back are not the member's to trade, exactly
+  // like escrow — so they come out of `free` too. Anything that reads `free`
+  // and offers a sell would otherwise be offering shares the engine refuses.
+  const withheld = int(holding?.withheld_shares);
   return {
     held,
-    locked: int(holding?.locked_shares),
-    free: Math.max(0, held - int(holding?.locked_shares)),
+    locked,
+    withheld,
+    free: Math.max(0, held - locked - withheld),
     avg: num(holding?.avg_buy_price),
     invested,
     value,
@@ -177,6 +281,8 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
   .sub{font-size:11px;text-transform:uppercase;letter-spacing:3px;color:#5c7c88;margin-top:4px;}
   .certno{text-align:right;font-size:12px;color:#5c7c88;}
   .certno b{display:block;font-size:18px;color:#0f2733;letter-spacing:1px;}
+  .certno .serial{display:block;margin-top:8px;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;}
+  .certno .serial b{font-size:13px;letter-spacing:1px;font-family:'Courier New',monospace;}
   h1{text-align:center;font-size:30px;letter-spacing:6px;margin:26px 0 4px;text-transform:uppercase;}
   .rule{width:120px;height:2px;background:#1da8c5;margin:0 auto 26px;}
   .body{text-align:center;font-size:15px;line-height:2.1;}
@@ -202,7 +308,10 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
         <div class="sacco">${esc(saccoName || 'Sacco Society')}</div>
         <div class="sub">Share Certificate</div>
       </div>
-      <div class="certno">Certificate No.<b>${esc(cert.certificate_no)}</b></div>
+      <div class="certno">
+        Certificate No.<b>${esc(cert.certificate_no)}</b>
+        ${cert.serial ? `<span class="serial">Serial <b>${esc(cert.serial)}</b></span>` : ''}
+      </div>
     </div>
 
     <h1>Certificate of Shares</h1>
@@ -232,7 +341,10 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
     </div>
 
     <div class="foot">
-      Generated ${new Date().toLocaleString('en-KE')} · Reference ${esc(String(cert.id || '').slice(0, 8))}
+      Generated ${new Date().toLocaleString('en-KE')}
+      ${cert.serial
+        ? `· Verify serial <strong>${esc(cert.serial)}</strong> in the Ararat certificate register to confirm this document is genuine.`
+        : `· Reference ${esc(String(cert.id || '').slice(0, 8))}`}
       · This certificate is superseded automatically whenever the holding changes.
     </div>
   </div></div>

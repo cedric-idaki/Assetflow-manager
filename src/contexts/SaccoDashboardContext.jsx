@@ -33,16 +33,45 @@ let _saccoDashboardChannelSeq = 0;
 // Sentinel buyer id meaning "the house buys" (treasury buy-back via a listing).
 export const TREASURY_BUYER = '__treasury__';
 
-// How many rows a list tab renders before it needs paging. These fetches feed
+// How many rows a LEDGER list holds before it needs paging. These fetches feed
 // TABLES, not totals: every headline figure now comes from sacco_dashboard_stats()
 // which aggregates over the whole book in Postgres, so capping the lists changes
 // what is displayed, never what is counted. Without a cap the cost of opening the
 // dashboard grew with the size of the tenant's entire history — and every realtime
 // event paid that cost again.
+//
+// This cap must NEVER be applied to a table the rest of the app treats as a
+// lookup. See fetchMembers for what that costs.
 const LIST_CAP = 500;
+
+/**
+ * Ceiling on the member roster — a backstop against a pathological tenant, not
+ * a page size. It is deliberately far above any real sacco so that hitting it
+ * is a signal rather than a routine truncation, and `membersTruncated` says so
+ * out loud instead of quietly dropping members the way LIST_CAP used to.
+ */
+export const ROSTER_CEILING = 10000;
 // The amortization tables run to one row per period per loan, so they need more
 // headroom than a plain list before paging becomes necessary.
 const SCHEDULE_CAP = 2000;
+
+/**
+ * 'paid' is the pre-20260801 spelling of 'completed'. Both count as settled,
+ * matching sacco_dashboard_stats() and the shared vocabulary in _shared.jsx.
+ */
+const isSettledStatus = (c) => ['completed', 'paid'].includes(c?.status);
+
+/**
+ * Whether a contribution's period falls in the current month, in the sacco's
+ * own timezone. Only used as the fallback for contributions_this_month when
+ * the server aggregate is absent; the SQL side does the same in Africa/Nairobi.
+ */
+const sameMonthAsToday = (value) => {
+  if (!value) return false;
+  const key = String(value).slice(0, 7);
+  const now = new Date();
+  return key === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
 
 const getAdminId = async () => {
   const { data: { user } } = await supabase.auth.getUser();
@@ -52,6 +81,9 @@ const getAdminId = async () => {
 export const SaccoDashboardProvider = ({ children }) => {
   const [sacco,         setSacco]         = useState(null);
   const [members,       setMembers]       = useState([]);
+  // True only if a tenant somehow exceeds ROSTER_CEILING, so the UI can say so
+  // rather than silently showing a partial roster.
+  const [membersTruncated, setMembersTruncated] = useState(false);
   const [contributions, setContributions] = useState([]);
   const [contributionTypes, setContributionTypes] = useState([]);
   const [contributionAudit, setContributionAudit] = useState([]);
@@ -59,17 +91,34 @@ export const SaccoDashboardProvider = ({ children }) => {
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
   const [shares,        setShares]        = useState([]);
+  // Same meaning as membersTruncated: only true if a tenant exceeds
+  // ROSTER_CEILING holdings, so the UI can say so instead of quietly cutting.
+  const [sharesTruncated, setSharesTruncated] = useState(false);
   const [sharePrices,   setSharePrices]   = useState([]);
   const [listings,      setListings]      = useState([]);
   const [transfers,     setTransfers]     = useState([]);
   const [treasury,      setTreasury]      = useState(null);
   // Share engine (20260801200000_sacco_share_engine)
   const [shareSettings, setShareSettings] = useState(null);
+  // Guarantee policy — the exposure cap the member portal enforces
+  // (20260904160000_sacco_loan_guarantees). Null until that migration is
+  // applied; the DB defaults govern either way.
+  const [guaranteeSettings, setGuaranteeSettings] = useState(null);
+  // The guarantee register itself. Staff read every row of their own tenant;
+  // the member portal reads only the two sides of each agreement.
+  const [guarantees,    setGuarantees]    = useState([]);
   const [shareTxns,     setShareTxns]     = useState([]);
   const [certificates,  setCertificates]  = useState([]);
   const [dividends,     setDividends]     = useState([]);
   const [dividendAllocations, setDividendAllocations] = useState([]);
   const [shareAudit,    setShareAudit]    = useState([]);
+  // Share withholding register (20260901120000_sacco_share_withholding)
+  const [withholdings,  setWithholdings]  = useState([]);
+  const [withholdingEvents, setWithholdingEvents] = useState([]);
+  // Supabase caps an unbounded select at 1,000 rows. The stat cards read the
+  // engine's own totals instead of reducing this array, but the table would
+  // still be short, so the panel says so rather than quietly cutting.
+  const [withholdingsTruncated, setWithholdingsTruncated] = useState(false);
   const [motions,       setMotions]       = useState([]);
   const [votes,         setVotes]         = useState([]);
   const [elections,          setElections]          = useState([]);
@@ -100,12 +149,34 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) { setConnectionStatus('disconnected'); }
   }, []);
 
+  /**
+   * The member roster, in full.
+   *
+   * This list is NOT just the Members tab's table. Twenty-odd places treat it
+   * as the tenant's lookup table — every shares panel resolves a member_id to
+   * a name out of it, every "pick a member" dropdown is built from it, and
+   * notifyElection/notifyMotion iterate it to decide who gets emailed.
+   *
+   * It used to be capped at LIST_CAP, newest first, which broke all three
+   * quietly. Past 500 members the oldest members vanished from dropdowns,
+   * resolved to "—" in the shares tables, and — worst — were skipped by the
+   * election and motion notifications, so the longest-standing members were
+   * precisely the ones never told a vote had opened.
+   *
+   * Members are bounded by the size of the tenant, not by its history, so
+   * fetching the whole roster is proportionate: it is the smallest of the
+   * sacco tables and the one everything else joins to. The ledger tables
+   * below are the ones that grow without limit, and those stay capped.
+   */
   const fetchMembers = useCallback(async () => {
     try {
       const adminId = await getAdminId();
-      const { data } = await supabase.from('sacco_members').select('*')
-        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
+      const { data, count } = await supabase.from('sacco_members')
+        .select('*', { count: 'exact' })
+        .eq('admin_id', adminId).order('created_at', { ascending: false })
+        .limit(ROSTER_CEILING);
       setMembers(data || []);
+      setMembersTruncated((count || 0) > ROSTER_CEILING);
     } catch (_) {}
   }, []);
 
@@ -168,12 +239,36 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  /**
+   * The share register, in full.
+   *
+   * Like the member roster this is a DIMENSION table — one row per member, so
+   * bounded by the size of the sacco rather than by its trading history — and
+   * the whole module treats it as a lookup: `shares.find(s => s.member_id ===
+   * x)` resolves a holding in a dozen places.
+   *
+   * Capping it did not merely hide rows, it corrupted the register:
+   *
+   *   • saveShares() looked up the member's existing holding here. Past the cap
+   *     it found none and INSERTED a second sacco_shares row for a member who
+   *     already had one, after which every find() picked one of the two
+   *     arbitrarily and every total double-counted them.
+   *   • approveTransfer() resolved both sides of a trade here. A seller past
+   *     the cap resolved to undefined, so the debit was skipped while the buyer
+   *     was still credited — shares created out of nothing.
+   *   • The single-member ownership cap in CompliancePanel simply never saw
+   *     those members, so a breach could not be flagged.
+   *
+   * None of that surfaced an error, which is why it has to be the whole table.
+   */
   const fetchShares = useCallback(async () => {
     try {
       const adminId = await getAdminId();
-      const { data } = await supabase.from('sacco_shares')
-        .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId).limit(LIST_CAP);
+      const { data, count } = await supabase.from('sacco_shares')
+        .select(`*, ${MEMBER_JOIN}`, { count: 'exact' })
+        .eq('admin_id', adminId).limit(ROSTER_CEILING);
       setShares(data || []);
+      setSharesTruncated((count || 0) > ROSTER_CEILING);
     } catch (_) {}
   }, []);
 
@@ -215,6 +310,35 @@ export const SaccoDashboardProvider = ({ children }) => {
       const { data } = await supabase.from('sacco_share_settings').select('*')
         .eq('admin_id', adminId).limit(1).maybeSingle();
       setShareSettings(data);
+    } catch (_) {}
+  }, []);
+
+  // How much of their own security a member may stand behind. Absent until the
+  // guarantees migration is applied — every consumer treats null as "the table
+  // defaults", which is exactly what the server falls back to.
+  const fetchGuaranteeSettings = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_guarantee_settings').select('*')
+        .eq('admin_id', adminId).limit(1).maybeSingle();
+      setGuaranteeSettings(data);
+    } catch (_) {}
+  }, []);
+
+  // The guarantee register — who is standing behind whose borrowing, and how
+  // far each agreement has got. Read whole rather than paged: a society's open
+  // guarantees are bounded by its live loans, and the Loans tab resolves the
+  // guarantors of a loan out of this array.
+  const fetchGuarantees = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_loan_guarantees')
+        .select(`*,
+          borrower:sacco_members!borrower_member_id(id, full_name, member_no, email),
+          guarantor:sacco_members!guarantor_member_id(id, full_name, member_no, email),
+          loan:sacco_loans(id, principal, annual_interest_rate, term_months, status, purpose)`)
+        .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(LIST_CAP);
+      setGuarantees(data || []);
     } catch (_) {}
   }, []);
 
@@ -264,6 +388,34 @@ export const SaccoDashboardProvider = ({ children }) => {
       const { data } = await supabase.from('sacco_share_audit').select('*')
         .eq('admin_id', adminId).order('created_at', { ascending: false }).limit(400);
       setShareAudit(data || []);
+    } catch (_) {}
+  }, []);
+
+  // ── Withholding register ──────────────────────────────────────────────────
+  // The register is a DIMENSION of the share book, not a ledger: the holdings
+  // table, the marketplace and the overview all resolve "is any of this
+  // member's stake withheld?" out of this array, so it is fetched whole. It is
+  // bounded by how many holds a society has open, which is small.
+  const fetchWithholdings = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data, count } = await supabase.from('sacco_share_withholdings')
+        .select(`*, ${MEMBER_JOIN}`, { count: 'exact' }).eq('admin_id', adminId)
+        .order('created_at', { ascending: false }).limit(ROSTER_CEILING);
+      setWithholdings(data || []);
+      setWithholdingsTruncated((count || 0) > ROSTER_CEILING);
+    } catch (_) {}
+  }, []);
+
+  // The history behind the register. A ledger, so it is capped — the per-record
+  // timeline in the panel reads from this same array, newest first.
+  const fetchWithholdingEvents = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_share_withholding_events')
+        .select(`*, ${MEMBER_JOIN}`).eq('admin_id', adminId)
+        .order('created_at', { ascending: false }).limit(1000);
+      setWithholdingEvents(data || []);
     } catch (_) {}
   }, []);
 
@@ -385,8 +537,9 @@ export const SaccoDashboardProvider = ({ children }) => {
       fetchTransfers(), fetchTreasury(), fetchSharePrices(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(),
       fetchElectionVoters(), fetchElectionAudit(),
-      fetchShareSettings(), fetchShareTxns(), fetchCertificates(),
+      fetchShareSettings(), fetchGuaranteeSettings(), fetchGuarantees(), fetchShareTxns(), fetchCertificates(),
       fetchDividends(), fetchDividendAllocations(), fetchShareAudit(),
+      fetchWithholdings(), fetchWithholdingEvents(),
     ]);
     hasLoaded.current = true;
     setLoading(false);
@@ -397,8 +550,9 @@ export const SaccoDashboardProvider = ({ children }) => {
     fetchTransfers, fetchTreasury, fetchSharePrices, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
     fetchElections, fetchElectionPositions, fetchElectionCandidates,
     fetchElectionVoters, fetchElectionAudit,
-    fetchShareSettings, fetchShareTxns, fetchCertificates,
+    fetchShareSettings, fetchGuaranteeSettings, fetchGuarantees, fetchShareTxns, fetchCertificates,
     fetchDividends, fetchDividendAllocations, fetchShareAudit,
+    fetchWithholdings, fetchWithholdingEvents,
   ]);
 
   // Everything the shares screens re-read after a trade. Kept off fetchAll so a
@@ -406,11 +560,12 @@ export const SaccoDashboardProvider = ({ children }) => {
   const refreshShares = useCallback(async () => {
     await Promise.all([
       fetchShares(), fetchListings(), fetchTransfers(), fetchTreasury(),
-      fetchShareSettings(), fetchShareTxns(), fetchCertificates(), fetchShareAudit(),
-      fetchStatsRow(),
+      fetchShareSettings(), fetchGuaranteeSettings(), fetchShareTxns(), fetchCertificates(), fetchShareAudit(),
+      fetchWithholdings(), fetchWithholdingEvents(), fetchStatsRow(),
     ]);
   }, [fetchStatsRow, fetchShares, fetchListings, fetchTransfers, fetchTreasury,
-      fetchShareSettings, fetchShareTxns, fetchCertificates, fetchShareAudit]);
+      fetchShareSettings, fetchGuaranteeSettings, fetchShareTxns, fetchCertificates, fetchShareAudit,
+      fetchWithholdings, fetchWithholdingEvents]);
 
   const refreshDividends = useCallback(async () => {
     await Promise.all([fetchDividends(), fetchDividendAllocations(), fetchShares(), fetchShareTxns()]);
@@ -431,9 +586,8 @@ export const SaccoDashboardProvider = ({ children }) => {
 
   const totalMembers  = agg('total_members',  () => members.length);
   const activeMembers = agg('active_members', () => members.filter((m) => m.status === 'active').length);
-  // 'paid' is the pre-20260801 spelling of 'completed'; both count as settled.
   const totalSavings  = agg('total_savings',  () => contributions
-    .filter((c) => ['completed', 'paid'].includes(c.status))
+    .filter(isSettledStatus)
     .reduce((s, c) => s + parseFloat(c.amount || 0), 0));
   const activeLoans     = agg('active_loans', () => loans.filter((l) => l.status === 'active').length);
   const totalShareValue = agg('total_share_value', () => shares.reduce(
@@ -464,6 +618,29 @@ export const SaccoDashboardProvider = ({ children }) => {
     // Members declaring cash/bank/card payments wait here for the treasurer.
     pendingContributions: agg('pending_contributions',
       () => contributions.filter((c) => c.status === 'pending').length),
+
+    /**
+     * Figures the Contributions and Loans tabs used to compute for themselves
+     * by reducing over the capped arrays — so a sacco past LIST_CAP was shown
+     * understated money. Same agg() contract as everything above: the server
+     * aggregate when it is there, the old array reduction when it is not, so
+     * this stays correct on a database where 20260823120000 has not yet run.
+     */
+    totalContributions:   agg('total_contributions',   () => contributions.length),
+    settledContributions: agg('settled_contributions', () => contributions.filter(isSettledStatus).length),
+    contributionsThisMonth: agg('contributions_this_month', () => contributions
+      .filter((c) => isSettledStatus(c) && sameMonthAsToday(c.period_month || c.paid_date))
+      .reduce((s, c) => s + parseFloat(c.amount || 0), 0)),
+    pendingContribAmount: agg('pending_contrib_amount', () => contributions
+      .filter((c) => c.status === 'pending')
+      .reduce((s, c) => s + parseFloat(c.amount || 0), 0)),
+    totalPenalties: agg('total_penalties', () => contributions
+      .reduce((s, c) => s + parseFloat(c.penalty_amount || 0), 0)),
+    totalLoans:   agg('total_loans',   () => loans.length),
+    pendingLoans: agg('pending_loans', () => loans.filter((l) => l.status === 'pending').length),
+    activeLoanPrincipal: agg('active_loan_principal', () => loans
+      .filter((l) => l.status === 'active')
+      .reduce((s, l) => s + parseFloat(l.principal || 0), 0)),
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -869,6 +1046,15 @@ export const SaccoDashboardProvider = ({ children }) => {
     return data;
   }, [rpc, fetchShareSettings]);
 
+  // The society's guarantee policy. Patched column by column server-side, and
+  // re-read after — the RPC creates the row on first save, so the screen has to
+  // pick up an id it did not have.
+  const saveGuaranteeSettings = useCallback(async (patch) => {
+    const data = await rpc('sacco_guarantee_save_settings', { p_patch: patch });
+    await fetchGuaranteeSettings();
+    return data;
+  }, [rpc, fetchGuaranteeSettings]);
+
   const setTradingSuspended = useCallback(async (suspended, reason) => {
     const data = await rpc('sacco_share_set_trading', { p_suspended: suspended, p_reason: reason || null });
     await Promise.all([fetchShareSettings(), fetchShareAudit()]);
@@ -905,6 +1091,56 @@ export const SaccoDashboardProvider = ({ children }) => {
     await refreshShares();
     return data;
   }, [rpc, refreshShares]);
+
+  // ── Withholding register ──
+  // The society holds a member's shares back, sells them on its own market to
+  // recover what is owed, or gives them back. The engine keeps the holding's
+  // withheld counter in step, so every refresh here goes through refreshShares
+  // rather than re-reading the register alone.
+  const withholdShares = useCallback(async ({ member_id, shares: qty, reason_type, reason, reference, notes }) => {
+    const data = await rpc('sacco_share_withhold', {
+      p_member_id: member_id,
+      p_shares: parseInt(qty, 10) || 0,
+      p_reason_type: reason_type || 'other',
+      p_reason: reason || null,
+      p_reference: reference || null,
+      p_notes: notes || null,
+    });
+    await refreshShares();
+    return data;
+  }, [rpc, refreshShares]);
+
+  // A blank quantity releases everything still held — the common case when a
+  // loan is cleared or a dispute ends.
+  const releaseWithholding = useCallback(async (withholding, { shares: qty, reason } = {}) => {
+    const data = await rpc('sacco_share_withholding_release', {
+      p_id: withholding.id,
+      p_shares: qty === '' || qty == null ? null : (parseInt(qty, 10) || 0),
+      p_reason: reason || null,
+    });
+    await refreshShares();
+    return data;
+  }, [rpc, refreshShares]);
+
+  // Put withheld shares on the internal market. A blank price takes the
+  // society's published market value; a blank quantity offers everything held.
+  const listWithheldShares = useCallback(async (withholding, { shares: qty, price, expiry_date } = {}) => {
+    const data = await rpc('sacco_share_withholding_list', {
+      p_id: withholding.id,
+      p_shares: qty === '' || qty == null ? null : (parseInt(qty, 10) || 0),
+      p_price: price === '' || price == null ? null : parseFloat(price),
+      p_expiry: expiry_date || null,
+    });
+    await refreshShares();
+    return data;
+  }, [rpc, refreshShares]);
+
+  // Totals straight from the database, so the stat cards agree with the
+  // register even when the browser is holding a capped or stale array.
+  const getWithholdingSummary = useCallback(async () => {
+    const data = await rpc('sacco_share_withholding_summary');
+    return Array.isArray(data) ? data[0] || null : data;
+  }, [rpc]);
 
   // ── Order book ──
   const placeOrder = useCallback(async ({ side, shares: qty, price_per_share, expiry_date, member_id, as_treasury }) => {
@@ -991,6 +1227,22 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchCertificates();
     return data;
   }, [rpc, saccoId, fetchCertificates]);
+
+  /**
+   * The platform-wide serial for a certificate, minting one if it has none.
+   *
+   * Every certificate issued since 20260901140000 gets its serial from the
+   * engine, and that migration backfilled the register — but a society whose
+   * rows were written some other way (a restore, a hand-inserted holding) can
+   * still turn up without one, and a certificate cannot go out unverifiable.
+   * The RPC is idempotent, so calling it on a serialised certificate is free.
+   */
+  const ensureCertificateSerial = useCallback(async (certificateId) => {
+    if (!certificateId) return null;
+    const serial = await rpc('sacco_share_certificate_serial', { p_certificate_id: certificateId });
+    if (serial) await fetchCertificates();
+    return serial;
+  }, [rpc, fetchCertificates]);
 
   const expireOrders = useCallback(async () => {
     try {
@@ -1361,6 +1613,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     hasLoaded.current = false;
     setSacco(null);
     setMembers([]);
+    setMembersTruncated(false);
     setContributions([]);
     setContributionTypes([]);
     setContributionAudit([]);
@@ -1368,6 +1621,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     setLoans([]);
     setSchedules([]);
     setShares([]);
+    setSharesTruncated(false);
     setSharePrices([]);
     setListings([]);
     setTransfers([]);
@@ -1378,6 +1632,9 @@ export const SaccoDashboardProvider = ({ children }) => {
     setDividends([]);
     setDividendAllocations([]);
     setShareAudit([]);
+    setWithholdings([]);
+    setWithholdingEvents([]);
+    setWithholdingsTruncated(false);
     setMotions([]);
     setVotes([]);
     setElections([]);
@@ -1407,6 +1664,9 @@ export const SaccoDashboardProvider = ({ children }) => {
       mk('members', 'sacco_members', () => { fetchMembers(); fetchStatsRow(); }),
       mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionAudit(); fetchStatsRow(); }),
       mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); fetchStatsRow(); }),
+      // A guarantor answering in their own portal has to reach the loans desk
+      // without a reload — an officer is often on the phone to the borrower.
+      mk('guarantees', 'sacco_loan_guarantees', fetchGuarantees),
       mk('shares', 'sacco_shares', () => { fetchShares(); fetchStatsRow(); }),
       mk('share_prices', 'sacco_share_prices', fetchSharePrices),
       // The order book has to move under the admin's feet as members trade.
@@ -1414,6 +1674,10 @@ export const SaccoDashboardProvider = ({ children }) => {
       mk('share_transfers', 'sacco_share_transfers', () => { fetchTransfers(); fetchShareTxns(); }),
       mk('share_treasury', 'sacco_share_treasury', fetchTreasury),
       mk('share_certs', 'sacco_share_certificates', fetchCertificates),
+      // Withheld shares are a live restriction on trading, so the register and
+      // its history follow the order book rather than waiting for a reload.
+      mk('withholdings', 'sacco_share_withholdings', () => { fetchWithholdings(); fetchShares(); }),
+      mk('withhold_events', 'sacco_share_withholding_events', fetchWithholdingEvents),
       mk('dividends', 'sacco_dividend_declarations', fetchDividends),
       mk('dividend_allocs', 'sacco_dividend_allocations', fetchDividendAllocations),
       mk('motions', 'sacco_motions', () => { fetchMotions(); fetchStatsRow(); }),
@@ -1431,16 +1695,18 @@ export const SaccoDashboardProvider = ({ children }) => {
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
-    sacco, members, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,
-    shares, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
+    sacco, members, membersTruncated, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,
+    shares, sharesTruncated, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
     currentMarketValue, marketCap, totalSharesHeld, totalSharesIssued, treasuryShares,
-    shareSettings, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
+    shareSettings, guaranteeSettings, guarantees, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
+    withholdings, withholdingEvents, withholdingsTruncated,
     elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     stats, loading, connectionStatus,
     refetch: fetchAll,
     // Refresh the members list WITHOUT flipping the dashboard into its loading
     // skeleton (fetchAll would unmount the active tab and kill open modals).
     refreshMembers: fetchMembers,
+    refreshGuarantees: fetchGuarantees,
     addMember, updateMember, recordContribution,
     approveContribution, reverseContribution, editContribution,
     getCollections, getDefaulters, getMemberContributionStats,
@@ -1450,11 +1716,12 @@ export const SaccoDashboardProvider = ({ children }) => {
     saveTreasury, treasuryBuyBack,
     // Share engine
     refreshShares, refreshDividends,
-    saveShareSettings, setTradingSuspended,
+    saveShareSettings, saveGuaranteeSettings, setTradingSuspended,
     issueShares, retireShares, adjustTreasury, freezeMember,
+    withholdShares, releaseWithholding, listWithheldShares, getWithholdingSummary,
     placeOrder, updateOrder, cancelOrder, executeOrder,
     approveShareTransfer, rejectShareTransfer, reverseTrade, directTransfer,
-    reissueCertificate, expireOrders,
+    reissueCertificate, ensureCertificateSerial, expireOrders,
     declareDividend, calculateDividend, payDividend, cancelDividend,
     getShareRegister, getShareAlerts,
     createMotion, secondMotion, openVoting, castVote, publishResults, notifyMotion,

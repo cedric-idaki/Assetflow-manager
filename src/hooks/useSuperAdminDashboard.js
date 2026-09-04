@@ -1,7 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '/src/lib/supabase.js';
+import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { emailLoginCredentials } from '../services/credentialsEmailService';
 import { auditLogsService } from '../services/supabaseService';
+
+// Module-level counter, not Date.now(): a remount can land inside the same
+// millisecond as the teardown before it. supabase.channel(name) RETURNS AN
+// EXISTING channel for a name already in use, so the second run would get the
+// first run's already-subscribed channel and .on() throws
+// "cannot add `postgres_changes` callbacks ... after `subscribe()`", which the
+// error boundary renders as a blank "Something went wrong" page.
+// Same fix and same reasoning as useAdminDashboard and useCrmOversight.
+let _superAdminDashboardChannelSeq = 0;
 
 export const useSuperAdminDashboard = () => {
   const [stats, setStats] = useState({
@@ -268,59 +278,74 @@ export const useSuperAdminDashboard = () => {
     }
   }, []);
 
-  const approveWithdrawalRequest = useCallback(async (requestId) => {
+  /**
+   * Settle one withdrawal request — the shared body of approve and reject.
+   *
+   * Two things here are load-bearing, and both exist because this releases
+   * money and a false "done" is worse than a visible failure:
+   *
+   *   `.select('id')`. Without it PostgREST answers an UPDATE with 204 No
+   *   Content and `error` stays NULL EVEN WHEN THE STATEMENT MATCHED NO ROW.
+   *   A row-level-security policy that refuses the write is therefore
+   *   indistinguishable from a successful one, and the caller would report the
+   *   money as released while nothing changed. Asking for the affected ids is
+   *   what turns a silent denial back into something detectable. It is not
+   *   hypothetical: until 20260904120000 this table had no UPDATE policy at
+   *   all, so EVERY approval took that path.
+   *
+   *   Throwing rather than returning when the row is unknown. This used to be
+   *   a bare `return`, so clicking Approve on a request that had just been
+   *   settled in another tab did nothing at all and said nothing about it.
+   *
+   * Callers must surface what this throws — see WithdrawalRequestsTab, which
+   * is where the message reaches the person who clicked.
+   */
+  const settleWithdrawalRequest = useCallback(async (requestId, decision) => {
     const request = withdrawalRequests.find(r => r.id === requestId);
-    if (!request) return;
+    if (!request) {
+      throw new Error('That withdrawal request is no longer in the queue. Refresh and try again.');
+    }
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('agent_wallets')
       .update({
-        status: 'approved',
+        status: decision,
         reviewed_at: new Date().toISOString(),
         reviewed_by: 'super_admin',
       })
-      .eq('id', requestId);
+      .eq('id', requestId)
+      .select('id');
 
     if (error) throw error;
 
+    if (!data || data.length === 0) {
+      throw new Error(
+        `The withdrawal was not ${decision} — the database accepted the request but changed no row. ` +
+        'This usually means row-level security refused the update. Nothing has been paid out.'
+      );
+    }
+
     await auditLogsService.log(
-      'approve',
+      decision === 'approved' ? 'approve' : 'reject',
       'agent_wallets',
-      `Super admin approved withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
+      `Super admin ${decision} withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
       requestId,
       null,
-      { amount: request.total_withdrawn, agent_id: request.agent_id, status: 'approved' }
+      { amount: request.total_withdrawn, agent_id: request.agent_id, status: decision }
     );
 
     await fetchWithdrawalRequests();
   }, [withdrawalRequests, fetchWithdrawalRequests]);
 
-  const rejectWithdrawalRequest = useCallback(async (requestId) => {
-    const request = withdrawalRequests.find(r => r.id === requestId);
-    if (!request) return;
+  const approveWithdrawalRequest = useCallback(
+    (requestId) => settleWithdrawalRequest(requestId, 'approved'),
+    [settleWithdrawalRequest],
+  );
 
-    const { error } = await supabase
-      .from('agent_wallets')
-      .update({
-        status: 'rejected',
-        reviewed_at: new Date().toISOString(),
-        reviewed_by: 'super_admin',
-      })
-      .eq('id', requestId);
-
-    if (error) throw error;
-
-    await auditLogsService.log(
-      'reject',
-      'agent_wallets',
-      `Super admin rejected withdrawal request of KES ${request.total_withdrawn || 0} for agent ${request.agent?.agent_code || 'Unknown agent'}`,
-      requestId,
-      null,
-      { amount: request.total_withdrawn, agent_id: request.agent_id, status: 'rejected' }
-    );
-
-    await fetchWithdrawalRequests();
-  }, [withdrawalRequests, fetchWithdrawalRequests]);
+  const rejectWithdrawalRequest = useCallback(
+    (requestId) => settleWithdrawalRequest(requestId, 'rejected'),
+    [settleWithdrawalRequest],
+  );
 
   const fetchContracts = useCallback(async () => {
     const adminId = await getAdminId();
@@ -538,44 +563,68 @@ export const useSuperAdminDashboard = () => {
     setLoading(false);
   }, [fetchStats, fetchAssetBreakdown, fetchCompanyAnalytics, fetchAuditTrail, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchContracts, fetchClients, fetchAssistRejections, fetchWithdrawalRequests]);
 
-  useEffect(() => {
-    fetchAll();
+  const resetState = useCallback(() => {
+    setStats({
+      activeAccounts: 0, inactiveAccounts: 0, totalValue: 0,
+      totalSales: 0, totalSalesUsers: 0, pendingRegistrations: 0, totalTransactions: 0,
+    });
+    setAssetBreakdown([]);
+    setCompanyAnalytics([]);
+    setAuditTrail([]);
+    setSalesAgents([]);
+    setSalesTarget({ target: 0, achieved: 0, percentage: 0 });
+    setStaffUsers([]);
+    setContracts([]);
+    setClients([]);
+    setWithdrawalRequests([]);
+    setAssistRejections([]);
+    setLoading(true);
+    setConnectionStatus('connecting');
+  }, []);
 
-    const auditCh = supabase.channel(`sa_audit_${Date.now()}`)
+  // ── Initial load — once per signed-in user, never while signed out ──────────
+  const userId = useAuthScopedLoader(fetchAll, resetState);
+
+  // ── Realtime ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!userId) return undefined;
+    const t = ++_superAdminDashboardChannelSeq;
+
+    const auditCh = supabase.channel(`sa_audit_${t}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs' }, fetchAuditTrail)
       .subscribe(s => {
         if (s === 'SUBSCRIBED') setConnectionStatus('connected');
         if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') setConnectionStatus('disconnected');
       });
 
-    const clientsCh = supabase.channel(`sa_clients_${Date.now()}`)
+    const clientsCh = supabase.channel(`sa_clients_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, fetchStats)
       .subscribe();
 
-    const paymentsCh = supabase.channel(`sa_payments_${Date.now()}`)
+    const paymentsCh = supabase.channel(`sa_payments_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
         fetchStats();
         fetchCompanyAnalytics();
       })
       .subscribe();
 
-    const agentsCh = supabase.channel(`sa_agents_${Date.now()}`)
+    const agentsCh = supabase.channel(`sa_agents_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' }, () => {
         fetchSalesAgents();
         fetchSalesTarget();
       })
       .subscribe();
 
-    const staffCh = supabase.channel(`sa_staff_${Date.now()}`)
+    const staffCh = supabase.channel(`sa_staff_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'user_profiles' }, fetchStaffUsers)
       .subscribe();
 
     // A rejection is worth seeing when it happens, not at the next page load.
-    const assistsCh = supabase.channel(`sa_assists_${Date.now()}`)
+    const assistsCh = supabase.channel(`sa_assists_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists' }, fetchAssistRejections)
       .subscribe();
 
-    const withdrawalsCh = supabase.channel(`sa_withdrawals_${Date.now()}`)
+    const withdrawalsCh = supabase.channel(`sa_withdrawals_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_wallets' }, fetchWithdrawalRequests)
       .subscribe();
 
@@ -584,7 +633,9 @@ export const useSuperAdminDashboard = () => {
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, [fetchAll, fetchAuditTrail, fetchStats, fetchCompanyAnalytics, fetchSalesAgents, fetchSalesTarget, fetchStaffUsers, fetchAssistRejections]);
+    // Re-subscribed per user: a channel opened for the previous session would
+    // otherwise keep pushing refetches into the new one.
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     stats, assetBreakdown, companyAnalytics, auditTrail,

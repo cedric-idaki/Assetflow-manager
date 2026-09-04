@@ -31,15 +31,45 @@ const configuredLevel =
 
 const currentLevel = LOG_LEVELS[configuredLevel] ?? LOG_LEVELS.warn;
 
-// Optional: hook into an external monitoring service
-// Replace this with your actual Sentry / Datadog / LogRocket integration
+// ── Monitoring sink ──────────────────────────────────────────────────────────
+// Deliberately vendor-neutral: this app ships to production with no error
+// visibility otherwise, and picking a vendor here would bury that decision in a
+// util. Two ways to receive events, checked in order:
+//
+//   1. setMonitoringHandler(fn) — explicit registration, wins over everything.
+//   2. window.Sentry — picked up automatically if the SDK is loaded, so adding
+//      Sentry requires no change to this file.
+//
+// Until one of those exists this is a no-op, exactly as before.
+let monitoringHandler = null;
+
+/**
+ * Register the sink that receives warn/error events.
+ * @param {(entry: object) => void | null} fn - pass null to unregister.
+ */
+export const setMonitoringHandler = (fn) => {
+  monitoringHandler = typeof fn === 'function' ? fn : null;
+};
+
 const sendToMonitoring = (level, message, context) => {
   if (typeof window === 'undefined') return;
+  // Only failures are worth forwarding; debug/info would be noise and cost.
+  if (level !== 'error' && level !== 'warn') return;
 
-  // Example Sentry integration (uncomment when Sentry is installed):
-  // if (level === 'error' && window.Sentry) {
-  //   window.Sentry.captureMessage(message, { level, extra: context });
-  // }
+  // A broken or missing monitoring sink must never take the app down with it —
+  // this runs inside every logger.error call, including the one in the error
+  // boundary, so a throw here would turn a handled error into a crash loop.
+  try {
+    if (monitoringHandler) {
+      monitoringHandler(formatEntry(level, message, context));
+      return;
+    }
+    if (typeof window.Sentry?.captureMessage === 'function') {
+      window.Sentry.captureMessage(message, { level, extra: context });
+    }
+  } catch {
+    /* swallowed on purpose — see above */
+  }
 };
 
 const formatEntry = (level, message, context) => ({

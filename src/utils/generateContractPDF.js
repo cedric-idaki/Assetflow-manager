@@ -9,6 +9,8 @@
  *   await generateContractPDF({ sale, client, asset, company, schedule });
  */
 
+import { loadJsPDF } from './jsPdfLoader';
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (n) =>
   'KES ' + (parseFloat(n) || 0).toLocaleString('en-KE', {
@@ -32,23 +34,6 @@ const PRICING_LABELS = {
   zero_deposit: 'Zero-Deposit Hire Purchase Agreement',
   lease_to_own: 'Lease-to-Own Agreement',
 };
-
-// ── Load jsPDF dynamically ────────────────────────────────────────────────────
-const loadJsPDF = () => new Promise((resolve, reject) => {
-  if (window.jspdf?.jsPDF) return resolve(window.jspdf.jsPDF);
-  if (document.getElementById('jspdf-script')) {
-    const wait = setInterval(() => {
-      if (window.jspdf?.jsPDF) { clearInterval(wait); resolve(window.jspdf.jsPDF); }
-    }, 100);
-    return;
-  }
-  const script = document.createElement('script');
-  script.id = 'jspdf-script';
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-  script.onload = () => resolve(window.jspdf.jsPDF);
-  script.onerror = () => reject(new Error('Failed to load jsPDF'));
-  document.head.appendChild(script);
-});
 
 // ── Main generator ────────────────────────────────────────────────────────────
 export const generateContractPDF = async ({ sale, client, asset, company, schedule }) => {
