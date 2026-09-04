@@ -5,22 +5,25 @@ import Icon from '../../components/AppIcon';
 import CertificateVerifier from '../../components/CertificateVerifier';
 
 /**
- * The certificate verification desk.
+ * The certificate verification desk — sacco portals only (see Routes.jsx).
  *
- * One place to answer "is this piece of paper real", for every kind of
- * certificate the platform issues. Reachable as /verify-certificate, or with the
- * serial in the path (/verify-certificate/ARA-SHR-2026-000412-7QK3) so a serial
- * can be sent as a link.
+ * One place to answer "is this piece of paper real". Reachable as
+ * /verify-certificate, or with the serial in the path
+ * (/verify-certificate/ARA-SHR-2026-000412-7QK3) so a serial can be sent as a
+ * link.
  *
- * Not scoped to the reader's own organisation, on purpose: the person holding a
- * certificate is usually not from the organisation that issued it. See
+ * The lookup is not scoped to the reader's own society, on purpose: the person
+ * holding a certificate is usually not from the one that issued it. See
  * system_certificate_verify() for what that does and does not disclose.
+ *
+ * Any serial the platform has minted resolves here, including the ARA-STL
+ * settlement serials that company tenants issue — those are just not advertised
+ * below, because nobody who can reach this page issues one.
  */
 
 const KINDS = [
-  { icon: 'Award',      title: 'Share certificates',      body: 'Issued by a society whenever a member’s holding changes. Serials begin ARA-SHR.' },
-  { icon: 'FileCheck',  title: 'Settlement certificates', body: 'Full settlement and ownership transfer of a financed asset. Serials begin ARA-STL.' },
-  { icon: 'PenTool',    title: 'Signature certificates',  body: 'The certificate page appended to every sealed e-signature document. Serials begin ARA-ESG.' },
+  { icon: 'Award',   title: 'Share certificates',     body: 'Issued by the society whenever a member’s holding changes. Serials begin ARA-SHR.' },
+  { icon: 'PenTool', title: 'Signature certificates', body: 'The certificate page appended to every sealed e-signature document. Serials begin ARA-ESG.' },
 ];
 
 const VerifyCertificatePage = () => {
@@ -50,7 +53,7 @@ const VerifyCertificatePage = () => {
           <CertificateVerifier initialSerial={serial || ''} />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           {KINDS.map(({ icon, title, body }) => (
             <div key={title} className="bg-card border border-border rounded-xl p-4">
               <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center mb-3">

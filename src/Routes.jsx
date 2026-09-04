@@ -77,6 +77,9 @@ const STAFF_ROLES   = ['super_admin', 'admin', 'director', 'accountant', 'collec
 // internal staff roles) may access the renewal management screen.
 const KYC_RENEWAL_ROLES = STAFF_ROLES.filter((r) => r !== 'admin');
 const ALL_INTERNAL  = ['super_admin', 'admin', 'director', 'accountant', 'collections_officer', 'manager', 'finance', 'operations', 'sales_agent', 'sales', 'sacco_admin'];
+// The sacco side: both society portals plus the platform operator, matching how
+// /sacco-dashboard is gated. Used by the certificate verification desk.
+const SACCO_ROLES   = ['sacco_admin', 'sacco_member', 'super_admin'];
 
 /**
  * Routes the Play Store app must not show, because they sell a subscription.
@@ -330,20 +333,33 @@ const Routes = () => {
             </ProtectedRoute>
           } />
 
-          {/* ── Certificate verification desk — any authenticated user ───
-              Not role-gated and not tenant-scoped: whoever is handed a
-              certificate has to be able to check it, and they are usually not
-              of the organisation that issued it. system_certificate_verify()
-              returns only what is printed on the face they are holding, and
-              logs every check. The optional :serial makes a serial linkable. */}
+          {/* ── Certificate verification desk — sacco portals only ───────
+              Share certificates are the ones a society hands over and is later
+              asked to vouch for, so the desk belongs to the sacco side. Company
+              tenants do not get it. super_admin is included for the same reason
+              /sacco-dashboard includes them: they are the platform operator,
+              not a tenant.
+
+              Serials are still minted for settlement and e-signature
+              certificates — the SignNow signing flow depends on them — they
+              just have no desk to be looked up at outside the sacco portals.
+
+              system_certificate_verify() itself stays un-scoped by tenant:
+              whoever is handed a certificate is usually not of the society that
+              issued it, and it returns only what is printed on the face they
+              are holding. The optional :serial makes a serial linkable. */}
           <Route path="/verify-certificate" element={
             <ProtectedRoute>
-              <VerifyCertificate />
+              <RoleGuard allowedRoles={SACCO_ROLES}>
+                <VerifyCertificate />
+              </RoleGuard>
             </ProtectedRoute>
           } />
           <Route path="/verify-certificate/:serial" element={
             <ProtectedRoute>
-              <VerifyCertificate />
+              <RoleGuard allowedRoles={SACCO_ROLES}>
+                <VerifyCertificate />
+              </RoleGuard>
             </ProtectedRoute>
           } />
 
