@@ -45,6 +45,10 @@ export const SaccoMemberProvider = ({ children }) => {
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
   const [shares,        setShares]        = useState([]);
+  // What this member may borrow, straight from the server
+  // (20260905180000_sacco_borrowing_multiple). Null until that migration is
+  // applied, or for a login with no linked member row.
+  const [borrowingCapacity, setBorrowingCapacity] = useState(null);
   const [listings,      setListings]      = useState([]);
   const [transfers,     setTransfers]     = useState([]);
   const [sharePrices,   setSharePrices]   = useState([]);
@@ -77,12 +81,17 @@ export const SaccoMemberProvider = ({ children }) => {
   const [loading,       setLoading]       = useState(true);
 
   const channelsRef = useRef([]);
+  // The member row, readable from a callback that was created before it
+  // arrived. The realtime effect below subscribes once, so its callbacks close
+  // over the fetchers as they were at mount — when `me` was still null.
+  const meRef = useRef(null);
 
   // ── Fetchers ──────────────────────────────────────────────────────────────
   const fetchMe = useCallback(async () => {
     if (!user?.id) return null;
     const { data } = await supabase.from('sacco_members').select('*')
       .eq('user_id', user.id).maybeSingle();
+    meRef.current = data || null;
     setMe(data);
     return data;
   }, [user?.id]);
@@ -145,6 +154,33 @@ export const SaccoMemberProvider = ({ children }) => {
   const fetchShares = useCallback(async () => {
     const { data } = await supabase.from('sacco_shares').select('*');
     setShares(data || []);
+  }, []);
+
+  /**
+   * What this member may borrow (20260905180000_sacco_borrowing_multiple).
+   *
+   * Read from the server rather than worked out here, because the same
+   * function is what the insert trigger judges an application by. Deriving a
+   * second copy from `shares` and `contributions` in the browser would give
+   * the member a figure the server does not agree with — and the server's is
+   * the one that decides.
+   *
+   * Takes the member row so fetchAll can call it before `me` has settled,
+   * and falls back to meRef rather than the `me` state so the identity stays
+   * stable for the realtime subscriptions.
+   *
+   * Stays null for a society whose migration is not applied yet; every
+   * consumer treats null as "no ceiling to show", which is what was true
+   * before this feature existed.
+   */
+  const fetchBorrowingCapacity = useCallback(async (meRow) => {
+    const member = meRow || meRef.current;
+    if (!member?.id || !member?.sacco_id) { setBorrowingCapacity(null); return; }
+    const { data, error } = await supabase.rpc('sacco_member_borrowing_capacity', {
+      p_sacco_id: member.sacco_id, p_member_id: member.id,
+    });
+    if (error) { setBorrowingCapacity(null); return; }
+    setBorrowingCapacity((Array.isArray(data) ? data[0] : data) || null);
   }, []);
 
   const fetchListings = useCallback(async () => {
@@ -314,7 +350,7 @@ export const SaccoMemberProvider = ({ children }) => {
       fetchMotions(), fetchVotes(), fetchDocuments(), fetchContracts(meRow?.id),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(), fetchMyVoterRows(),
       fetchShareSettings(), fetchShareTxns(), fetchMyCertificates(), fetchMyDividends(), fetchTreasury(),
-      fetchMyWithholdings(), fetchGuarantees(),
+      fetchMyWithholdings(), fetchGuarantees(), fetchBorrowingCapacity(meRow),
     ]);
     setLoading(false);
   }, [
@@ -323,7 +359,7 @@ export const SaccoMemberProvider = ({ children }) => {
     fetchMotions, fetchVotes, fetchDocuments, fetchContracts,
     fetchElections, fetchElectionPositions, fetchElectionCandidates, fetchMyVoterRows,
     fetchShareSettings, fetchShareTxns, fetchMyCertificates, fetchMyDividends, fetchTreasury,
-    fetchMyWithholdings, fetchGuarantees,
+    fetchMyWithholdings, fetchGuarantees, fetchBorrowingCapacity,
   ]);
 
   // ── Derived stats (portal home mini-cards, BRS 5.1) ───────────────────────
@@ -458,8 +494,10 @@ export const SaccoMemberProvider = ({ children }) => {
       purpose: form.purpose || '', status: 'pending',
     });
     if (error) throw error;
-    await fetchLoans();
-  }, [me, fetchLoans]);
+    // The new application is committed against the ceiling from this moment,
+    // so the figure on the screen has to move with it.
+    await Promise.all([fetchLoans(), fetchBorrowingCapacity()]);
+  }, [me, fetchLoans, fetchBorrowingCapacity]);
 
   // ── Share market ──────────────────────────────────────────────────────────
   // Members no longer write the order book directly: every action goes through
@@ -866,10 +904,11 @@ export const SaccoMemberProvider = ({ children }) => {
       .subscribe();
 
     const chs = [
-      mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionStats(); }),
-      mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); }),
-      mk('shares', 'sacco_shares', fetchShares),
-      mk('share_prices', 'sacco_share_prices', fetchSharePrices),
+      mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionStats(); fetchBorrowingCapacity(); }),
+      // A decision on a loan changes what is left of the ceiling.
+      mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); fetchBorrowingCapacity(); }),
+      mk('shares', 'sacco_shares', () => { fetchShares(); fetchBorrowingCapacity(); }),
+      mk('share_prices', 'sacco_share_prices', () => { fetchSharePrices(); fetchBorrowingCapacity(); }),
       mk('listings', 'sacco_share_listings', fetchListings),
       // A live market: an order taken by someone else must vanish immediately.
       mk('share_transfers', 'sacco_share_transfers', () => { fetchTransfers(); fetchShareTxns(); }),
@@ -894,7 +933,7 @@ export const SaccoMemberProvider = ({ children }) => {
 
   const value = {
     me, sacco, members, contributions, contributionStats, contributionTypes, loanProducts, loans, schedules,
-    shares: myShares, sharePrices, currentMarketValue, saccoTotals, listings, transfers, motions, votes, documents, contracts,
+    shares: myShares, borrowingCapacity, sharePrices, currentMarketValue, saccoTotals, listings, transfers, motions, votes, documents, contracts,
     elections, electionPositions, electionCandidates, myVoterRows,
     shareSettings, shareTxns, certificates, dividends, dividendAllocations, treasury,
     myWithholdings, myWithholdingEvents,

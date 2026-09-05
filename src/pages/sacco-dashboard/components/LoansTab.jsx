@@ -7,6 +7,7 @@ import { generateSchedule, AMORTIZATION_METHODS } from '../../../utils/saccoAmor
 import Pagination from '../../../components/ui/Pagination';
 import { usePagedQuery } from '../../../hooks/usePagedQuery';
 import { buildLoanRepaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
+import BorrowingPolicyCard from './BorrowingPolicyCard';
 import GuaranteePolicyCard from './GuaranteePolicyCard';
 import GuaranteeRegisterCard from './GuaranteeRegisterCard';
 import {
@@ -275,6 +276,9 @@ const LoansTab = ({ ctx }) => {
           </Table>
         )}
       </Card>
+
+      {/* Borrowing policy — the multiple that sets what a member may apply for */}
+      <BorrowingPolicyCard ctx={ctx} />
 
       {/* Guarantee policy — the exposure cap members are held to */}
       <GuaranteePolicyCard ctx={ctx} />

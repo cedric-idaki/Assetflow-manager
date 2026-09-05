@@ -16,10 +16,119 @@ const METHOD_LABELS = {
   balloon:          'Balloon payment',
 };
 
+/**
+ * The society's borrowing multiple, as it applies to me
+ * (20260905180000_sacco_borrowing_multiple).
+ *
+ * Every figure here is the server's — sacco_member_borrowing_capacity() is the
+ * same function the insert trigger judges an application by, so what this
+ * panel promises and what the sacco will accept cannot drift apart. Nothing on
+ * this screen recomputes a ceiling of its own.
+ *
+ * `limit_enforced` off is the interesting case: the society has set a multiple
+ * but has not switched enforcement on, so this is guidance and an application
+ * above it still reaches the loans officer. Saying otherwise would be a lie
+ * the server would not back up.
+ */
+const num = (v) => parseFloat(v || 0) || 0;
+
+// 3.00 -> "3", 2.50 -> "2.5". A whole multiple should not read as a decimal.
+const fmtMultiple = (v) => String(num(v)).replace(/\.0+$/, '');
+
+const Figure = ({ label, value, strong }) => (
+  <div>
+    <p className="text-xs text-muted-foreground">{label}</p>
+    <p className={`${strong ? 'font-bold text-foreground' : 'font-medium text-foreground'} text-sm`}>{value}</p>
+  </div>
+);
+
+const BorrowingLimitPanel = ({ capacity, principal }) => {
+  if (!capacity) return null;
+
+  const security  = num(capacity.security);
+  const available = num(capacity.available);
+  const ceiling   = num(capacity.ceiling);
+  const committed = num(capacity.existing_exposure);
+  const enforced  = !!capacity.limit_enforced;
+  const basis     = capacity.counts_deposits ? 'shares and savings' : 'shares';
+  const asked     = num(principal);
+  const over      = asked > 0 && asked > available;
+
+  // Nothing on the register: there is no entitlement to quote, and "you may
+  // borrow KES 0" reads as a refusal rather than as "we have no record of your
+  // shares yet".
+  if (security <= 0) {
+    return (
+      <div className="p-4 rounded-xl border border-amber-200 bg-amber-50">
+        <div className="flex items-start gap-2">
+          <Icon name="AlertTriangle" size={15} color="#ca8a04" />
+          <p className="text-xs text-amber-800 leading-relaxed">
+            Your sacco lends up to <strong>{fmtMultiple(capacity.multiple)}x</strong> a member&apos;s {basis},
+            but none are recorded against your membership yet, so no limit can be worked out.
+            {enforced
+              ? ' Applications are held to this rule, so speak to your sacco before applying.'
+              : ' Your application will still be reviewed in the usual way.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const tone = over
+    ? (enforced ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50')
+    : 'border-border bg-muted/50';
+
+  return (
+    <div className={`p-4 rounded-xl border ${tone}`}>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          What you may borrow
+        </p>
+        <span className="text-xs text-muted-foreground">
+          {fmtMultiple(capacity.multiple)}x your {basis}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Figure label={capacity.counts_deposits ? 'Shares and savings' : 'Your shares'} value={KES(security)} />
+        <Figure label="Entitles you to" value={KES(ceiling)} />
+        <Figure
+          label={capacity.nets_off_loans ? 'Already borrowed' : 'Currently owed'}
+          value={KES(committed)}
+        />
+        <Figure label="Maximum eligible" value={KES(available)} strong />
+      </div>
+
+      {capacity.nets_off_loans && committed > 0 && (
+        <p className="text-xs text-muted-foreground mt-3">
+          {KES(committed)} of your {KES(ceiling)} entitlement is committed to loans you already hold.
+        </p>
+      )}
+
+      {over && (
+        <div className="flex items-start gap-2 mt-3 pt-3 border-t border-border/60">
+          <Icon name={enforced ? 'XCircle' : 'AlertTriangle'} size={14} color={enforced ? '#dc2626' : '#ca8a04'} />
+          <p className={`text-xs leading-relaxed ${enforced ? 'text-red-700' : 'text-amber-700'}`}>
+            {enforced
+              ? `You have asked for ${KES(asked)}, which is ${KES(asked - available)} above your limit. Reduce the amount to apply.`
+              : `You have asked for ${KES(asked)}, which is ${KES(asked - available)} above the usual limit. You can still apply — your sacco will decide.`}
+          </p>
+        </div>
+      )}
+
+      {!enforced && !over && (
+        <p className="text-xs text-muted-foreground mt-3">
+          This is your sacco&apos;s guide, not a hard limit — every application is reviewed.
+        </p>
+      )}
+    </div>
+  );
+};
+
 const emptyForm = { product_id: '', principal: '', term_months: '12', purpose: '' };
 
 const LoansTab = ({ ctx }) => {
-  const { me, sacco, loans, schedules, loanProducts, applyLoan, exportCSV } = ctx;
+  const { me, sacco, loans, schedules, loanProducts, borrowingCapacity, applyLoan, exportCSV } = ctx;
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -56,6 +165,14 @@ const LoansTab = ({ ctx }) => {
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
   const product = loanProducts.find((p) => p.id === form.product_id);
 
+  // The society's ceiling as the server computes it. `overLimit` only bites
+  // when the society actually enforces it — otherwise the panel advises and
+  // the application still goes through, which is what the trigger does too.
+  const maxEligible = borrowingCapacity ? parseFloat(borrowingCapacity.available || 0) || 0 : null;
+  const limitEnforced = !!borrowingCapacity?.limit_enforced;
+  const overLimit = limitEnforced && maxEligible !== null
+    && (parseFloat(form.principal) || 0) > maxEligible;
+
   // Live repayment preview (BRS FR3.1) driven by the real amortization engine.
   const preview = useMemo(() => {
     const principal = parseFloat(form.principal);
@@ -78,6 +195,10 @@ const LoansTab = ({ ctx }) => {
   const submit = async () => {
     if (!product) { toast.error('Select a loan product.'); return; }
     if (!(parseFloat(form.principal) > 0)) { toast.error('Enter the loan amount.'); return; }
+    if (overLimit) {
+      toast.error(`Your sacco lends you up to ${KES(maxEligible)}. Reduce the amount to apply.`);
+      return;
+    }
     const term = parseInt(form.term_months, 10) || 0;
     if (term <= 0) { toast.error('Enter the term in months.'); return; }
     if (product.max_term_months && term > product.max_term_months) {
@@ -117,11 +238,17 @@ const LoansTab = ({ ctx }) => {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${maxEligible === null ? 'lg:grid-cols-4' : 'lg:grid-cols-5'}`}>
         <StatCard label="Active Loans" value={activeLoans.length} icon="Banknote" tone="primary" />
         <StatCard label="Outstanding" value={KES(outstanding)} icon="TrendingDown" tone="warning" />
         <StatCard label="Applications" value={loans.filter((l) => l.status === 'pending').length} icon="Clock" tone="muted" />
         <StatCard label="Closed" value={loans.filter((l) => l.status === 'closed').length} icon="CheckCircle2" tone="success" />
+        {maxEligible !== null && (
+          <StatCard
+            label="Maximum eligible" value={KES(maxEligible)} icon="Gauge" tone="success"
+            hint={`${fmtMultiple(borrowingCapacity.multiple)}x your ${borrowingCapacity.counts_deposits ? 'shares and savings' : 'shares'}${limitEnforced ? '' : ' (guide)'}`}
+          />
+        )}
       </div>
 
       <Card
@@ -212,7 +339,9 @@ const LoansTab = ({ ctx }) => {
         title="Apply for a loan"
         footer={<>
           <GhostButton onClick={() => setOpen(false)}>Cancel</GhostButton>
-          <PrimaryButton icon="Send" onClick={submit} disabled={saving}>{saving ? 'Submitting…' : 'Submit application'}</PrimaryButton>
+          <PrimaryButton icon="Send" onClick={submit} disabled={saving || overLimit}>
+            {saving ? 'Submitting…' : 'Submit application'}
+          </PrimaryButton>
         </>}
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -233,8 +362,13 @@ const LoansTab = ({ ctx }) => {
           <Field label="Purpose"><TextInput value={form.purpose} onChange={(e) => set('purpose', e.target.value)} placeholder="School fees, business stock…" /></Field>
         </div>
 
+        {/* What the society will lend this member, before they fill the rest in */}
+        <div className="mt-5">
+          <BorrowingLimitPanel capacity={borrowingCapacity} principal={form.principal} />
+        </div>
+
         {preview && (
-          <div className="mt-5 p-4 rounded-xl border border-border bg-muted/50">
+          <div className="mt-4 p-4 rounded-xl border border-border bg-muted/50">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Repayment preview</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
               <div><p className="text-muted-foreground text-xs">First payment</p><p className="font-bold text-foreground">{KES(preview.firstPayment)}</p></div>

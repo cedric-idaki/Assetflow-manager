@@ -104,6 +104,10 @@ export const SaccoDashboardProvider = ({ children }) => {
   // (20260904160000_sacco_loan_guarantees). Null until that migration is
   // applied; the DB defaults govern either way.
   const [guaranteeSettings, setGuaranteeSettings] = useState(null);
+  // Borrowing policy — the multiple of their shares a member may borrow
+  // (20260905180000_sacco_borrowing_multiple). Null until that migration is
+  // applied; the table defaults govern either way.
+  const [borrowingSettings, setBorrowingSettings] = useState(null);
   // The guarantee register itself. Staff read every row of their own tenant;
   // the member portal reads only the two sides of each agreement.
   const [guarantees,    setGuarantees]    = useState([]);
@@ -325,6 +329,18 @@ export const SaccoDashboardProvider = ({ children }) => {
     } catch (_) {}
   }, []);
 
+  // How many times their shares a member may borrow. Absent until the
+  // borrowing migration is applied — every consumer treats null as "the table
+  // defaults", which is what the capacity RPC falls back to as well.
+  const fetchBorrowingSettings = useCallback(async () => {
+    try {
+      const adminId = await getAdminId();
+      const { data } = await supabase.from('sacco_borrowing_settings').select('*')
+        .eq('admin_id', adminId).limit(1).maybeSingle();
+      setBorrowingSettings(data);
+    } catch (_) {}
+  }, []);
+
   // The guarantee register — who is standing behind whose borrowing, and how
   // far each agreement has got. Read whole rather than paged: a society's open
   // guarantees are bounded by its live loans, and the Loans tab resolves the
@@ -537,7 +553,7 @@ export const SaccoDashboardProvider = ({ children }) => {
       fetchTransfers(), fetchTreasury(), fetchSharePrices(), fetchMotions(), fetchVotes(), fetchDocuments(), fetchInvoices(),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(),
       fetchElectionVoters(), fetchElectionAudit(),
-      fetchShareSettings(), fetchGuaranteeSettings(), fetchGuarantees(), fetchShareTxns(), fetchCertificates(),
+      fetchShareSettings(), fetchGuaranteeSettings(), fetchBorrowingSettings(), fetchGuarantees(), fetchShareTxns(), fetchCertificates(),
       fetchDividends(), fetchDividendAllocations(), fetchShareAudit(),
       fetchWithholdings(), fetchWithholdingEvents(),
     ]);
@@ -550,7 +566,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     fetchTransfers, fetchTreasury, fetchSharePrices, fetchMotions, fetchVotes, fetchDocuments, fetchInvoices,
     fetchElections, fetchElectionPositions, fetchElectionCandidates,
     fetchElectionVoters, fetchElectionAudit,
-    fetchShareSettings, fetchGuaranteeSettings, fetchGuarantees, fetchShareTxns, fetchCertificates,
+    fetchShareSettings, fetchGuaranteeSettings, fetchBorrowingSettings, fetchGuarantees, fetchShareTxns, fetchCertificates,
     fetchDividends, fetchDividendAllocations, fetchShareAudit,
     fetchWithholdings, fetchWithholdingEvents,
   ]);
@@ -1054,6 +1070,15 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchGuaranteeSettings();
     return data;
   }, [rpc, fetchGuaranteeSettings]);
+
+  // The society's borrowing multiple. Same shape as the guarantee policy: a
+  // column-by-column patch server-side, re-read after, because the RPC creates
+  // the row on first save and the screen has to pick up an id it did not have.
+  const saveBorrowingSettings = useCallback(async (patch) => {
+    const data = await rpc('sacco_borrowing_save_settings', { p_patch: patch });
+    await fetchBorrowingSettings();
+    return data;
+  }, [rpc, fetchBorrowingSettings]);
 
   const setTradingSuspended = useCallback(async (suspended, reason) => {
     const data = await rpc('sacco_share_set_trading', { p_suspended: suspended, p_reason: reason || null });
@@ -1698,7 +1723,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     sacco, members, membersTruncated, contributions, contributionTypes, contributionAudit, loanProducts, loans, schedules,
     shares, sharesTruncated, sharePrices, listings, transfers, treasury, motions, votes, documents, invoices,
     currentMarketValue, marketCap, totalSharesHeld, totalSharesIssued, treasuryShares,
-    shareSettings, guaranteeSettings, guarantees, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
+    shareSettings, guaranteeSettings, borrowingSettings, guarantees, shareTxns, certificates, dividends, dividendAllocations, shareAudit,
     withholdings, withholdingEvents, withholdingsTruncated,
     elections, electionPositions, electionCandidates, electionVoters, electionAudit,
     stats, loading, connectionStatus,
@@ -1716,7 +1741,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     saveTreasury, treasuryBuyBack,
     // Share engine
     refreshShares, refreshDividends,
-    saveShareSettings, saveGuaranteeSettings, setTradingSuspended,
+    saveShareSettings, saveGuaranteeSettings, saveBorrowingSettings, setTradingSuspended,
     issueShares, retireShares, adjustTreasury, freezeMember,
     withholdShares, releaseWithholding, listWithheldShares, getWithholdingSummary,
     placeOrder, updateOrder, cancelOrder, executeOrder,
