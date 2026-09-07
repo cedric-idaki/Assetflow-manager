@@ -12,6 +12,7 @@ import CompanyAnalytics from './components/CompanyAnalytics';
 import AuditTrail from './components/AuditTrail';
 import SalesAgentsList from './components/SalesAgentsList';
 import WithdrawalRequestsTab from './components/WithdrawalRequestsTab';
+import PaymentApprovalTab from './components/PaymentApprovalTab';
 import CreateAgentModal from './components/CreateAgentModal';
 
 // Admin portal tabs for super admin
@@ -169,7 +170,8 @@ const SuperAdminDashboard = () => {
     { id: 'overview',     label: 'Overview',                icon: 'LayoutDashboard' },
     { id: 'agents',       label: 'Sales Agents',            icon: 'UserCheck' },
     { id: 'crm',          label: 'CRM',                     icon: 'Contact' },
-    { id: 'withdrawals',  label: 'Withdrawals',             icon: 'Wallet', badge: withdrawalRequests.length || 0 },
+    { id: 'approvals',    label: 'Payment Approvals',       icon: 'Gavel' },
+    { id: 'withdrawals',  label: 'Legacy Withdrawals',      icon: 'Wallet', badge: withdrawalRequests.length || 0 },
     { id: 'contracts',    label: 'Contracts',               icon: 'FileText' },
     { id: 'kyc',          label: 'KYC Review',              icon: 'Shield', badge: stats?.pendingKYC || 0 },
     { id: 'reports',      label: 'Sales Reports',           icon: 'BarChart3' },
@@ -365,7 +367,18 @@ const SuperAdminDashboard = () => {
             its own loading state, so it is not gated on `loading` here. */}
         {activeTab === 'crm' && <SuperAdminCrmTab onExport={exportCSV} />}
 
-        {/* WITHDRAWAL REQUESTS TAB */}
+        {/* PAYMENT APPROVAL TAB — the pipeline. Rendered directly rather than
+            behind `loading`: it owns its own fetch and its own realtime
+            subscription, and swapping it for a skeleton on every background
+            refetch of the DASHBOARD would tear down a half-finished decision. */}
+        {activeTab === 'approvals' && (
+          <PaymentApprovalTab agents={salesAgents} onExport={exportCSV} />
+        )}
+
+        {/* LEGACY WITHDRAWAL REQUESTS — the rows raised before the pipeline
+            existed. Migration 20260908120000 lifted the pending ones into
+            payment_requests; this tab stays so the settled history is still
+            readable, and is expected to empty out rather than be used. */}
         {activeTab === 'withdrawals' && (
           <div className="space-y-4">
             {loading ? <Sk className="h-64" /> : (

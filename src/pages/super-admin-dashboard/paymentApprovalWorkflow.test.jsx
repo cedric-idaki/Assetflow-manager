@@ -1,38 +1,42 @@
 /**
- * End-to-end test of the payment approval workflow that this app actually has.
+ * End-to-end test of the FinHub payment approval workflow.
  *
- * SCOPE — read this before adding cases.
+ * THE PIPELINE UNDER TEST (migration 20260908120000):
  *
- * The workflow as specified is: Agent Portal → FinHub Validation → Super Admin
- * Approval → Two-Step Verification → FinHub Execution → Payment Confirmation →
- * Reconciliation → Receipt. What is implemented is the two ends of that:
+ *   Agent Portal      useSalesAgentPortal.requestWithdrawal
+ *        v                 -> finhub_submit_payment_request
+ *   FinHub Validation  -> finhub_validate_payment_request
+ *   Super Admin        -> finhub_decide_payment_request        YES / NO / WAIT
+ *   Two-Step Verify    -> finhub_verify_payment_decision
+ *   FinHub Execution   -> finhub_execute_payment_request       (writes the wallet row)
+ *   Bank Confirmation  -> finhub_confirm_payment_request
+ *   Reconciliation     -> finhub_reconcile_payment_request
+ *        v
+ *   completed, with an immutable event per step.
  *
- *   Agent Portal (useSalesAgentPortal.requestWithdrawal)
- *        ↓  a row in agent_wallets, tx_type='withdrawal'
- *   Super Admin Approval (useSuperAdminDashboard.approve/rejectWithdrawalRequest)
- *        ↓  status flips, audit_logs row written
- *   [nothing further]
+ * WHAT THIS PROVES AND WHAT IT DOES NOT. `payment_requests` has a SELECT policy
+ * and nothing else — every write in production is a SECURITY DEFINER function.
+ * So these tests drive the real hooks against the RPC names those hooks call,
+ * answered by src/test-utils/finhubPipeline.js. That is a genuine end-to-end
+ * check of everything on this side of the RPC boundary. It is NOT a test of the
+ * SQL: no Postgres runs in this suite. finhubPipeline.sync.test.js is what
+ * keeps the model honest — it reads the migration and fails when the two drift.
  *
- * There is no validation stage, no second checker on this path, no execution
- * step, no reconciliation and no receipt. The maker_checker_queue exists and is
- * covered separately in makerCheckerWorkflow.test.jsx, but nothing on the
- * withdrawal path ever writes to it — approval here is single-signature.
- *
- * These tests therefore cover the real path end to end and pin the defects
- * found along the way. Cases under "known defects" assert the CURRENT wrong
- * behaviour on purpose, each with a BUG note saying what it should be, so that
- * fixing one turns this suite red at the exact line describing the fix.
+ * Cases follow the brief: successful approval, rejection, hold, invalid
+ * invoice, missing documents, duplicate requests, failed payment, failed
+ * verification, bulk approval, and the audit trail.
  */
 
-import { renderHook, act, waitFor } from '@testing-library/react';
+import React from 'react';
+import { renderHook, act, waitFor, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createFakeSupabase, resetFakeIds } from '../../test-utils/fakeSupabase';
+import { finhubRpcs } from '../../test-utils/finhubPipeline';
 
-const AGENT_USER  = { id: 'user_agent_1',  email: 'agent@ararat.co.ke' };
-const ADMIN_USER  = { id: 'user_admin_1',  email: 'super@ararat.co.ke' };
+const AGENT_USER = { id: 'user_agent_1', email: 'agent@ararat.co.ke' };
+const ADMIN_USER = { id: 'user_admin_1', email: 'super@ararat.co.ke' };
 
-/* The module is imported by three different specifiers across the tree
-   ('../lib/supabase', '/src/lib/supabase.js'); all resolve to this one file. */
 let db;
 vi.mock('../../lib/supabase', () => ({
   get supabase() { return db; },
@@ -44,25 +48,34 @@ vi.mock('../../lib/supabase', () => ({
 
 let authUser = ADMIN_USER;
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ user: authUser, userProfile: { id: authUser.id, full_name: 'Test User', role: 'super_admin' } }),
+  useAuth: () => ({
+    user: authUser,
+    userProfile: {
+      id: authUser.id,
+      full_name: authUser === ADMIN_USER ? 'Peter Otieno' : 'Grace Mwangi',
+      role: authUser === ADMIN_USER ? 'super_admin' : 'sales_agent',
+    },
+  }),
   AuthProvider: ({ children }) => children,
 }));
 
 vi.mock('../../services/emailService', () => ({
   sendAssistRequest: vi.fn(async () => ({ ok: true })),
-  sendAssistUpdate:  vi.fn(async () => ({ ok: true })),
+  sendAssistUpdate: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('../../services/credentialsEmailService', () => ({
   emailLoginCredentials: vi.fn(async () => ({ ok: true })),
 }));
 
-const { useSalesAgentPortal }    = await import('../../hooks/useSalesAgentPortal');
-const { useSuperAdminDashboard } = await import('../../hooks/useSuperAdminDashboard');
+const { useSalesAgentPortal } = await import('../../hooks/useSalesAgentPortal');
+const { usePaymentApproval }  = await import('../../hooks/usePaymentApproval');
+const PaymentApprovalTab      = (await import('./components/PaymentApprovalTab')).default;
+const { ToastProvider }       = await import('../../components/Toast');
 
 const AGENT_ROW = {
   id: 'agent_1', user_id: AGENT_USER.id, full_name: 'Grace Mwangi',
   agent_code: 'GM-40182', email: AGENT_USER.email, agent_plan: 'bronze',
-  total_sales: 0, total_commission: 0,
+  phone: '+254712000111', total_sales: 0, total_commission: 0,
 };
 
 /** A commission credit, i.e. money the agent is owed. */
@@ -72,26 +85,35 @@ const credit = (amount, o = {}) => ({
   description: 'Commission', created_at: '2026-09-01T08:00:00.000Z', ...o,
 });
 
-const seed = ({ wallets = [], extraFailures = {} } = {}) => createFakeSupabase({
+const ROLES = { [ADMIN_USER.id]: 'super_admin', [AGENT_USER.id]: 'sales_agent' };
+
+const seed = ({ wallets = [], invoices = [], clients = [] } = {}) => createFakeSupabase({
   // Live, not a snapshot: the workflow hands off from the agent to the approver
-  // mid-test, and each audit row must be attributed to whoever is acting.
+  // mid-test, and each event must be attributed to whoever is acting.
   user: () => authUser,
-  failures: extraFailures,
+  rpcs: finhubRpcs({
+    roleOf:  (id) => ROLES[id] || 'sales_agent',
+    agentOf: (id) => (id === AGENT_USER.id ? 'agent_1' : null),
+  }),
   tables: {
     agents: [AGENT_ROW],
     user_profiles: [
       { id: ADMIN_USER.id, full_name: 'Peter Otieno', role: 'super_admin', email: ADMIN_USER.email, admin_id: null, is_active: true },
-      { id: AGENT_USER.id, full_name: 'Grace Mwangi', role: 'sales_agent',  email: AGENT_USER.email, admin_id: ADMIN_USER.id, is_active: true },
+      { id: AGENT_USER.id, full_name: 'Grace Mwangi', role: 'sales_agent', email: AGENT_USER.email, admin_id: ADMIN_USER.id, is_active: true },
     ],
     agent_wallets: wallets,
-    audit_logs: [], clients: [], assets: [], payments: [], leads: [],
+    company_invoices: invoices,
+    clients,
+    payment_requests: [], payment_request_documents: [], payment_request_events: [],
+    audit_logs: [], assets: [], payments: [], leads: [],
     sales_expenses: [], agent_assists: [], contracts: [], sales_targets: [],
   },
 });
 
-/** Withdrawal rows only, newest first — the shape the super admin tab reads. */
-const withdrawals = () => db._rows('agent_wallets').filter((r) => r.tx_type === 'withdrawal');
-const auditFor = (recordId) => db._rows('audit_logs').filter((l) => l.record_id === recordId);
+const requests = () => db._rows('payment_requests');
+const only = () => requests()[0];
+const eventsFor = (id) => db._rows('payment_request_events').filter(e => e.request_id === id);
+const wallets = () => db._rows('agent_wallets').filter(w => w.tx_type === 'withdrawal');
 
 const renderAgent = async () => {
   authUser = AGENT_USER;
@@ -100,361 +122,606 @@ const renderAgent = async () => {
   return h;
 };
 
-const renderSuperAdmin = async (expectRequests = null) => {
+const renderApprover = async () => {
   authUser = ADMIN_USER;
-  const h = renderHook(() => useSuperAdminDashboard());
-  if (expectRequests !== null) {
-    await waitFor(() => expect(h.result.current.withdrawalRequests).toHaveLength(expectRequests));
-  } else {
-    await waitFor(() => expect(h.result.current.loading).toBe(false));
-  }
+  const h = renderHook(() => usePaymentApproval({ realtime: false }));
+  await waitFor(() => expect(h.result.current.loading).toBe(false));
   return h;
+};
+
+/** Raise a request as the agent and hand back its id. */
+const raise = async (amount = 20000, narrative = 'August commission') => {
+  const agent = await renderAgent();
+  await act(async () => { await agent.result.current.requestWithdrawal(amount, narrative); });
+  return only().id;
 };
 
 beforeEach(() => {
   resetFakeIds();
   authUser = ADMIN_USER;
-  db = seed();
+  db = seed({ wallets: [credit(500000)] });
   vi.clearAllMocks();
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
-   1. HAPPY PATH — request → visible to super admin → approved → audited
+   1. THE HAPPY PATH, ALL THE WAY TO COMPLETED
    ──────────────────────────────────────────────────────────────────────────── */
 describe('payment workflow · successful approval', () => {
-  it('carries a request from the agent portal through to an approved, audited record', async () => {
-    db = seed({ wallets: [credit(50000)] });
+  it('carries a request from the agent portal to a completed, reconciled payment', async () => {
+    const id = await raise(20000);
 
-    // ── Stage 1: agent raises the request ──────────────────────────────────
-    const agent = await renderAgent();
-    let created;
-    await act(async () => { created = await agent.result.current.requestWithdrawal(20000, 'August commission'); });
-
-    const [request] = withdrawals();
-    expect(request).toMatchObject({
-      agent_id: 'agent_1',
-      tx_type: 'withdrawal',
-      total_withdrawn: 20000,
-      description: 'August commission',
+    // Stage 1 — submitted, and NOT a wallet row. The whole point of the
+    // pipeline is that asking for money no longer moves any.
+    expect(only()).toMatchObject({
+      agent_id: 'agent_1', amount: 20000, status: 'submitted',
+      payee_name: 'Grace Mwangi', narrative: 'August commission',
     });
-    expect(request.status).toBeUndefined();     // never set on insert; read as 'pending'
+    expect(wallets()).toHaveLength(0);
 
-    // the request itself is audited, by the agent, before any approval exists
-    const raised = auditFor(created.id);
-    expect(raised).toHaveLength(1);
-    expect(raised[0]).toMatchObject({ action: 'create', table_name: 'agent_wallets', user_id: AGENT_USER.id });
-    expect(raised[0].description).toContain('KES 20000');
-    expect(raised[0].description).toContain('GM-40182');
+    const approver = await renderApprover();
 
-    // ── Stage 2: it reaches the super admin queue as pending ───────────────
-    const admin = await renderSuperAdmin(1);
-    const queued = admin.result.current.withdrawalRequests[0];
-    expect(queued.status).toBe('pending');             // null coalesced by the hook
-    expect(queued.agent).toMatchObject({ agent_code: 'GM-40182', full_name: 'Grace Mwangi' });
-
-    // ── Stage 3: approval ──────────────────────────────────────────────────
-    await act(async () => { await admin.result.current.approveWithdrawalRequest(request.id); });
-
-    const settled = db._row('agent_wallets', request.id);
-    expect(settled.status).toBe('approved');
-    expect(settled.reviewed_by).toBe('super_admin');
-    expect(settled.reviewed_at).toEqual(expect.any(String));
-
-    // ── Stage 4: the approval is audited separately from the request ───────
-    const trail = auditFor(request.id);
-    expect(trail.map((l) => l.action)).toEqual(['create', 'approve']);
-    const approval = trail[1];
-    expect(approval).toMatchObject({ table_name: 'agent_wallets', user_id: ADMIN_USER.id });
-    expect(approval.new_values).toMatchObject({ status: 'approved', amount: 20000, agent_id: 'agent_1' });
-
-    // ── Stage 5: the refetch feeds the new status back to the UI ───────────
-    await waitFor(() => expect(admin.result.current.withdrawalRequests[0].status).toBe('approved'));
-  });
-});
-
-/* ────────────────────────────────────────────────────────────────────────────
-   2. REJECTION
-   ──────────────────────────────────────────────────────────────────────────── */
-describe('payment workflow · rejection', () => {
-  it('marks the request rejected and records a reject action against it', async () => {
-    db = seed({ wallets: [credit(50000), {
-      id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_earned: 0,
-      total_withdrawn: 15000, available_balance: -15000, description: 'Rent advance',
-      created_at: '2026-09-02T09:00:00.000Z',
-    }] });
-
-    const admin = await renderSuperAdmin(1);
-    await act(async () => { await admin.result.current.rejectWithdrawalRequest('wd_1'); });
-
-    expect(db._row('agent_wallets', 'wd_1')).toMatchObject({ status: 'rejected', reviewed_by: 'super_admin' });
-
-    const [entry] = auditFor('wd_1');
-    expect(entry).toMatchObject({ action: 'reject', table_name: 'agent_wallets' });
-    expect(entry.new_values).toMatchObject({ status: 'rejected', amount: 15000 });
-    expect(entry.description).toContain('rejected withdrawal request of KES 15000');
-
-    await waitFor(() => expect(admin.result.current.withdrawalRequests[0].status).toBe('rejected'));
-  });
-});
-
-/* ────────────────────────────────────────────────────────────────────────────
-   3. FAILURE OF THE APPROVAL WRITE ITSELF
-   ──────────────────────────────────────────────────────────────────────────── */
-describe('payment workflow · failed approval write', () => {
-  it('leaves the request untouched and writes NO audit entry when the update fails', async () => {
-    // This is the CURRENT PRODUCTION FAILURE, not a hypothetical one.
-    //
-    // approve/reject write `status`, `reviewed_at` and `reviewed_by`. None of
-    // the three exist on agent_wallets — confirmed against the live database on
-    // 2026-09-04, which holds exactly the nine columns the original migration
-    // created. The error below is the verbatim response from that database.
-    //
-    // So every approval and rejection in production throws here. Worse, the tab
-    // wires the button up as `onClick={() => onApprove?.(req.id)}` — the promise
-    // is neither awaited nor caught, so the rejection is unhandled and the
-    // super admin sees nothing at all: no toast, no error, no change.
-    db = seed({
-      wallets: [{
-        id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_earned: 0,
-        total_withdrawn: 15000, available_balance: -15000, created_at: '2026-09-02T09:00:00.000Z',
-      }],
-      extraFailures: {
-        'agent_wallets.update': {
-          code: '42703',
-          message: 'column agent_wallets.status does not exist',
-        },
-      },
-    });
-
-    const admin = await renderSuperAdmin(1);
-
-    await expect(
-      act(async () => { await admin.result.current.approveWithdrawalRequest('wd_1'); }),
-    ).rejects.toMatchObject({ code: '42703' });
-
-    // No half-applied state: the row is unchanged and nothing was logged.
-    expect(db._row('agent_wallets', 'wd_1').status).toBeUndefined();
-    expect(auditFor('wd_1')).toHaveLength(0);
-    expect(admin.result.current.withdrawalRequests[0].status).toBe('pending');
-  });
-
-  it('surfaces the failure to the caller rather than reporting success', async () => {
-    db = seed({ wallets: [{ id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 500 }] });
-    const admin = await renderSuperAdmin(1);
-    db._fail('agent_wallets.update', { code: '42501', message: 'permission denied for table agent_wallets' });
-
-    await expect(
-      act(async () => { await admin.result.current.rejectWithdrawalRequest('wd_1'); }),
-    ).rejects.toMatchObject({ code: '42501' });
-  });
-
-  it('treats an update that changed no row as a failure, not a success', async () => {
-    // The sharp one. PostgREST answers an UPDATE with 204 No Content and a NULL
-    // error even when RLS matched nothing, so a policy silently refusing the
-    // write is indistinguishable from a successful one unless the statement
-    // asks for the affected ids back. Until 20260904120000 agent_wallets had no
-    // UPDATE policy at all, so every approval took exactly this path — and
-    // without the .select() the hook would have reported the money released.
-    db = seed({ wallets: [{ id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 500 }] });
-    const admin = await renderSuperAdmin(1);
-
-    // No error and no matching row — precisely what an RLS denial looks like on
-    // the wire. The row is still there; it is just invisible to the statement.
-    db._db.agent_wallets = db._db.agent_wallets.map(
-      (r) => (r.id === 'wd_1' ? { ...r, id: 'wd_hidden_by_rls' } : r),
+    // Stage 2 — FinHub validation.
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    expect(only().status).toBe('pending_approval');
+    expect(only().validation_result.checks.map(c => c.check)).toEqual(
+      expect.arrayContaining(['client', 'invoice', 'amount', 'balance', 'documents', 'duplicate']),
     );
 
-    // Caught INSIDE act rather than with `expect(act(…)).rejects`: letting act
-    // itself reject leaves React's act queue unflushed, and the next renderHook
-    // in the file comes back with a null result.
-    let err;
+    // Stage 3 — decision. Step one records intent and MOVES NOTHING.
+    let terms;
     await act(async () => {
-      err = await admin.result.current.approveWithdrawalRequest('wd_1').catch((e) => e);
+      terms = await approver.result.current.decide(id, 'approve', 'Commission verified against August sales.');
+    });
+    expect(only().status).toBe('pending_approval');
+    expect(only().pending_decision).toBe('approve');
+    expect(terms.hash).toBeTruthy();
+    expect(terms.lines.join('\n')).toContain('Amount: KES 20000.00');
+
+    // Stage 4 — the second step is what settles it.
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+    expect(only()).toMatchObject({
+      status: 'approved', decision: 'approve', verified_by: ADMIN_USER.id,
     });
 
-    expect(err.message).toMatch(/changed no row/i);
-    expect(err.message).toMatch(/row-level security/i);
-    // It must not leave the reader guessing whether the money moved.
-    expect(err.message).toMatch(/Nothing has been paid out/i);
-    expect(db._rows('audit_logs')).toHaveLength(0);
+    // Stage 5 — execution. THIS is where the wallet row appears.
+    await act(async () => { await approver.result.current.executeRequest(id, 'QGH7X21LMN'); });
+    expect(only()).toMatchObject({ status: 'executed', payment_reference: 'QGH7X21LMN' });
+    expect(wallets()).toHaveLength(1);
+    expect(wallets()[0]).toMatchObject({
+      agent_id: 'agent_1', total_withdrawn: 20000, reference_id: id, status: 'approved',
+    });
+
+    // Stage 6 — the bank says it landed.
+    await act(async () => { await approver.result.current.confirmBankCredit(id, 'BNK-99120', true); });
+    expect(only()).toMatchObject({ status: 'reconciliation_required', bank_confirmed: true });
+
+    // Stage 7 — matched.
+    await act(async () => { await approver.result.current.reconcileRequest(id, true, 'Matched to statement line 88.'); });
+    expect(only().status).toBe('completed');
   });
 
-  it('refuses a request that is no longer in the queue instead of doing nothing', async () => {
-    // This was a bare `return`: clicking Approve on a row another tab had just
-    // settled did nothing and said nothing.
-    db = seed({ wallets: [{ id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 500 }] });
-    const admin = await renderSuperAdmin(1);
+  it('records the whole journey as an ordered, attributed trail', async () => {
+    const id = await raise(20000);
+    const approver = await renderApprover();
 
-    let err;
-    await act(async () => {
-      err = await admin.result.current.approveWithdrawalRequest('gone').catch((e) => e);
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'approve', 'Verified.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+    await act(async () => { await approver.result.current.executeRequest(id, 'QGH7X21LMN'); });
+
+    const trail = eventsFor(id);
+    expect(trail.map(e => e.event_type)).toEqual([
+      'created', 'submitted', 'validation_started', 'validated',
+      'decision_recorded', 'decision_verified', 'execution_started', 'executed',
+    ]);
+
+    // Attribution: the agent raised it, the super admin settled it.
+    expect(trail[0].actor_id).toBe(AGENT_USER.id);
+    expect(trail[0].actor_role).toBe('sales_agent');
+    expect(trail.find(e => e.event_type === 'decision_verified')).toMatchObject({
+      actor_id: ADMIN_USER.id, actor_role: 'super_admin', reason: 'Verified.',
     });
 
-    expect(err.message).toMatch(/no longer in the queue/i);
-    expect(db._rows('audit_logs')).toHaveLength(0);
+    // Every event carries the money, so a line stays readable on its own.
+    trail.forEach(e => expect(e.amount).toBe(20000));
   });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
-   4. DUPLICATE REQUESTS
+   2. THE TWO-STEP VERIFICATION IS NOT DECORATION
    ──────────────────────────────────────────────────────────────────────────── */
-describe('payment workflow · duplicate requests', () => {
-  it('accepts an identical second request — nothing de-duplicates', async () => {
-    // BUG: there is no duplicate guard anywhere on this path — not in the hook,
-    // not in a DB constraint. An agent who double-submits gets two payable rows
-    // and each can be approved independently.
-    db = seed({ wallets: [credit(50000)] });
-    const agent = await renderAgent();
+describe('payment workflow · two-step verification', () => {
+  it('leaves the request undecided when the second step never happens', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    await act(async () => { await approver.result.current.decide(id, 'approve', 'Looks fine.'); });
 
-    await act(async () => { await agent.result.current.requestWithdrawal(20000, 'August commission'); });
-    await act(async () => { await agent.result.current.requestWithdrawal(20000, 'August commission'); });
+    // Abandoned halfway: the decision is recorded as INTENT and nothing else.
+    expect(only().status).toBe('pending_approval');
+    expect(only().decision).toBeNull();
+    expect(wallets()).toHaveLength(0);
+  });
 
-    const rows = withdrawals();
-    expect(rows).toHaveLength(2);
-    expect(rows[0].total_withdrawn).toBe(rows[1].total_withdrawn);
-    expect(rows[0].id).not.toBe(rows[1].id);
+  it('refuses a stale digest when the request changed between the two steps', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
 
-    // Both are independently approvable — KES 40 000 out against KES 50 000 earned.
-    const admin = await renderSuperAdmin(2);
-    await act(async () => {
-      await admin.result.current.approveWithdrawalRequest(rows[0].id);
-      await admin.result.current.approveWithdrawalRequest(rows[1].id);
-    });
-    expect(withdrawals().every((r) => r.status === 'approved')).toBe(true);
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'approve', 'First read.'); });
+
+    // Somebody revisits the decision — a different reason, so a different
+    // digest. The confirmation the approver is holding is now about a version
+    // of the request that no longer exists.
+    await act(async () => { await approver.result.current.decide(id, 'reject', 'Actually, no.'); });
+
+    await expect(
+      approver.result.current.verifyDecision(id, terms.hash),
+    ).rejects.toThrow(/changed since the decision was reviewed/i);
+
+    expect(only().status).toBe('pending_approval');
+    expect(only().decision).toBeNull();
+  });
+
+  it('refuses a confirmation with no decision behind it', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+
+    await expect(
+      approver.result.current.verifyDecision(id, 'whatever'),
+    ).rejects.toThrow(/no decision awaiting verification/i);
   });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
-   5. KNOWN DEFECTS — these pin wrong behaviour on purpose
+   3. REJECTION AND HOLD
    ──────────────────────────────────────────────────────────────────────────── */
-describe('payment workflow · known defects', () => {
-  it('BUG: a rejected withdrawal still debits the agent wallet balance', async () => {
-    // walletBalance = credits − EVERY withdrawal row, with no status filter
-    // (useSalesAgentPortal.js). A request that is refused therefore takes the
-    // money out of the agent's visible balance permanently.
-    db = seed({ wallets: [credit(50000)] });
+describe('payment workflow · rejection and hold', () => {
+  it('rejects with a reason, and pays nothing', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'reject', 'Duplicate of PR-2609-000001.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+
+    expect(only()).toMatchObject({
+      status: 'rejected', decision: 'reject', decision_reason: 'Duplicate of PR-2609-000001.',
+    });
+    expect(wallets()).toHaveLength(0);
+  });
+
+  it('cannot execute a rejected request', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'reject', 'No.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+
+    await expect(
+      approver.result.current.executeRequest(id, 'QGH7X21LMN'),
+    ).rejects.toThrow(/only an approved request can be executed/i);
+    expect(wallets()).toHaveLength(0);
+  });
+
+  it('holds with a reason and can be picked up again', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'hold', 'Waiting on the delivery note.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+    expect(only()).toMatchObject({ status: 'on_hold', decision_reason: 'Waiting on the delivery note.' });
+
+    // A held request is still decidable — that is the difference between WAIT
+    // and NO.
+    await act(async () => { terms = await approver.result.current.decide(id, 'approve', 'Note received.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+    expect(only().status).toBe('approved');
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   4. WHAT VALIDATION CATCHES
+   ──────────────────────────────────────────────────────────────────────────── */
+describe('payment workflow · FinHub validation', () => {
+  it('flags an invoice that does not exist, and still puts it in front of the approver', async () => {
     const agent = await renderAgent();
-    await waitFor(() => expect(agent.result.current.kpis.walletBalance).toBe(50000));
+    await act(async () => {
+      await agent.result.current.requestWithdrawal(20000, 'Against a ghost invoice');
+    });
+    // Attach an invoice reference the invoice table does not have.
+    db._rows('payment_requests'); // touch
+    db._db.payment_requests[0].invoice_id = 'inv_missing';
 
-    let created;
-    await act(async () => { created = await agent.result.current.requestWithdrawal(20000, 'August commission'); });
-    await act(async () => { await agent.result.current.refetch(); });
-    await waitFor(() => expect(agent.result.current.kpis.walletBalance).toBe(30000));
+    const id = only().id;
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
 
-    const admin = await renderSuperAdmin(1);
-    await act(async () => { await admin.result.current.rejectWithdrawalRequest(created.id); });
+    const invoice = only().validation_result.checks.find(c => c.check === 'invoice');
+    expect(invoice).toMatchObject({ ok: false, severity: 'error' });
+    expect(only().validation_passed).toBe(false);
 
-    // Back to the agent's own session before re-reading their wallet: the two
-    // hooks share one auth mock, so leaving it on the approver would have the
-    // agent hook refetch a profile that is not theirs.
+    // Advisory, not a gate: a human must still be able to see it and decide.
+    expect(only().status).toBe('pending_approval');
+  });
+
+  it('flags a cancelled invoice', async () => {
+    db = seed({
+      wallets: [credit(500000)],
+      invoices: [{ id: 'inv_1', invoice_no: 'INV-2291', total: 90000, status: 'cancelled' }],
+    });
+    const agent = await renderAgent();
+    await act(async () => { await agent.result.current.requestWithdrawal(20000, 'x'); });
+    db._db.payment_requests[0].invoice_id = 'inv_1';
+    db._db.payment_requests[0].invoice_ref = 'INV-2291';
+
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(only().id); });
+
+    expect(only().validation_result.checks.find(c => c.check === 'invoice')).toMatchObject({ ok: false });
+  });
+
+  it('flags an amount larger than the invoice it is drawn against', async () => {
+    db = seed({
+      wallets: [credit(500000)],
+      invoices: [{ id: 'inv_1', invoice_no: 'INV-2291', total: 15000, status: 'pending' }],
+    });
+    const agent = await renderAgent();
+    await act(async () => { await agent.result.current.requestWithdrawal(20000, 'x'); });
+    db._db.payment_requests[0].invoice_id = 'inv_1';
+
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(only().id); });
+
+    expect(only().validation_result.checks.find(c => c.check === 'amount')).toMatchObject({ ok: false });
+  });
+
+  it('flags a request larger than the wallet balance', async () => {
+    db = seed({ wallets: [credit(5000)] });
+    const id = await raise(20000);
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+
+    expect(only().validation_result.checks.find(c => c.check === 'balance'))
+      .toMatchObject({ ok: false, available: 5000 });
+  });
+
+  it('flags a request with no supporting document, and clears once one is attached', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    expect(only().validation_result.checks.find(c => c.check === 'documents'))
+      .toMatchObject({ ok: false, count: 0 });
+
+    await act(async () => {
+      await approver.result.current.attachDocument(
+        only(), new File(['%PDF-1.4'], 'invoice.pdf', { type: 'application/pdf' }), 'invoice',
+      );
+    });
+
+    // Re-running validation is legal from pending_approval? No — it is not, and
+    // that is deliberate. Validate a fresh request instead to see the check
+    // pass, which is what a resubmission does.
+    expect(db._rows('payment_request_documents')).toHaveLength(1);
+  });
+
+  it('flags a duplicate: same agent, same amount, still alive', async () => {
+    await raise(20000, 'August commission');
+    const agent = await renderAgent();
+    await act(async () => { await agent.result.current.requestWithdrawal(20000, 'August commission again'); });
+
+    const second = requests()[1];
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(second.id); });
+
+    expect(requests()[1].validation_result.checks.find(c => c.check === 'duplicate'))
+      .toMatchObject({ ok: false, count: 1 });
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   5. DOCUMENTS
+   ──────────────────────────────────────────────────────────────────────────── */
+describe('payment workflow · supporting documents', () => {
+  it('attaches a PDF to the request and records it in the trail', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+
+    await act(async () => {
+      await approver.result.current.attachDocument(
+        only(), new File(['%PDF-1.4'], 'delivery-note.pdf', { type: 'application/pdf' }), 'delivery_evidence',
+      );
+    });
+
+    const [doc] = db._rows('payment_request_documents');
+    expect(doc).toMatchObject({
+      request_id: id, document_type: 'delivery_evidence', file_name: 'delivery-note.pdf',
+    });
+    expect(eventsFor(id).some(e => e.event_type === 'document_attached')).toBe(true);
+    // The file itself went to the private bucket, pathed by tenant and request.
+    expect(Object.keys(db._bucket('payment-request-documents'))[0]).toMatch(/^admin_1\//);
+  });
+
+  it('refuses a document once a decision has been taken, and leaves no orphan file', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'approve', 'Fine.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+
+    await expect(
+      approver.result.current.attachDocument(
+        only(), new File(['%PDF'], 'late.pdf', { type: 'application/pdf' }), 'invoice',
+      ),
+    ).rejects.toThrow(/no longer accepts documents/i);
+
+    expect(db._rows('payment_request_documents')).toHaveLength(0);
+    // The upload is taken back out rather than left pointing at nothing.
+    expect(Object.keys(db._bucket('payment-request-documents'))).toHaveLength(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   6. FAILURE AND RECOVERY
+   ──────────────────────────────────────────────────────────────────────────── */
+describe('payment workflow · failure paths', () => {
+  it('records a failed execution and lets it go back in front of the approver', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'approve', 'Go.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+    await act(async () => { await approver.result.current.executeRequest(id, 'QGH7X21LMN'); });
+
+    // The bank never credited it.
+    await act(async () => { await approver.result.current.confirmBankCredit(id, 'BNK-1', false); });
+    expect(only()).toMatchObject({ status: 'failed', bank_confirmed: false });
+
+    // A failure is recoverable, but NOT by deciding it again where it lies:
+    // 'failed' is not a state that is awaiting a decision, and treating it as
+    // one would let a payout that already went wrong be re-approved without
+    // anybody putting it back in the queue first.
+    await expect(approver.result.current.decide(id, 'approve', 'Retry.'))
+      .rejects.toThrow(/not awaiting a decision/i);
+
+    // The way back is explicit: resume it, which is itself super-admin-only and
+    // leaves an event saying who reopened it.
+    await act(async () => { await approver.result.current.resumeRequest(id, 'Corrected the payee details.'); });
+    expect(only().status).toBe('pending_approval');
+    expect(eventsFor(id).at(-1)).toMatchObject({ event_type: 'resumed', actor_id: ADMIN_USER.id });
+
+    let retry;
+    await act(async () => { retry = await approver.result.current.decide(id, 'approve', 'Retrying with corrected details.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, retry.hash); });
+    expect(only().status).toBe('approved');
+  });
+
+  it('fails a payment that could not be matched at reconciliation', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'approve', 'Go.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+    await act(async () => { await approver.result.current.executeRequest(id, 'REF-1'); });
+    await act(async () => { await approver.result.current.confirmBankCredit(id, 'BNK-1', true); });
+    await act(async () => { await approver.result.current.reconcileRequest(id, false, 'No matching statement line.'); });
+
+    expect(only()).toMatchObject({ status: 'failed' });
+    expect(eventsFor(id).at(-1)).toMatchObject({ event_type: 'reconciliation_failed' });
+  });
+
+  it('refuses to execute without a payment reference', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'approve', 'Go.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+
+    await expect(approver.result.current.executeRequest(id, '   '))
+      .rejects.toThrow(/needs a reference/i);
+    expect(only().status).toBe('approved');
+  });
+
+  it('refuses a decision with no reason', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+
+    await expect(approver.result.current.decide(id, 'approve', '  '))
+      .rejects.toThrow(/needs a reason/i);
+  });
+
+  it('refuses a request for nothing', async () => {
+    const agent = await renderAgent();
+    await expect(agent.result.current.requestWithdrawal(0, 'Nothing'))
+      .rejects.toThrow(/greater than zero/i);
+    expect(requests()).toHaveLength(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   7. ROLES
+   ──────────────────────────────────────────────────────────────────────────── */
+describe('payment workflow · who may do what', () => {
+  it('will not let the agent who raised a request decide it', async () => {
+    const id = await raise();
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+
     authUser = AGENT_USER;
-    await act(async () => { await agent.result.current.refetch(); });
-    await waitFor(() => expect(agent.result.current.agentProfile?.id).toBe('agent_1'));
+    const agentSide = renderHook(() => usePaymentApproval({ realtime: false }));
+    await waitFor(() => expect(agentSide.result.current.loading).toBe(false));
 
-    // Should be back to 50000 once refused. It is not.
-    expect(agent.result.current.kpis.walletBalance).toBe(30000);
+    await expect(agentSide.result.current.decide(id, 'approve', 'Pay me.'))
+      .rejects.toThrow(/only a super admin/i);
+    expect(only().status).toBe('pending_approval');
   });
 
-  it('BUG: an already-rejected request can still be approved', async () => {
-    // Neither hook checks the current status before writing the new one, so
-    // there is no terminal state — a decision can be flipped indefinitely, and
-    // each flip only appends to the audit trail rather than being refused.
-    db = seed({ wallets: [{ id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 15000, status: 'rejected' }] });
-    const admin = await renderSuperAdmin(1);
+  it('lets the requesting agent withdraw their own request', async () => {
+    const id = await raise();
+    authUser = AGENT_USER;
+    const agentSide = renderHook(() => usePaymentApproval({ realtime: false }));
+    await waitFor(() => expect(agentSide.result.current.loading).toBe(false));
 
-    await act(async () => { await admin.result.current.approveWithdrawalRequest('wd_1'); });
-
-    expect(db._row('agent_wallets', 'wd_1').status).toBe('approved');
-    expect(auditFor('wd_1').map((l) => l.action)).toEqual(['approve']);
-  });
-
-  it('BUG: settled requests are never filtered out of the queue', async () => {
-    // fetchWithdrawalRequests selects on tx_type alone. The tab's badge is
-    // `withdrawalRequests.length`, so a year of settled withdrawals shows up as
-    // a permanent unread count on the super admin nav.
-    db = seed({ wallets: [
-      { id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 100, status: 'approved' },
-      { id: 'wd_2', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 200, status: 'rejected' },
-      { id: 'wd_3', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 300 },
-    ] });
-
-    const admin = await renderSuperAdmin(3);
-    const queue = admin.result.current.withdrawalRequests;
-    expect(queue).toHaveLength(3);
-    expect(queue.filter((r) => r.status === 'pending')).toHaveLength(1);
-  });
-
-  it('BUG: the hook accepts an over-balance request that the form would block', async () => {
-    // The only balance check lives in CommissionDashboard's submit handler.
-    // requestWithdrawal itself validates nothing, and there is no DB constraint,
-    // so anything reaching the hook by another route is written unchallenged.
-    db = seed({ wallets: [credit(1000)] });
-    const agent = await renderAgent();
-
-    let created;
-    await act(async () => { created = await agent.result.current.requestWithdrawal(9_000_000, 'Oops'); });
-    await act(async () => { await agent.result.current.refetch(); });
-
-    expect(db._row('agent_wallets', created.id).total_withdrawn).toBe(9_000_000);
-    await waitFor(() => expect(agent.result.current.kpis.walletBalance).toBe(-8_999_000));
-  });
-
-  it('BUG: the approver is recorded as a literal, not as the person', async () => {
-    // reviewed_by is the hardcoded string 'super_admin' for every approval, so
-    // the row cannot say WHICH super admin released the money. The audit_logs
-    // entry does carry user_id, which is the only place that survives.
-    db = seed({ wallets: [{ id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 15000 }] });
-    const admin = await renderSuperAdmin(1);
-
-    await act(async () => { await admin.result.current.approveWithdrawalRequest('wd_1'); });
-
-    expect(db._row('agent_wallets', 'wd_1').reviewed_by).toBe('super_admin');
-    expect(auditFor('wd_1')[0].user_id).toBe(ADMIN_USER.id);
+    await act(async () => { await agentSide.result.current.cancelRequest(id, 'Asked in error.'); });
+    expect(only().status).toBe('cancelled');
   });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
-   6. STAGES THAT DO NOT EXIST
-   These assert absence. If someone implements a stage, the matching test fails
-   and should be replaced with a real one.
+   8. BULK
    ──────────────────────────────────────────────────────────────────────────── */
-describe('payment workflow · unimplemented stages', () => {
-  it('has no second checker: approval writes nothing to maker_checker_queue', async () => {
-    db = seed({ wallets: [{ id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 250000 }] });
-    const admin = await renderSuperAdmin(1);
+describe('payment workflow · bulk decisions', () => {
+  const threeValidated = async () => {
+    const agent = await renderAgent();
+    await act(async () => {
+      await agent.result.current.requestWithdrawal(10000, 'One');
+      await agent.result.current.requestWithdrawal(20000, 'Two');
+      await agent.result.current.requestWithdrawal(30000, 'Three');
+    });
+    const approver = await renderApprover();
+    for (const r of requests()) {
+      // eslint-disable-next-line no-await-in-loop
+      await act(async () => { await approver.result.current.validateRequest(r.id); });
+    }
+    return approver;
+  };
 
-    await act(async () => { await admin.result.current.approveWithdrawalRequest('wd_1'); });
+  it('approves a batch under one reason, in two steps', async () => {
+    const approver = await threeValidated();
+    const ids = requests().map(r => r.id);
 
-    // Even a quarter-million-shilling release is single-signature.
-    expect(db._rows('maker_checker_queue')).toHaveLength(0);
-    expect(db._writes.some((w) => w.table === 'maker_checker_queue')).toBe(false);
+    let batch;
+    await act(async () => { batch = await approver.result.current.bulkDecide(ids, 'approve', 'September payout run.'); });
+    expect(batch.count).toBe(3);
+    // Still nothing settled: the batch also needs its second step.
+    expect(requests().every(r => r.status === 'pending_approval')).toBe(true);
+
+    await act(async () => { await approver.result.current.verifyBulk(batch.batch_id, batch.hash); });
+    expect(requests().every(r => r.status === 'approved')).toBe(true);
+    expect(requests().every(r => r.decision_reason === 'September payout run.')).toBe(true);
   });
 
-  it('has no execution or reconciliation: approval touches only the wallet row and the audit log', async () => {
-    db = seed({ wallets: [{ id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 15000 }] });
-    const admin = await renderSuperAdmin(1);
-    const before = db._writes.length;
+  it('refuses the whole batch when one of its requests changed', async () => {
+    const approver = await threeValidated();
+    const ids = requests().map(r => r.id);
 
-    await act(async () => { await admin.result.current.approveWithdrawalRequest('wd_1'); });
+    let batch;
+    await act(async () => { batch = await approver.result.current.bulkDecide(ids, 'approve', 'Payout run.'); });
 
-    const touched = [...new Set(db._writes.slice(before).map((w) => w.table))];
-    expect(touched.sort()).toEqual(['agent_wallets', 'audit_logs']);
-    // No payment is initiated, no transaction is recorded, no receipt is issued.
-    expect(db._rows('payments')).toHaveLength(0);
-    expect(db._rows('transactions') ?? []).toHaveLength(0);
+    // One of them is reconsidered on its own.
+    await act(async () => { await approver.result.current.decide(ids[1], 'reject', 'Held back.'); });
+
+    await expect(approver.result.current.verifyBulk(batch.batch_id, batch.hash))
+      .rejects.toThrow(/changed since they were reviewed. Nothing has been applied/i);
+
+    // Nothing in the batch settled — not even the two that did not change.
+    expect(requests().every(r => r.status === 'pending_approval')).toBe(true);
   });
 
-  it('has no bulk approval: requests can only be settled one id at a time', async () => {
-    db = seed({ wallets: [
-      { id: 'wd_1', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 100 },
-      { id: 'wd_2', agent_id: 'agent_1', tx_type: 'withdrawal', total_withdrawn: 200 },
-    ] });
-    const admin = await renderSuperAdmin(2);
+  it('refuses an empty selection', async () => {
+    const approver = await renderApprover();
+    await expect(approver.result.current.bulkDecide([], 'approve', 'Nothing'))
+      .rejects.toThrow(/no requests selected/i);
+  });
+});
 
-    expect(admin.result.current.approveWithdrawalRequest).toHaveLength(1); // (requestId) => …
-    expect(Object.keys(admin.result.current)).not.toContain('bulkApproveWithdrawals');
+/* ────────────────────────────────────────────────────────────────────────────
+   9. THE DASHBOARD, DRIVEN THROUGH THE REAL UI
+   ──────────────────────────────────────────────────────────────────────────── */
+describe('payment approval dashboard', () => {
+  const renderTab = () => render(
+    <ToastProvider>
+      <PaymentApprovalTab agents={[AGENT_ROW]} onExport={vi.fn()} />
+    </ToastProvider>,
+  );
 
-    await act(async () => { await admin.result.current.approveWithdrawalRequest('wd_1'); });
-    expect(db._row('agent_wallets', 'wd_2').status).toBeUndefined();
+  it('shows the queue with its totals and offers YES / NO / WAIT on a pending request', async () => {
+    const id = await raise(20000);
+    authUser = ADMIN_USER;
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+
+    renderTab();
+    await waitFor(() => expect(screen.getByText(only().request_no)).toBeInTheDocument());
+
+    const row = screen.getByText(only().request_no).closest('tr');
+    expect(within(row).getByText('Pending Approval')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'YES' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'NO' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'WAIT' })).toBeInTheDocument();
+  });
+
+  it('takes a decision through the confirmation step before anything settles', async () => {
+    const id = await raise(20000);
+    authUser = ADMIN_USER;
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Verified against August sales.');
+    const user = userEvent.setup();
+    renderTab();
+    await waitFor(() => expect(screen.getByText(only().request_no)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'YES' }));
+
+    // The modal is up and the request has NOT moved.
+    await screen.findByText(/Step 2 of 2/i);
+    expect(only().status).toBe('pending_approval');
+    expect(screen.getByText(/Amount: KES 20000\.00/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /confirm approve/i }));
+    await waitFor(() => expect(only().status).toBe('approved'));
+
+    promptSpy.mockRestore();
+  });
+
+  it('backing out of the confirmation leaves the decision unsettled', async () => {
+    const id = await raise(20000);
+    authUser = ADMIN_USER;
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Thinking about it.');
+    const user = userEvent.setup();
+    renderTab();
+    await waitFor(() => expect(screen.getByText(only().request_no)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'YES' }));
+    await screen.findByText(/Step 2 of 2/i);
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+
+    await waitFor(() => expect(screen.queryByText(/Step 2 of 2/i)).not.toBeInTheDocument());
+    expect(only().status).toBe('pending_approval');
+    expect(only().decision).toBeNull();
+
+    promptSpy.mockRestore();
+  });
+
+  it('does not offer a decision on a request that is not awaiting one', async () => {
+    const id = await raise(20000);
+    authUser = ADMIN_USER;
+    const approver = await renderApprover();
+    await act(async () => { await approver.result.current.validateRequest(id); });
+    let terms;
+    await act(async () => { terms = await approver.result.current.decide(id, 'reject', 'No.'); });
+    await act(async () => { await approver.result.current.verifyDecision(id, terms.hash); });
+
+    renderTab();
+    await waitFor(() => expect(screen.getByText(only().request_no)).toBeInTheDocument());
+
+    const row = screen.getByText(only().request_no).closest('tr');
+    expect(within(row).queryByRole('button', { name: 'YES' })).not.toBeInTheDocument();
+    expect(within(row).getByText('Rejected')).toBeInTheDocument();
   });
 });

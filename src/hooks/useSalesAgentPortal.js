@@ -512,13 +512,32 @@ export const useSalesAgentPortal = () => {
         })
         .reduce((sum, t) => sum + parseFloat(t.total_earned || 0), 0);
     })(),
+    /**
+     * What the agent may actually draw.
+     *
+     * A REJECTED WITHDRAWAL DOES NOT REDUCE THE BALANCE. This used to subtract
+     * every withdrawal row regardless of outcome, so an agent whose request was
+     * turned down was charged for it anyway and could never ask again for the
+     * money they still had. The gap was invisible until `status` existed at all
+     * (migration 20260904120000); it matters now because
+     * finhub_validate_payment_request checks a request against this same
+     * arithmetic server-side, and a screen that disagreed with the validator
+     * would show an agent a balance they are then refused.
+     *
+     * Rows with no status are counted: they predate the column, and every one
+     * of them was a real payout.
+     */
     walletBalance: (() => {
       const credits = walletTransactions.filter(t => t.tx_type === 'credit').reduce((s, t) => s + parseFloat(t.total_earned || 0), 0);
-      const withdrawals = walletTransactions.filter(t => t.tx_type === 'withdrawal').reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0);
+      const withdrawals = walletTransactions
+        .filter(t => t.tx_type === 'withdrawal' && (t.status || 'pending') !== 'rejected')
+        .reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0);
       return credits - withdrawals;
     })(),
     totalEarned: walletTransactions.filter(t => t.tx_type === 'credit').reduce((s, t) => s + parseFloat(t.total_earned || 0), 0),
-    totalWithdrawn: walletTransactions.filter(t => t.tx_type === 'withdrawal').reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0),
+    totalWithdrawn: walletTransactions
+      .filter(t => t.tx_type === 'withdrawal' && (t.status || 'pending') !== 'rejected')
+      .reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0),
     totalExpenses: expenses.reduce((s, e) => s + parseFloat(e.amount || 0), 0),
 
     /**
@@ -729,31 +748,36 @@ export const useSalesAgentPortal = () => {
     );
   }, [user?.id, agentProfile]);
 
+  /**
+   * Ask FinHub for the money. NOT a wallet write.
+   *
+   * This used to INSERT straight into `agent_wallets`, which is what made
+   * releasing commission single-signature: the row existed the moment the agent
+   * clicked, and approval was a super admin flipping a column on it. Since
+   * migration 20260908120000 that insert is refused by
+   * agent_wallet_withdrawal_gate() unless it references a payment request
+   * already walked to 'processing' — so the wallet entry is now an OUTPUT of
+   * the approval pipeline, written by finhub_execute_payment_request, and this
+   * function raises the request instead.
+   *
+   * The RPC writes its own audit trail (payment_request_events), so there is no
+   * auditLogsService.log call here: a second, free-text copy of the same fact
+   * is one that can disagree with the immutable one.
+   */
   const requestWithdrawal = useCallback(async (amount, description) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready.');
-    const { data, error: err } = await supabase
-      .from('agent_wallets')
-      .insert({
-        agent_id: agentProfile.id,
-        total_earned: 0,
-        total_withdrawn: parseFloat(amount),
-        available_balance: -parseFloat(amount),
-        tx_type: 'withdrawal',
-        description: description || 'Withdrawal request',
-      })
-      .select()
-      .maybeSingle();
-    if (err) throw err;
-    await auditLogsService.log(
-      'create',
-      'agent_wallets',
-      `Commission withdrawal request: KES ${amount} by agent ${agentProfile?.agent_code || ''} — ${description || ''}`,
-      data.id,
-      null,
-      { amount, agent_code: agentProfile?.agent_code, description }
-    );
+
+    const { data, error: err } = await supabase.rpc('finhub_submit_payment_request', {
+      p_amount:       parseFloat(amount),
+      p_request_type: 'agent_commission',
+      p_narrative:    description || 'Commission withdrawal request',
+      p_payee_name:   agentProfile?.full_name || null,
+      p_payee_phone:  agentProfile?.phone || null,
+      p_submit_now:   true,
+    });
+    if (err) throw new Error(err.message || 'Could not submit the withdrawal request.');
     return data;
-  }, [agentProfile?.id, user?.id]);
+  }, [agentProfile?.id, agentProfile?.full_name, agentProfile?.phone]);
 
   const logExpense = useCallback(async (expenseData) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready.');

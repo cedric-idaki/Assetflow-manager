@@ -45,8 +45,23 @@ const clone = (row) => JSON.parse(JSON.stringify(row));
  * @param {object}  opts.failures inject errors, keyed `table.op` or `table.*`,
  *                                e.g. { 'agent_wallets.update': { code: 'PGRST204',
  *                                       message: "Could not find the 'status' column" } }
+ * @param {object}  opts.rpcs     server-side functions, keyed by name. Each is
+ *                                called `(args, ctx)` where ctx = { db, user,
+ *                                writes, rowsOf, nextId }. Throwing from one is
+ *                                how you model a RAISE: the thrown message comes
+ *                                back as `{ error: { message } }`, which is what
+ *                                supabase-js does with a function that raised.
+ *
+ *                                An RPC-backed workflow needs this because the
+ *                                tables it drives have no write policy at all —
+ *                                modelling one as a `.insert()` here would prove
+ *                                a path production refuses.
+ * @param {object}  opts.storage  bucket contents, keyed by bucket name. Only
+ *                                upload/remove/createSignedUrl are modelled.
  */
-export const createFakeSupabase = ({ tables = {}, user = { id: 'user_super_admin' }, failures = {} } = {}) => {
+export const createFakeSupabase = ({
+  tables = {}, user = { id: 'user_super_admin' }, failures = {}, rpcs = {}, storage = {},
+} = {}) => {
   const db = {};
   Object.entries(tables).forEach(([name, rows]) => { db[name] = rows.map(clone); });
 
@@ -178,11 +193,54 @@ export const createFakeSupabase = ({ tables = {}, user = { id: 'user_super_admin
     return ch;
   };
 
+  const buckets = {};
+  Object.entries(storage).forEach(([name, objects]) => { buckets[name] = { ...objects }; });
+  const bucketOf = (name) => (buckets[name] || (buckets[name] = {}));
+
+  const storageApi = {
+    from: (bucket) => ({
+      async upload(path, body) {
+        const objects = bucketOf(bucket);
+        if (objects[path]) return { data: null, error: { message: 'The resource already exists' } };
+        objects[path] = body;
+        writes.push({ op: 'storage.upload', bucket, path });
+        return { data: { path }, error: null };
+      },
+      async remove(paths) {
+        const objects = bucketOf(bucket);
+        (paths || []).forEach((p) => { delete objects[p]; });
+        writes.push({ op: 'storage.remove', bucket, paths });
+        return { data: null, error: null };
+      },
+      async createSignedUrl(path) {
+        if (!bucketOf(bucket)[path]) return { data: null, error: { message: 'Object not found' } };
+        return { data: { signedUrl: `https://fake.test/${bucket}/${path}` }, error: null };
+      },
+      getPublicUrl: (path) => ({ data: { publicUrl: `https://fake.test/${bucket}/${path}` } }),
+    }),
+  };
+
   return {
     from,
     channel,
     removeChannel: (ch) => { const i = channels.indexOf(ch); if (i >= 0) channels.splice(i, 1); },
-    rpc: async () => ({ data: null, error: null }),
+    storage: storageApi,
+    /**
+     * A function call, not a table write. Anything the map does not define
+     * answers `{ data: null }` rather than throwing, so a hook that calls an
+     * RPC this test does not care about does not have to be stubbed.
+     */
+    rpc: async (name, args) => {
+      const fn = rpcs[name];
+      if (!fn) return { data: null, error: null };
+      try {
+        const data = await fn(args || {}, { db, user: currentUser(), writes, rowsOf, nextId });
+        writes.push({ op: 'rpc', name, args });
+        return { data: data === undefined ? null : data, error: null };
+      } catch (err) {
+        return { data: null, error: { message: err?.message || String(err) } };
+      }
+    },
     auth: {
       getUser:    async () => ({ data: { user: currentUser() }, error: null }),
       getSession: async () => {
@@ -197,6 +255,7 @@ export const createFakeSupabase = ({ tables = {}, user = { id: 'user_super_admin
     _writes: writes,
     _channels: channels,
     _rows: (name) => rowsOf(name).map(clone),
+    _bucket: (name) => ({ ...bucketOf(name) }),
     _row: (name, id) => { const r = rowsOf(name).find((x) => x.id === id); return r ? clone(r) : null; },
     _fail: (key, error) => { failures[key] = error; },
     _healAll: () => { Object.keys(failures).forEach((k) => delete failures[k]); },

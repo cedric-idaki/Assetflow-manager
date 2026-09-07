@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
+import PaymentRequestsPanel from './PaymentRequestsPanel';
 
 const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -10,7 +11,7 @@ const CommissionDashboard = ({ kpis, walletTransactions, agentProfile, onRequest
   const [withdrawError, setWithdrawError]         = useState('');
   const [submitting, setSubmitting]               = useState(false);
   const [withdrawSuccess, setWithdrawSuccess]     = useState(false);
-  const [activeTab, setActiveTab]                 = useState('overview'); // overview | history
+  const [activeTab, setActiveTab]                 = useState('overview'); // overview | history | requests | withdraw
 
   const commissionRate = agentProfile?.commission_rate || 5;
   const totalEarned    = kpis?.totalEarned    || 0;
@@ -99,6 +100,10 @@ const CommissionDashboard = ({ kpis, walletTransactions, agentProfile, onRequest
         {[
           { id: 'overview', label: 'Overview' },
           { id: 'history',  label: 'History' },
+          // The requests an agent has RAISED, which since the FinHub pipeline
+          // landed are no longer the same thing as the wallet rows in History:
+          // a request becomes a wallet row only once FinHub executes it.
+          { id: 'requests', label: 'Requests' },
           { id: 'withdraw', label: 'Withdraw' },
         ].map(tab => (
           <button
@@ -216,6 +221,8 @@ const CommissionDashboard = ({ kpis, walletTransactions, agentProfile, onRequest
         )}
 
         {/* ── Withdraw tab ── */}
+        {activeTab === 'requests' && <PaymentRequestsPanel />}
+
         {activeTab === 'withdraw' && (
           <div className="space-y-3">
             {withdrawSuccess ? (
