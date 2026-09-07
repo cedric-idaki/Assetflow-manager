@@ -24,6 +24,7 @@
  */
 
 import { loadJsPDF } from './jsPdfLoader';
+import { archiveDocument, archiveMetaFor } from './documentArchive';
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 export const money = (n, currency = 'KES') =>
@@ -1017,10 +1018,30 @@ export const renderAccountingDocument = async (model) => {
   return doc;
 };
 
-/** Renders the document and hands the browser the file. */
+/**
+ * Renders the document, hands the browser the file, and files a copy.
+ *
+ * IN THAT ORDER, AND THE ORDER IS THE POINT. The person pressed Download; they
+ * get the file whatever happens next. Archiving runs after, is not awaited, and
+ * swallows its own failures — a storage outage must cost the archive copy, not
+ * the receipt somebody is standing at a counter waiting for.
+ *
+ * Metadata comes off the model, so the twelve screens that produce documents
+ * did not have to learn about the archive. A builder that needs to correct it
+ * (a real timestamp, a client id, an amount) sets `model.archive`.
+ */
 export const downloadAccountingDocument = async (model) => {
   const doc = await renderAccountingDocument(model);
   doc.save(model.filename);
+
+  try {
+    const blob = doc.output('blob');
+    // Not awaited: the caller's promise resolves on the download, not the file.
+    archiveDocument(blob, archiveMetaFor(model));
+  } catch {
+    // doc.output can throw on an exotic build; the download already happened.
+  }
+
   return model.filename;
 };
 
