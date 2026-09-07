@@ -5,6 +5,7 @@ import Icon from '../../components/AppIcon';
 import { usePOS, buildInstallmentSchedule, vatFractionOn, vatPercentOn } from '../../hooks/usePOS';
 import { generateReceiptPDF } from '../../utils/generateReceiptPDF';
 import { useReceiptPrinter, PaperPicker } from './components/ReceiptPrinter';
+import ReceiptShare from './components/ReceiptShare';
 import SalesHistory from './components/SalesHistory';
 import { supabase } from '../../lib/supabase';
 
@@ -66,7 +67,7 @@ const StepBar = ({ step }) => (
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-lg ${className}`} />;
 
 // ── Receipt popup ─────────────────────────────────────────────────────────────
-const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier, onClose, onNewSale, schedule }) => {
+const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier, buyerKraPin, onClose, onNewSale, schedule }) => {
   const [downloading, setDownloading]     = React.useState(false);
   const [downloadError, setDownloadError] = React.useState('');
 
@@ -81,7 +82,7 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier
       saleData, client, asset, companyProfile, schedule,
       invoiceNo: result.invoiceNo,
       receiptNo: result.receiptNo,
-      cashier, issuedAt,
+      cashier, issuedAt, buyerKraPin,
     }),
   });
 
@@ -100,6 +101,7 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier
         schedule,
         invoiceNo: result.invoiceNo,
         receiptNo: result.receiptNo,
+        buyerKraPin,
       });
     } catch (err) {
       setDownloadError('PDF generation failed: ' + err.message);
@@ -182,6 +184,13 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier
           <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{actionError}</div>
         )}
 
+        <ReceiptShare
+          client={client} asset={asset} saleData={saleData}
+          companyProfile={companyProfile}
+          receiptNo={result.receiptNo} invoiceNo={result.invoiceNo}
+          issuedAt={issuedAt} cashier={cashier} buyerKraPin={buyerKraPin}
+        />
+
         <PaperPicker
           paper={printer.paper}
           onChange={printer.setPaper}
@@ -238,6 +247,11 @@ const POSModule = () => {
   // someone to ask; the submit path already loads the profile for the approval
   // checks, so it costs nothing to keep.
   const [cashier, setCashier]         = useState('');
+  // The buyer's KRA PIN for THIS sale. Prefilled from the client record when
+  // one is selected, but editable: a company buying in a director's name, or a
+  // client whose PIN was never captured, both happen at the counter and neither
+  // should stop the sale.
+  const [buyerKraPin, setBuyerKraPin] = useState('');
 
   const [clientSearch, setClientSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
@@ -474,6 +488,7 @@ const POSModule = () => {
         notes,
         schedule:        schedule?.schedule,
         scheduleSummary: schedule?.summary,
+        buyerKraPin,
       });
       setReceipt(result);
     } catch (err) {
@@ -483,7 +498,7 @@ const POSModule = () => {
 
   const resetForm = () => {
     setStep(1); setReceipt(null);
-    setSelectedClient(null); setClientSearch('');
+    setSelectedClient(null); setClientSearch(''); setBuyerKraPin('');
     setSelectedAsset(null); setAssetSearch('');
     setQuantity(1); setPricingModel('installment');
     setSellingPrice(''); setDiscountPct(''); setDiscountReason('');
@@ -529,6 +544,7 @@ const POSModule = () => {
           schedule={schedule?.schedule}
           companyProfile={companyProfile}
           cashier={cashier}
+          buyerKraPin={buyerKraPin}
           onClose={() => setReceipt(null)}
           onNewSale={resetForm}
         />
@@ -609,7 +625,17 @@ const POSModule = () => {
                     const isVerified = c.kyc_status === 'verified';
                     const isSelected = selectedClient?.id === c.id;
                     return (
-                      <button key={c.id} onClick={() => isVerified && setSelectedClient(c)} disabled={!isVerified}
+                      <button key={c.id}
+                        onClick={() => {
+                          if (!isVerified) return;
+                          setSelectedClient(c);
+                          // Prefill from the record. Clearing on a different
+                          // client matters more than filling: carrying one
+                          // buyer's PIN onto the next sale would print somebody
+                          // else's tax number on a stranger's receipt.
+                          setBuyerKraPin(c.kra_pin || '');
+                        }}
+                        disabled={!isVerified}
                         className={`w-full flex items-center gap-3 p-3.5 rounded-xl border-2 text-left transition-all ${
                           isSelected ? 'border-primary bg-primary/5' :
                           isVerified ? 'border-border hover:border-primary/40 hover:bg-muted/50' :
@@ -630,13 +656,41 @@ const POSModule = () => {
                   })}
                 </div>
                 {selectedClient && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3">
-                    <Icon name="CheckCircle" size={18} color="#059669" />
-                    <div>
-                      <p className="text-sm font-semibold text-emerald-800">Selected: {selectedClient.full_name}</p>
-                      <p className="text-xs text-emerald-600">{selectedClient.account_number}</p>
+                  <>
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3">
+                      <Icon name="CheckCircle" size={18} color="#059669" />
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-800">Selected: {selectedClient.full_name}</p>
+                        <p className="text-xs text-emerald-600">{selectedClient.account_number}</p>
+                      </div>
                     </div>
-                  </div>
+
+                    {/* A VAT-registered buyer cannot claim input tax on a
+                        receipt that does not name them, so the PIN is asked for
+                        here rather than after the money is taken. Optional: a
+                        walk-in without one still gets served. */}
+                    <div>
+                      <label htmlFor="pos-buyer-kra" className="block text-xs font-semibold text-muted-foreground mb-1">
+                        Customer KRA PIN <span className="font-normal">(optional — required for a tax invoice)</span>
+                      </label>
+                      <input
+                        id="pos-buyer-kra"
+                        type="text"
+                        value={buyerKraPin}
+                        onChange={e => setBuyerKraPin(e.target.value.toUpperCase().replace(/\s+/g, ''))}
+                        placeholder="e.g. A001234567X"
+                        maxLength={11}
+                        className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground placeholder:text-muted-foreground font-mono"
+                      />
+                      {buyerKraPin && !/^[A-Z]\d{9}[A-Z]$/.test(buyerKraPin) && (
+                        <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                          <Icon name="AlertTriangle" size={11} color="#d97706" />
+                          A Kenyan PIN is a letter, nine digits and a letter — e.g. A001234567X. This will be
+                          printed as entered.
+                        </p>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             )}

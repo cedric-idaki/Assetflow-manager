@@ -26,6 +26,7 @@ import { usePagedQuery } from '../../../hooks/usePagedQuery';
 import { fetchSaleForReprint } from '../../../hooks/usePOS';
 import { reprintArgsFromSale, PRICING_LABELS, PAYMENT_LABELS } from '../../../utils/posReceiptDocument';
 import { useReceiptPrinter, PaperPicker } from './ReceiptPrinter';
+import ReceiptShare from './ReceiptShare';
 
 const PAGE_SIZE = 20;
 
@@ -111,6 +112,20 @@ const ReprintModal = ({ loading, loadError, receipt, companyProfile, onClose }) 
                 <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{printer.error}</div>
               )}
 
+              {/* Sending a copy is often why somebody opened the reprint at
+                  all — the customer lost the paper. Same component as the
+                  till, so the two cannot drift. */}
+              <ReceiptShare
+                client={receipt.client}
+                asset={receipt.asset}
+                saleData={reprintArgsFromSale({ ...receipt, companyProfile }).saleData}
+                companyProfile={companyProfile}
+                receiptNo={sale.receipt_number}
+                invoiceNo={sale.invoice_number}
+                issuedAt={receipt.payment?.payment_date || sale.sale_date}
+                buyerKraPin={sale.buyer_kra_pin}
+              />
+
               <PaperPicker
                 paper={printer.paper}
                 onChange={printer.setPaper}
@@ -154,7 +169,7 @@ const SalesHistory = ({ adminId, clients = [], companyProfile }) => {
     table: 'sales',
     // select('*') for the sale itself: this table has drifted from the
     // migrations before, and the list needs no column the reprint does not.
-    columns: '*, client:clients(id, full_name, account_number, phone), asset:assets(id, description, asset_code, asset_type)',
+    columns: '*, client:clients(id, full_name, account_number, phone, email, kra_pin), asset:assets(id, description, asset_code, asset_type)',
     searchColumns: ['invoice_number', 'receipt_number'],
     search: q,
     order: { column: 'sale_date', ascending: false },

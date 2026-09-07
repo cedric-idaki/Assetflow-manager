@@ -183,6 +183,15 @@ export const buildPosReceipt = ({
   issuedAt,
   copyNo = 1,
   /**
+   * The buyer's KRA PIN, as captured for THIS sale.
+   *
+   * Falls back to the one on the client record, which is what a reprint of a
+   * sale predating the field will find. Without a PIN the receipt is still a
+   * receipt — it is only a TAX INVOICE, claimable by a registered buyer, when
+   * it names them.
+   */
+  buyerKraPin = null,
+  /**
    * The eTIMS transmission row for this sale, where the tenant files with KRA.
    *
    * Absent for the great majority of tenants, who have the module switched off
@@ -231,6 +240,7 @@ export const buildPosReceipt = ({
       name:    client?.full_name || 'Walk-in Customer',
       account: client?.account_number || '',
       phone:   client?.phone || '',
+      kraPin:  buyerKraPin || client?.kra_pin || '',
     },
     item: {
       description: asset?.description || 'Asset',
@@ -442,6 +452,7 @@ export const thermalBody = (r) => html`
   ${line('Customer', r.client.name)}
   ${optionalLine('Account', r.client.account, !!r.client.account)}
   ${optionalLine('Phone', r.client.phone, !!r.client.phone)}
+  ${optionalLine('KRA PIN', r.client.kraPin, !!r.client.kraPin)}
   <div class="rule"></div>
   <div class="item">
     <div class="item-name">${r.item.description}</div>
@@ -486,6 +497,7 @@ export const a4Body = (r) => html`
       <div style="font-weight:600;">${r.client.name}</div>
       ${r.client.account ? rawHtml(html`<div class="co-line">Account: ${r.client.account}</div>`) : ''}
       ${r.client.phone ? rawHtml(html`<div class="co-line">${r.client.phone}</div>`) : ''}
+      ${r.client.kraPin ? rawHtml(html`<div class="co-line">KRA PIN: ${r.client.kraPin}</div>`) : ''}
     </div>
     <div>
       <div class="lbl">Reference</div>
@@ -632,6 +644,10 @@ export const reprintArgsFromSale = ({
     invoiceNo: sale.invoice_number,
     receiptNo: sale.receipt_number || '',
     cashier,
+    // The PIN THIS receipt was issued with. Sales predating the column have
+    // none, and the builder then falls back to the client record — the best
+    // available answer for a document whose own answer was never recorded.
+    buyerKraPin: sale.buyer_kra_pin || null,
     // The moment the money was taken. payment_date is the payment's own
     // timestamp; sale_date is a date only, so it is the coarser fallback.
     issuedAt: payment?.payment_date || sale.sale_date || sale.created_at,

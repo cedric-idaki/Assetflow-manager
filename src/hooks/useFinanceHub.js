@@ -219,6 +219,9 @@ export const useFinanceHub = () => {
         client_email: inv.client_email || '',
         client_phone: inv.client_phone || '',
         account_no:   inv.account_no   || '',
+        // The buyer's PIN as it was on this invoice. A registered customer
+        // cannot claim input tax on a tax invoice that does not name them.
+        client_kra_pin: inv.client_kra_pin || '',
         asset:        items[0]?.description || '—',
         asset_code:   '',
         asset_type:   '',
@@ -806,6 +809,7 @@ const { data, error: err } = await supabase
       client_email:   form.client_email || null,
       client_phone:   form.client_phone || null,
       account_no:     form.account_no   || null,
+      client_kra_pin: form.client_kra_pin || null,
       asset_id:       form.asset_id     || null,
       issue_date:     form.issue_date   || new Date().toISOString().split('T')[0],
       due_date:       form.due_date     || null,

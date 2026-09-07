@@ -108,7 +108,10 @@ const genReceiptNo = () =>
 
 // ── Reprint support ───────────────────────────────────────────────────────────
 /** Columns migration 20260902140000 adds; a sale still records without them. */
-const REPRINT_COLUMNS = ['receipt_number', 'vat_percent'];
+// Columns added after the till shipped. `buyer_kra_pin` joins the reprint
+// fields under the same rule: a missing column must cost the extra detail, not
+// the sale. See the retry below and migration 20260908140000.
+const REPRINT_COLUMNS = ['receipt_number', 'vat_percent', 'buyer_kra_pin'];
 
 /**
  * Is this PostgREST error "that column does not exist", for one of `columns`?
@@ -239,7 +242,7 @@ export const usePOS = () => {
         clientId, asset, pricingModel, sellingPrice, discountAmount,
         discountReason, vatAmount, vatPercent, totalAmount, depositAmount,
         financeBalance, interestRate, tenureMonths, startDate,
-        paymentMethod, mpesaRef, bankRef, notes, schedule,
+        paymentMethod, mpesaRef, bankRef, notes, schedule, buyerKraPin,
       } = saleData;
 
       const invoiceNo = genInvoiceNo();
@@ -310,6 +313,10 @@ export const usePOS = () => {
           // customer was handed cannot be reconstructed without them.
           receipt_number:   receiptNo,
           vat_percent:      vatPercent ?? null,
+          // The buyer PIN AS PRINTED on this receipt. A snapshot, never a
+          // lookup: a reprint two years from now must reproduce the document
+          // the customer was handed, not today's client record.
+          buyer_kra_pin:    buyerKraPin || null,
       };
 
       let { data: saleRecord, error: saleErr } = await supabase
@@ -332,6 +339,23 @@ export const usePOS = () => {
       if (saleErr) {
         console.error('Sales insert error details:', saleErr);
         throw new Error('Sale record failed: ' + saleErr.message + ' (code: ' + saleErr.code + ')');
+      }
+
+      // 2b. Remember the PIN for next time.
+      //
+      // Only when the client had none: overwriting one already on file would
+      // let a typo at the till, or a PIN entered for a one-off corporate buyer,
+      // silently replace the customer's real number on every future document.
+      // Failure here is not a failed sale — the receipt already carries the PIN
+      // it was issued with, which is the copy that matters.
+      if (buyerKraPin && clientId) {
+        const { error: pinErr } = await supabase
+          .from('clients')
+          .update({ kra_pin: buyerKraPin })
+          .eq('id', clientId)
+          .is('kra_pin', null)
+          .select('id');
+        if (pinErr) console.warn('Could not save the customer KRA PIN for next time:', pinErr.message);
       }
 
       // 3. Insert installment schedule rows (if installment sale)

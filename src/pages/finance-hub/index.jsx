@@ -356,6 +356,7 @@ export const printInvoice = ({ company, invoice: inv }) => {
           ${inv.account_no ? rawHtml(html`<div class="muted">${inv.account_no}</div>`) : ''}
           ${inv.client_email ? rawHtml(html`<div class="muted">${inv.client_email}</div>`) : ''}
           ${inv.client_phone ? rawHtml(html`<div class="muted">${inv.client_phone}</div>`) : ''}
+          ${inv.client_kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${inv.client_kra_pin}</div>`) : ''}
         </div>
         <div style="text-align:right;">
           <div class="lbl">Details</div>
@@ -400,7 +401,7 @@ const blankInvoiceForm = () => {
   due.setDate(due.getDate() + 30);
   const issueDate = today.toISOString().split('T')[0];
   return {
-    client_id: '', client_name: '', client_email: '', client_phone: '', account_no: '',
+    client_id: '', client_name: '', client_email: '', client_phone: '', account_no: '', client_kra_pin: '',
     asset_id: '',
     issue_date: issueDate,
     due_date:   due.toISOString().split('T')[0],
@@ -459,6 +460,7 @@ const InvoicesTab = ({
       client_email: c?.email          || '',
       client_phone: c?.phone          || '',
       account_no:   c?.account_number || '',
+      client_kra_pin: c?.kra_pin      || '',
     }));
   };
 
@@ -629,6 +631,9 @@ const InvoicesTab = ({
               <p className="text-gray-500">{inv.account_no}</p>
               <p className="text-gray-500">{inv.client_email}</p>
               <p className="text-gray-500">{inv.client_phone}</p>
+              {inv.client_kra_pin && (
+                <p className="text-gray-500">KRA PIN: {inv.client_kra_pin}</p>
+              )}
             </div>
             <div className="text-right">
               <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Details</p>
@@ -831,6 +836,17 @@ const InvoicesTab = ({
                 <label className={S.label}>Email (for sending)</label>
                 <input className={S.input} placeholder="client@example.com"
                   value={form.client_email} onChange={e => setForm(p => ({ ...p, client_email: e.target.value }))} />
+              </div>
+              <div>
+                {/* Without the buyer's PIN this document is a bill, not a tax
+                    invoice: a VAT-registered customer cannot claim the input
+                    tax on it. Prefilled from the client record when there is
+                    one; still editable, because a company often buys under a
+                    PIN that is not on the contact's file. */}
+                <label className={S.label}>Client KRA PIN (for a tax invoice)</label>
+                <input className={S.input} placeholder="e.g. A001234567X" maxLength={11}
+                  value={form.client_kra_pin}
+                  onChange={e => setForm(p => ({ ...p, client_kra_pin: e.target.value.toUpperCase().replace(/\s+/g, '') }))} />
               </div>
               <div>
                 <label className={S.label}>Asset (optional — fills a line)</label>

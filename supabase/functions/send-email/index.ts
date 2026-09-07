@@ -102,6 +102,89 @@ const buildPaymentConfirmationEmail = (data: any) => {
 </body></html>`;
 };
 
+/**
+ * A POS receipt, for the customer who wants it on their phone.
+ *
+ * WHY THIS IS A TEMPLATE AND NOT THE TILL'S OWN HTML. posReceiptDocument
+ * renders for an 80mm roll or an A4 sheet: fixed-width monospace, print
+ * styles, page breaks. Emailing that produces something unreadable on a phone
+ * and stripped to pieces by most mail clients. So the FIGURES come from the
+ * sale — the same ones the paper carries — and the layout is built for an
+ * inbox.
+ *
+ * BOTH KRA PINS APPEAR WHEN BOTH ARE KNOWN. The seller's makes it a receipt;
+ * the buyer's is what lets a registered customer claim the input tax. A
+ * receipt missing the buyer's is still valid — it is simply not claimable, and
+ * saying nothing is better than printing a blank labelled "KRA PIN".
+ */
+const buildPosReceiptEmail = (data: any) => {
+  const { receiptNo, issuedAt, cashier, company, customer, item, amounts, paymentMethod, paymentRef } = data || {};
+  const balance = Number(amounts?.balance || 0);
+
+  const row = (label: string, value: string, strong = false) => value
+    ? `<tr>
+         <td style="padding:8px 0;color:#6b7280;font-size:13px">${label}</td>
+         <td style="padding:8px 0;color:#111827;font-size:${strong ? "15px" : "13px"};font-weight:${strong ? 800 : 600};text-align:right">${value}</td>
+       </tr>`
+    : "";
+
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="${baseStyle}">
+<div style="${cardStyle}">
+  <div style="${headerStyle}">
+    <h1 style="margin:0;font-size:22px;font-weight:700">${company?.name || "Receipt"}</h1>
+    <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Receipt ${receiptNo || ""}</p>
+  </div>
+
+  <div style="padding:28px 0 0">
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:20px;text-align:center;margin-bottom:24px">
+      <p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">Total</p>
+      <p style="margin:0;font-size:32px;font-weight:800;color:#059669">${formatCurrency(Number(amounts?.total || 0))}</p>
+      ${balance > 0
+        ? `<p style="margin:8px 0 0;font-size:13px;color:#b45309">Paid today ${formatCurrency(Number(amounts?.paid || 0))} &middot; balance ${formatCurrency(balance)}</p>`
+        : `<p style="margin:8px 0 0;font-size:13px;color:#059669">Paid in full</p>`}
+    </div>
+
+    <h3 style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 12px">What you bought</h3>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+      ${row("Item", item?.description || "")}
+      ${row("Code", item?.code || "")}
+      ${row("Price", formatCurrency(Number(amounts?.gross || 0)))}
+      ${Number(amounts?.discount || 0) > 0 ? row("Discount", "-" + formatCurrency(Number(amounts.discount))) : ""}
+      ${Number(amounts?.vat || 0) > 0 ? row("VAT", formatCurrency(Number(amounts.vat))) : ""}
+      ${row("Total", formatCurrency(Number(amounts?.total || 0)), true)}
+    </table>
+
+    <h3 style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 12px">Transaction</h3>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+      ${row("Receipt No.", receiptNo || "")}
+      ${row("Date", issuedAt ? formatDate(issuedAt) : "")}
+      ${row("Payment method", paymentMethod || "")}
+      ${row("Reference", paymentRef || "")}
+      ${row("Served by", cashier || "")}
+    </table>
+
+    <h3 style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 12px">Parties</h3>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+      ${row("Customer", customer?.name || "")}
+      ${row("Account", customer?.account || "")}
+      ${row("Customer KRA PIN", customer?.kraPin || "")}
+      ${row("Seller", company?.name || "")}
+      ${row("Seller KRA PIN", company?.kraPin || "")}
+    </table>
+
+    <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center;margin-top:8px">
+      <p style="margin:0;font-size:13px;color:#6b7280">
+        Thank you for your business.${company?.phone ? ` Questions? Call ${company.phone}.` : ""}
+      </p>
+    </div>
+  </div>
+</div>
+</body></html>`;
+};
+
 const buildInvoiceEmail = (data: any) => {
   const { invoice, client, asset, lineItems, plan, company } = data;
   const total = parseFloat(invoice?.total || 0);
@@ -1547,6 +1630,10 @@ serve(async (req) => {
       case "payment_confirmation":
         subject = `Payment Confirmed – ${data?.transaction?.transactionId || data?.transaction?.transaction_id || "Receipt"}`;
         html = buildPaymentConfirmationEmail(data);
+        break;
+      case "pos_receipt":
+        subject = `Receipt ${data?.receiptNo || ""}${data?.company?.name ? ` – ${data.company.name}` : ""}`;
+        html = buildPosReceiptEmail(data);
         break;
       case "invoice":
         subject = `Invoice ${data?.invoice?.invoiceNumber || data?.invoice?.invoice_number || ""} – Ararat Management`;
