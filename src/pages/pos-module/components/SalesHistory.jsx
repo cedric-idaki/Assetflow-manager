@@ -101,6 +101,19 @@ const ReprintModal = ({ loading, loadError, receipt, companyProfile, onClose }) 
                 </div>
               </div>
 
+              {/* The type this sale was made under, not the customer's type
+                  today. Snapshot on the row for the same reason the buyer's
+                  KRA PIN is: a customer promoted later must not make an old
+                  walk-in sale read as an account sale. */}
+              {sale.customer_type && (
+                <div className="flex items-center gap-2">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                    sale.customer_type === 'cash' ? 'bg-sky-100 text-sky-700' : 'bg-primary/10 text-primary'}`}>
+                    {sale.customer_type === 'cash' ? 'Cash customer' : 'Account customer'}
+                  </span>
+                </div>
+              )}
+
               {!sale.receipt_number && (
                 <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                   This sale was recorded before receipt numbers were stored, so the copy is

@@ -184,17 +184,40 @@ export const usePOS = () => {
     boot();
   }, []);
 
-  // ── Fetch KYC-verified clients ──────────────────────────────────────────────
+  // ── Fetch clients ───────────────────────────────────────────────────────────
+  // Both kinds. Which of them may be sold to on WHAT terms is decided at the
+  // till (and enforced by the sales trigger in 20260908180000), not by leaving
+  // half the customer book out of the list.
   const fetchClients = useCallback(async (aId) => {
     try {
       const { data } = await supabase
         .from('clients')
-        .select('id, full_name, account_number, email, phone, kyc_status, client_status')
+        .select('id, full_name, account_number, email, phone, kyc_status, client_status, customer_type, kra_pin')
         .eq('admin_id', aId)
         .order('full_name');
       setClients(data || []);
     } catch { setClients([]); }
   }, []);
+
+  /**
+   * Register a walk-in at the counter.
+   *
+   * A cash customer needs a name and nothing else, because nothing is being
+   * lent to them — the KYC gate exists for credit, and applying it to somebody
+   * paying cash for a cooker produces either a queue nobody stands in or a
+   * fake "verified" record, which is worse.
+   */
+  const createCashCustomer = useCallback(async (details) => {
+    const { data, error: err } = await supabase.rpc('create_cash_customer', {
+      p_full_name: details.fullName,
+      p_phone:     details.phone   || null,
+      p_email:     details.email   || null,
+      p_kra_pin:   details.kraPin  || null,
+    });
+    if (err) throw new Error(err.message || 'Could not register the customer.');
+    await fetchClients(adminId);
+    return data;
+  }, [fetchClients, adminId]);
 
   // ── Fetch available assets ──────────────────────────────────────────────────
   const fetchAvailableAssets = useCallback(async (aId) => {
@@ -460,7 +483,7 @@ export const usePOS = () => {
   }, [adminId, agentId]);
 
   return {
-    adminId, userProfile, clients, assets, companyProfile,
+    adminId, userProfile, clients, assets, companyProfile, createCashCustomer,
     loading, submitting, error,
     submitSale,
     refetchAssets: () => fetchAvailableAssets(adminId),

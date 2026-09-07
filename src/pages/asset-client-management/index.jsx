@@ -149,6 +149,9 @@ const AssetClientManagement = () => {
         outstandingBalance: parseFloat(c.outstanding_balance || 0),
         notes: c.notes,
         kycStatus: c.kyc_status,
+        // account | cash. Decides whether this customer may be sold to on
+        // terms at all -- see migration 20260908180000.
+        customerType: c.customer_type || 'account',
         // All fields needed by the edit form
         account_number:     c.account_number,
         full_name:          c.full_name,

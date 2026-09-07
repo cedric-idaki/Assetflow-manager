@@ -233,7 +233,7 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier
 const POSModule = () => {
   const {
     adminId, clients, assets, companyProfile, loading, submitting, error: hookError,
-    submitSale,
+    submitSale, createCashCustomer,
   } = usePOS();
 
   // The till does two things: take a sale, and reissue a receipt for one
@@ -252,6 +252,14 @@ const POSModule = () => {
   // client whose PIN was never captured, both happen at the counter and neither
   // should stop the sale.
   const [buyerKraPin, setBuyerKraPin] = useState('');
+  // Registering a walk-in without leaving the till.
+  const [quickOpen, setQuickOpen]     = useState(false);
+  const [quick, setQuick]             = useState({ fullName: '', phone: '', email: '', kraPin: '' });
+  const [quickSaving, setQuickSaving] = useState(false);
+
+  // A cash customer is never lent to. The screen reflects that; the sales
+  // trigger in 20260908180000 is what enforces it.
+  const isCashCustomer = selectedClient?.customer_type === 'cash';
 
   const [clientSearch, setClientSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
@@ -598,10 +606,66 @@ const POSModule = () => {
 
             {step === 1 && (
               <div className="space-y-4 max-w-2xl mx-auto">
-                <div>
-                  <h2 className="text-base font-semibold text-foreground mb-1">Select Client</h2>
-                  <p className="text-xs text-muted-foreground">Only KYC-verified clients can proceed to a sale</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-foreground mb-1">Select Customer</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Account customers need KYC for credit terms. A cash customer can buy outright straight away.
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setQuickOpen(o => !o)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-foreground hover:bg-muted flex-shrink-0">
+                    <Icon name="UserPlus" size={13} color="currentColor" />
+                    {quickOpen ? 'Cancel' : 'New walk-in'}
+                  </button>
                 </div>
+
+                {/* Quick creation. A name and nothing else is required: the
+                    point of this customer type is that it takes seconds, and a
+                    required field is one somebody types a single letter into. */}
+                {quickOpen && (
+                  <div className="border border-border rounded-xl p-4 space-y-3 bg-muted/30">
+                    <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Register a walk-in</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input value={quick.fullName} onChange={e => setQuick(q => ({ ...q, fullName: e.target.value }))}
+                        placeholder="Customer name *" className={ic(false)} />
+                      <input value={quick.phone} onChange={e => setQuick(q => ({ ...q, phone: e.target.value }))}
+                        placeholder="Phone" className={ic(false)} />
+                      <input value={quick.email} onChange={e => setQuick(q => ({ ...q, email: e.target.value }))}
+                        placeholder="Email" className={ic(false)} />
+                      <input value={quick.kraPin}
+                        onChange={e => setQuick(q => ({ ...q, kraPin: e.target.value.toUpperCase().replace(/\s+/g, '') }))}
+                        placeholder="KRA PIN (for a tax invoice)" maxLength={11} className={`${ic(false)} font-mono`} />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      A cash customer can be invoiced, pay and take a receipt. They cannot be put on
+                      hire-purchase — promote them to an account customer for that.
+                    </p>
+                    <button type="button" disabled={quickSaving || !quick.fullName.trim()}
+                      onClick={async () => {
+                        setQuickSaving(true);
+                        setGlobalError('');
+                        try {
+                          const created = await createCashCustomer(quick);
+                          setSelectedClient(created);
+                          setBuyerKraPin(created?.kra_pin || '');
+                          // A walk-in pays cash by definition; pre-selecting it
+                          // saves a step and matches what the sales gate will
+                          // allow anyway.
+                          setPricingModel('cash');
+                          setQuick({ fullName: '', phone: '', email: '', kraPin: '' });
+                          setQuickOpen(false);
+                        } catch (err) {
+                          setGlobalError(err.message || 'Could not register the customer.');
+                        } finally {
+                          setQuickSaving(false);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-primary-foreground disabled:opacity-50">
+                      {quickSaving ? 'Registering…' : 'Register and continue'}
+                    </button>
+                  </div>
+                )}
                 <div className="relative">
                   <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
                     <Icon name="Search" size={15} color="var(--color-muted-foreground)" />
@@ -622,23 +686,32 @@ const POSModule = () => {
                       <p className="text-sm mt-2">No clients found</p>
                     </div>
                   ) : filteredClients.map(c => {
+                    // KYC gates CREDIT, not trade. A cash customer is never
+                    // lent to — the sales trigger refuses it — so requiring
+                    // verification of them buys nothing and costs the sale.
+                    const isCash     = c.customer_type === 'cash';
                     const isVerified = c.kyc_status === 'verified';
+                    const canSell    = isCash || isVerified;
                     const isSelected = selectedClient?.id === c.id;
                     return (
                       <button key={c.id}
                         onClick={() => {
-                          if (!isVerified) return;
+                          if (!canSell) return;
                           setSelectedClient(c);
+                          // A cash customer cannot take terms, so do not leave
+                          // an installment model selected from a previous
+                          // customer for the gate to reject at submit time.
+                          if (isCash) setPricingModel('cash');
                           // Prefill from the record. Clearing on a different
                           // client matters more than filling: carrying one
                           // buyer's PIN onto the next sale would print somebody
                           // else's tax number on a stranger's receipt.
                           setBuyerKraPin(c.kra_pin || '');
                         }}
-                        disabled={!isVerified}
+                        disabled={!canSell}
                         className={`w-full flex items-center gap-3 p-3.5 rounded-xl border-2 text-left transition-all ${
                           isSelected ? 'border-primary bg-primary/5' :
-                          isVerified ? 'border-border hover:border-primary/40 hover:bg-muted/50' :
+                          canSell ? 'border-border hover:border-primary/40 hover:bg-muted/50' :
                           'border-border opacity-50 cursor-not-allowed'
                         }`}>
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 font-bold text-sm ${isSelected ? 'bg-primary text-white' : 'bg-muted text-muted-foreground'}`}>
@@ -648,8 +721,11 @@ const POSModule = () => {
                           <p className="font-semibold text-sm text-foreground">{c.full_name}</p>
                           <p className="text-xs text-muted-foreground">{c.account_number} · {c.phone}</p>
                         </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${isVerified ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                          {isVerified ? '✓ KYC Verified' : c.kyc_status}
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${
+                          isCash ? 'bg-sky-100 text-sky-700'
+                          : isVerified ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-amber-100 text-amber-700'}`}>
+                          {isCash ? 'Cash customer' : isVerified ? '✓ KYC Verified' : c.kyc_status}
                         </span>
                       </button>
                     );
@@ -748,19 +824,37 @@ const POSModule = () => {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pricing Model *</label>
+                  {isCashCustomer && (
+                    <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                      <Icon name="Info" size={12} color="currentColor" />
+                      {selectedClient?.full_name} is a cash customer — only an outright sale is available.
+                      Promote them to an account customer for terms.
+                    </p>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {PRICING_MODELS.map(m => (
-                      <button key={m.value} onClick={() => setPricingModel(m.value)}
-                        className={`flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${pricingModel === m.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/30 hover:bg-muted/30'}`}>
-                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${pricingModel === m.value ? 'bg-primary' : 'bg-muted'}`}>
-                          <Icon name={m.icon} size={15} color={pricingModel === m.value ? 'white' : 'var(--color-muted-foreground)'} />
-                        </div>
-                        <div>
-                          <p className={`text-xs font-semibold ${pricingModel === m.value ? 'text-primary' : 'text-foreground'}`}>{m.label}</p>
-                          <p className="text-xs text-muted-foreground">{m.desc}</p>
-                        </div>
-                      </button>
-                    ))}
+                    {PRICING_MODELS.map(m => {
+                      // Credit models are shown greyed rather than removed: the
+                      // operator needs to see WHY the option they expected is
+                      // not there, or they will assume the till is broken.
+                      const blocked = isCashCustomer && m.value !== 'cash';
+                      return (
+                        <button key={m.value} disabled={blocked}
+                          title={blocked ? 'Not available to a cash customer' : undefined}
+                          onClick={() => !blocked && setPricingModel(m.value)}
+                          className={`flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${
+                            blocked ? 'border-border opacity-40 cursor-not-allowed'
+                            : pricingModel === m.value ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/30 hover:bg-muted/30'}`}>
+                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${pricingModel === m.value && !blocked ? 'bg-primary' : 'bg-muted'}`}>
+                            <Icon name={m.icon} size={15} color={pricingModel === m.value && !blocked ? 'white' : 'var(--color-muted-foreground)'} />
+                          </div>
+                          <div>
+                            <p className={`text-xs font-semibold ${pricingModel === m.value && !blocked ? 'text-primary' : 'text-foreground'}`}>{m.label}</p>
+                            <p className="text-xs text-muted-foreground">{m.desc}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
