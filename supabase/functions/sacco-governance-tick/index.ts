@@ -157,6 +157,24 @@ serve(async (req) => {
   }
 
   try {
+    // 0. Warn guarantors about missed instalments.
+    //
+    // Runs FIRST and failure-tolerant, before the governance work: it is an
+    // independent sweep and a broken election should not cost a guarantor the
+    // notice that the loan they backed has fallen behind. The RPC is
+    // idempotent per instalment (sacco_loan_schedule.arrears_notified_at), so
+    // running it every tick sends each warning once.
+    let arrearsWarned = 0;
+    try {
+      const { data: warned, ok: sweepOk } = await callRpc("sacco_guarantee_arrears_sweep", {
+        p_grace_days: 3,
+      });
+      if (sweepOk && typeof warned === "number") arrearsWarned = warned;
+      else if (!sweepOk) console.error("arrears sweep failed", warned);
+    } catch (err) {
+      console.error("arrears sweep threw", err);
+    }
+
     // 1. Advance everything that is due.
     const { data: events, ok } = await callRpc("sacco_governance_run_due");
     if (!ok) {
@@ -209,7 +227,7 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ ok: true, transitions: list.length, emailed, failed, summary }),
+      JSON.stringify({ ok: true, transitions: list.length, emailed, failed, arrearsWarned, summary }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {

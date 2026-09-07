@@ -483,7 +483,9 @@ export const SaccoMemberProvider = ({ children }) => {
   }, []);
 
   const applyLoan = useCallback(async (form) => {
-    const { error } = await supabase.from('sacco_loans').insert({
+    // `.select()` because the caller needs the id: security is pledged against
+    // the loan, and the loan does not exist until this returns.
+    const { data, error } = await supabase.from('sacco_loans').insert({
       admin_id: me?.admin_id, sacco_id: me?.sacco_id, member_id: me?.id,
       product_id: form.product_id || null,
       principal: parseFloat(form.principal) || 0,
@@ -492,12 +494,69 @@ export const SaccoMemberProvider = ({ children }) => {
       method: form.method || 'reducing_balance',
       balloon_amount: parseFloat(form.balloon_amount) || 0,
       purpose: form.purpose || '', status: 'pending',
-    });
+    }).select().maybeSingle();
     if (error) throw error;
     // The new application is committed against the ceiling from this moment,
     // so the figure on the screen has to move with it.
     await Promise.all([fetchLoans(), fetchBorrowingCapacity()]);
+    return data;
   }, [me, fetchLoans, fetchBorrowingCapacity]);
+
+  /**
+   * Pledge an asset as security for a loan.
+   *
+   * The document goes to the private bucket FIRST and the row is written
+   * second, for the same reason the payment pipeline does it that way: an
+   * orphan file is recoverable, a register entry pointing at a document that
+   * was never uploaded is a charge with no proof behind it.
+   *
+   * Failure here does NOT undo the application. A loan submitted without its
+   * security attached is a loan the committee can ask about; a loan silently
+   * discarded because an upload failed is one the member has to notice is
+   * missing.
+   */
+  const pledgeCollateral = useCallback(async (loanId, pledge, file) => {
+    let path = null;
+    let name = null;
+
+    if (file) {
+      const safe = file.name.replace(/[^\w.-]+/g, '_');
+      path = `${me?.admin_id}/${loanId}/${Date.now()}_${safe}`;
+      name = file.name;
+      const { error: upErr } = await supabase.storage
+        .from('sacco-loan-collateral')
+        .upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' });
+      if (upErr) throw new Error(upErr.message || 'The ownership document could not be uploaded.');
+    }
+
+    const { data, error } = await supabase.rpc('sacco_loan_pledge_collateral', {
+      p_loan_id:           loanId,
+      p_asset_reference:   pledge.reference,
+      p_estimated_value:   Number(pledge.value),
+      p_asset_type:        pledge.assetType || 'other',
+      p_asset_description: pledge.description || null,
+      p_valuation_date:    pledge.valuationDate || null,
+      p_valuer:            pledge.valuer || null,
+      p_document_path:     path,
+      p_document_name:     name,
+      p_notes:             pledge.notes || null,
+    });
+    if (error) {
+      if (path) await supabase.storage.from('sacco-loan-collateral').remove([path]).catch(() => {});
+      throw new Error(error.message || 'The security could not be recorded.');
+    }
+    return data;
+  }, [me?.admin_id]);
+
+  const listCollateral = useCallback(async (loanId) => {
+    const { data, error } = await supabase
+      .from('sacco_loan_collateral')
+      .select('id, asset_type, asset_reference, asset_description, estimated_value, valuation_date, valuer, document_path, document_name, status, created_at')
+      .eq('loan_id', loanId)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }, []);
 
   // ── Share market ──────────────────────────────────────────────────────────
   // Members no longer write the order book directly: every action goes through
@@ -940,7 +999,7 @@ export const SaccoMemberProvider = ({ children }) => {
     guarantees, guaranteeSigning, openExecutedGuarantee,
     stats, loading,
     refetch: fetchAll,
-    updateProfile, applyLoan,
+    updateProfile, applyLoan, pledgeCollateral, listCollateral,
     submitContribution, cancelContribution, payContributionByMpesa, checkMpesaContribution,
     createListing, cancelListing, updateListing, buyListing, transferShares, refreshMarket,
     ensureCertificateSerial,

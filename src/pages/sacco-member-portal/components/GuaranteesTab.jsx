@@ -481,6 +481,36 @@ const GuaranteesTab = ({ ctx }) => {
                       onOpen={() => openAgreement(g)}
                     />
                   )}
+
+                  {/* THE HOLD. Stated plainly and separately from the
+                      agreement, because it is the part that touches this
+                      member's own money: shares under a hold cannot be sold or
+                      withdrawn, and a guarantor who does not know that finds
+                      out by having a sale refused. */}
+                  {g.status === 'accepted' && g.escrow_locked_at && !g.escrow_released_at && (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200">
+                      <Icon name="Lock" size={14} color="#b45309" />
+                      <p className="text-xs text-amber-800">
+                        <strong>{g.escrow_shares} of your shares are held</strong> as security under this
+                        guarantee since {fmtDate(g.escrow_locked_at)}. They cannot be sold or withdrawn
+                        until the loan is repaid, at which point they return to your balance automatically.
+                      </p>
+                    </div>
+                  )}
+                  {g.escrow_released_at && (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
+                      <Icon name="Unlock" size={14} color="#059669" />
+                      <p className="text-xs text-emerald-700">
+                        Your {g.escrow_shares} held shares were released on {fmtDate(g.escrow_released_at)}.
+                      </p>
+                    </div>
+                  )}
+                  {g.status === 'accepted' && !g.escrow_locked_at && (
+                    <p className="text-xs text-muted-foreground">
+                      No shares are held against this guarantee yet — the hold is taken once the
+                      agreement is executed.
+                    </p>
+                  )}
                   {g.status === 'declined' && g.decline_reason && (
                     <p className="text-xs text-muted-foreground">You declined: “{g.decline_reason}”</p>
                   )}

@@ -12,8 +12,9 @@ import LoansTab from './LoansTab';
 // its own. The refusal is enforced server-side regardless; what is tested here
 // is that the member is told before they submit, not after.
 
+const toast = { success: vi.fn(), error: vi.fn(), info: vi.fn() };
 vi.mock('../../../components/Toast', () => ({
-  useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }),
+  useToast: () => toast,
 }));
 
 const me = { id: 'm1', full_name: 'Jane Wanjiku', member_no: 'MEM-001', sacco_id: 's1' };
@@ -48,7 +49,8 @@ const buildCtx = (over = {}) => ({
   schedules: [],
   loanProducts: [product],
   borrowingCapacity: capacity(),
-  applyLoan: vi.fn().mockResolvedValue(undefined),
+  applyLoan: vi.fn().mockResolvedValue({ id: 'loan_1' }),
+  pledgeCollateral: vi.fn().mockResolvedValue({ id: 'col_1' }),
   exportCSV: vi.fn(),
   ...over,
 });
@@ -86,7 +88,9 @@ describe('LoansTab — borrowing multiple', () => {
     render(<LoansTab ctx={ctx} />);
 
     const modal = await openApplyForm('250000');
-    fireEvent.change(within(modal).getByRole('combobox'), { target: { value: 'p1' } });
+    // The form now carries a second select (the security type), so the
+    // product picker has to be named rather than assumed to be the only one.
+    fireEvent.change(within(modal).getByLabelText(/loan product/i), { target: { value: 'p1' } });
 
     expect(within(modal).getByText(/KES 50,000 above your limit/i)).toBeInTheDocument();
 
@@ -101,7 +105,9 @@ describe('LoansTab — borrowing multiple', () => {
     render(<LoansTab ctx={ctx} />);
 
     const modal = await openApplyForm('250000');
-    fireEvent.change(within(modal).getByRole('combobox'), { target: { value: 'p1' } });
+    // The form now carries a second select (the security type), so the
+    // product picker has to be named rather than assumed to be the only one.
+    fireEvent.change(within(modal).getByLabelText(/loan product/i), { target: { value: 'p1' } });
 
     // Advice, not a refusal — the loans officer still gets to decide.
     expect(within(modal).getByText(/You can still apply/i)).toBeInTheDocument();
@@ -136,5 +142,105 @@ describe('LoansTab — borrowing multiple', () => {
     const modal = await openApplyForm('900000');
     expect(within(modal).queryByText(/what you may borrow/i)).not.toBeInTheDocument();
     expect(within(modal).getByRole('button', { name: /submit application/i })).not.toBeDisabled();
+  });
+});
+
+
+/* ────────────────────────────────────────────────────────────────────────────
+   SECURITY
+
+   A pledge is optional, and the interesting cases are the two that lose
+   information: a half-filled pledge that would record an unenforceable charge,
+   and an upload failure that must NOT take the loan application down with it.
+   ──────────────────────────────────────────────────────────────────────────── */
+describe('LoansTab — pledging security', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const fillPledge = (modal, { type = 'vehicle', ref = 'KAA 123B', value = '750000' } = {}) => {
+    if (type) fireEvent.change(within(modal).getByLabelText(/asset type/i), { target: { value: type } });
+    if (ref !== null) {
+      fireEvent.change(within(modal).getByPlaceholderText(/KAA 123B/i), { target: { value: ref } });
+    }
+    if (value !== null) {
+      fireEvent.change(within(modal).getByPlaceholderText('750000'), { target: { value } });
+    }
+  };
+
+  const submit = (modal) =>
+    fireEvent.click(within(modal).getByRole('button', { name: /submit application/i }));
+
+  it('applies with no security at all, because most loans need none', async () => {
+    const ctx = buildCtx();
+    render(<LoansTab ctx={ctx} />);
+    const modal = await openApplyForm('50000');
+    fireEvent.change(within(modal).getByLabelText(/loan product/i), { target: { value: 'p1' } });
+
+    submit(modal);
+    await waitFor(() => expect(ctx.applyLoan).toHaveBeenCalled());
+    expect(ctx.pledgeCollateral).not.toHaveBeenCalled();
+  });
+
+  it('records the pledge against the loan the application just created', async () => {
+    const ctx = buildCtx();
+    render(<LoansTab ctx={ctx} />);
+    const modal = await openApplyForm('50000');
+    fireEvent.change(within(modal).getByLabelText(/loan product/i), { target: { value: 'p1' } });
+    fillPledge(modal);
+
+    submit(modal);
+    await waitFor(() => expect(ctx.pledgeCollateral).toHaveBeenCalled());
+
+    const [loanId, pledge] = ctx.pledgeCollateral.mock.calls[0];
+    expect(loanId).toBe('loan_1');
+    expect(pledge).toMatchObject({ assetType: 'vehicle', reference: 'KAA 123B', value: '750000' });
+  });
+
+  it('refuses a pledge with a reference but no value, rather than recording half a charge', async () => {
+    const ctx = buildCtx();
+    render(<LoansTab ctx={ctx} />);
+    const modal = await openApplyForm('50000');
+    fireEvent.change(within(modal).getByLabelText(/loan product/i), { target: { value: 'p1' } });
+    fillPledge(modal, { value: '' });
+
+    submit(modal);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/what the pledged asset is worth/i),
+    ));
+    // Nothing was submitted at all — the application is still on screen to fix.
+    expect(ctx.applyLoan).not.toHaveBeenCalled();
+  });
+
+  it('refuses a value with no reference', async () => {
+    const ctx = buildCtx();
+    render(<LoansTab ctx={ctx} />);
+    const modal = await openApplyForm('50000');
+    fireEvent.change(within(modal).getByLabelText(/loan product/i), { target: { value: 'p1' } });
+    fillPledge(modal, { ref: '' });
+
+    submit(modal);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/reference for the asset/i),
+    ));
+    expect(ctx.applyLoan).not.toHaveBeenCalled();
+  });
+
+  it('keeps the application when the security fails to attach, and says which half went in', async () => {
+    const ctx = buildCtx({
+      pledgeCollateral: vi.fn().mockRejectedValue(new Error('The ownership document could not be uploaded.')),
+    });
+    render(<LoansTab ctx={ctx} />);
+    const modal = await openApplyForm('50000');
+    fireEvent.change(within(modal).getByLabelText(/loan product/i), { target: { value: 'p1' } });
+    fillPledge(modal);
+
+    submit(modal);
+
+    // The loan IS in. Telling the member only "failed" would have them
+    // resubmit and burn a second application against their ceiling.
+    await waitFor(() => expect(ctx.applyLoan).toHaveBeenCalled());
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/Application submitted, but the security was not attached/i),
+    ));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

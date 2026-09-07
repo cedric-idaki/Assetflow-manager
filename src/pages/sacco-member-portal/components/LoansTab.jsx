@@ -127,11 +127,40 @@ const BorrowingLimitPanel = ({ capacity, principal }) => {
 
 const emptyForm = { product_id: '', principal: '', term_months: '12', purpose: '' };
 
+// What a member can put up. Deliberately a list rather than free text: a
+// register the society can filter is worth more at recovery time than one
+// where the same kind of asset is spelled four ways.
+const COLLATERAL_TYPES = [
+  { value: 'vehicle',    label: 'Motor vehicle / motorcycle', ref: 'Logbook number' },
+  { value: 'land',       label: 'Land',                       ref: 'Title deed number' },
+  { value: 'building',   label: 'Building / property',        ref: 'Title deed number' },
+  { value: 'machinery',  label: 'Machinery',                  ref: 'Serial number' },
+  { value: 'equipment',  label: 'Equipment',                  ref: 'Serial number' },
+  { value: 'livestock',  label: 'Livestock',                  ref: 'Tag / brand' },
+  { value: 'stock',      label: 'Business stock',             ref: 'Reference' },
+  { value: 'receivable', label: 'Receivable / contract',      ref: 'Contract number' },
+  { value: 'deposit',    label: 'Fixed deposit',              ref: 'Certificate number' },
+  { value: 'other',      label: 'Other',                      ref: 'Reference' },
+];
+
+const emptyPledge = {
+  assetType: '', reference: '', description: '', value: '',
+  valuationDate: '', valuer: '', notes: '',
+};
+
 const LoansTab = ({ ctx }) => {
-  const { me, sacco, loans, schedules, loanProducts, borrowingCapacity, applyLoan, exportCSV } = ctx;
+  const {
+    me, sacco, loans, schedules, loanProducts, borrowingCapacity,
+    applyLoan, pledgeCollateral, exportCSV,
+  } = ctx;
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  // Security offered with THIS application. Held beside the form rather than
+  // inside it because it is pledged after the loan row exists — there is
+  // nothing to attach it to until the application is accepted.
+  const [pledge, setPledge] = useState(emptyPledge);
+  const [pledgeFile, setPledgeFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(null); // loan id whose schedule is shown
   const [receipting, setReceipting] = useState(null);
@@ -204,9 +233,19 @@ const LoansTab = ({ ctx }) => {
     if (product.max_term_months && term > product.max_term_months) {
       toast.error(`Maximum term for ${product.name} is ${product.max_term_months} months.`); return;
     }
+    // A half-filled pledge is worse than none: a reference with no value, or a
+    // value with nothing it belongs to, is a charge nobody can enforce. Ask for
+    // both or neither, before the loan row is created.
+    const pledging = !!(pledge.assetType || pledge.reference || pledge.value);
+    if (pledging) {
+      if (!pledge.assetType)              { toast.error('Choose what kind of asset you are pledging.'); return; }
+      if (!pledge.reference.trim())       { toast.error('Enter the reference for the asset you are pledging.'); return; }
+      if (!(parseFloat(pledge.value) > 0)) { toast.error('Enter what the pledged asset is worth.'); return; }
+    }
+
     setSaving(true);
     try {
-      await applyLoan({
+      const loan = await applyLoan({
         product_id: product.id,
         principal: form.principal,
         annual_interest_rate: product.annual_interest_rate,
@@ -214,9 +253,25 @@ const LoansTab = ({ ctx }) => {
         method: product.amortization_method,
         purpose: form.purpose,
       });
-      toast.success('Loan application submitted for review.');
+
+      if (pledging && loan?.id) {
+        try {
+          await pledgeCollateral(loan.id, pledge, pledgeFile);
+          toast.success('Loan application and security submitted for review.');
+        } catch (pe) {
+          // The application IS in. Say so, and say exactly what did not
+          // attach — a member told only "failed" would resubmit and end up
+          // with two applications against their ceiling.
+          toast.error(`Application submitted, but the security was not attached: ${pe.message} You can add it from the loan once it is open.`);
+        }
+      } else {
+        toast.success('Loan application submitted for review.');
+      }
+
       setOpen(false);
       setForm(emptyForm);
+      setPledge(emptyPledge);
+      setPledgeFile(null);
     } catch (e) {
       toast.error(e.message || 'Could not submit the application.');
     } finally {
@@ -365,6 +420,67 @@ const LoansTab = ({ ctx }) => {
         {/* What the society will lend this member, before they fill the rest in */}
         <div className="mt-5">
           <BorrowingLimitPanel capacity={borrowingCapacity} principal={form.principal} />
+        </div>
+
+        {/* SECURITY. Optional on every product — a share-backed loan needs
+            none — so it is a section the member opens, not a wall of empty
+            fields between them and Submit. */}
+        <div className="mt-5 border border-border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-muted/40 border-b border-border">
+            <p className="text-xs font-semibold text-foreground uppercase tracking-wide">
+              Security (optional)
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Pledge an asset against this loan. The society may ask for it on larger amounts.
+            </p>
+          </div>
+          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Asset type">
+              <Select value={pledge.assetType} onChange={(e) => setPledge(p => ({ ...p, assetType: e.target.value }))}>
+                <option value="">Nothing pledged</option>
+                {COLLATERAL_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </Select>
+            </Field>
+            <Field label={`${COLLATERAL_TYPES.find(t => t.value === pledge.assetType)?.ref || 'Reference'}${pledge.assetType ? ' *' : ''}`}>
+              <TextInput value={pledge.reference}
+                onChange={(e) => setPledge(p => ({ ...p, reference: e.target.value }))}
+                placeholder="e.g. KAA 123B / IR 12345" />
+            </Field>
+            <Field label={`Estimated value (KES)${pledge.assetType ? ' *' : ''}`}>
+              <NumberInput value={pledge.value}
+                onChange={(e) => setPledge(p => ({ ...p, value: e.target.value }))}
+                placeholder="750000" />
+            </Field>
+            <Field label="Valuation date">
+              <TextInput type="date" value={pledge.valuationDate}
+                onChange={(e) => setPledge(p => ({ ...p, valuationDate: e.target.value }))} />
+            </Field>
+            <Field label="Description">
+              <TextInput value={pledge.description}
+                onChange={(e) => setPledge(p => ({ ...p, description: e.target.value }))}
+                placeholder="2018 Toyota Hilux, white" />
+            </Field>
+            <Field label="Valued by">
+              <TextInput value={pledge.valuer}
+                onChange={(e) => setPledge(p => ({ ...p, valuer: e.target.value }))}
+                placeholder="Name of the valuer" />
+            </Field>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-muted-foreground mb-1" htmlFor="collateral-doc">
+                Ownership or valuation document (PDF)
+              </label>
+              <input
+                id="collateral-doc"
+                type="file"
+                accept=".pdf,image/*"
+                onChange={(e) => setPledgeFile(e.target.files?.[0] || null)}
+                className="w-full text-xs text-muted-foreground file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border file:border-border file:bg-muted file:text-xs file:font-medium file:text-foreground"
+              />
+              {pledgeFile && (
+                <p className="text-xs text-muted-foreground mt-1">{pledgeFile.name}</p>
+              )}
+            </div>
+          </div>
         </div>
 
         {preview && (
