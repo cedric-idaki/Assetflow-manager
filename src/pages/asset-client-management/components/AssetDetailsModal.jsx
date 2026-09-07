@@ -39,12 +39,21 @@ const specsOf = (asset) => {
         ['Color', v.color],
         ['Plate Number', v.plate],
         ['Chassis Number', v.chassis],
+        ['Warranty', m.vehicleWarrantyStatus],
+        ['Warranty Cover', m.vehicleWarrantyDetails],
       ];
     case 'property':
       return [
         ['Property Type', asset.propertyDetails?.type],
-        ['Size', asset.propertyDetails?.size],
-        ['Beds / Baths', m.propertyBedsath],
+        // The structured land and building sizes when the record has them;
+        // the old combined string is the fallback for records written before
+        // the two were separated.
+        ['Land Size', m.landSize ? `${m.landSize} ${m.landSizeUnit || ''}`.trim() : null],
+        ['House / Apartment Size', m.buildingSize ? `${m.buildingSize} ${m.buildingSizeUnit || ''}`.trim() : null],
+        ['Size', (m.landSize || m.buildingSize) ? null : asset.propertyDetails?.size],
+        ['Bedrooms', m.bedrooms],
+        ['Bathrooms', m.bathrooms],
+        ['Beds / Baths', (m.bedrooms || m.bathrooms) ? null : m.propertyBedsath],
         ['Title Deed No.', m.propertyTitle],
         ['Land Reference', m.propertyLandRef],
         ['Location', asset.location],
@@ -68,6 +77,7 @@ const specsOf = (asset) => {
       return [
         ['Brand / Make', m.heavyBrand], ['Model', m.heavyModel], ['Serial / VIN', m.heavySerial],
         ['Year', m.heavyYear], ['Operating Hours', m.heavyHours], ['Location', m.heavyLocation],
+        ['Warranty', m.heavyWarrantyStatus], ['Warranty Cover', m.heavyWarrantyDetails],
       ];
     default:
       return [['Category', m.category]];

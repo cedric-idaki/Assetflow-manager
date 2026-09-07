@@ -75,7 +75,18 @@ const GEARBOX_TYPES  = ['Automatic', 'Manual', 'CVT', 'Semi-Automatic'];
 
 // Property / Land
 const PROPERTY_TYPES = ['Land - Freehold', 'Land - Leasehold', 'Agricultural Land', 'Residential Plot', 'Commercial Plot', 'Serviced Plot', 'Bungalow', 'Maisonette', 'Townhouse', 'Villa', 'Gated Community House', 'Apartment / Flat', 'Studio Apartment', 'Office Space', 'Shop / Retail Space', 'Godown / Warehouse', 'Mixed-Use Building', 'Farm / Ranch'];
-const PROPERTY_BEDS_BATHS = ['Not Applicable - Land', 'Studio', '1 Bed / 1 Bath', '2 Bed / 1 Bath', '2 Bed / 2 Bath', '3 Bed / 2 Bath', '3 Bed / 3 Bath', '4 Bed / 3 Bath', '4 Bed / 4 Bath', '5 Bed / 4 Bath', '5 Bed / 5 Bath', '6+ Bed'];
+
+// Land and buildings are measured in different units and the two must not be
+// mixed: a plot is sold by the acre, a house by the square foot. Keeping them
+// as separate fields with their own unit lists is what lets a buyer filter or
+// compare on either — which a single free-text "0.5 acres or 2500 sq ft" box
+// never could.
+export const LAND_UNITS     = ['Acres', 'Square Meters'];
+export const BUILDING_UNITS = ['Square Feet', 'Square Meters'];
+
+// Warranty is a STATUS plus the terms behind it, not one free-text line. The
+// status is what a listing filters on; the detail is what the buyer reads.
+const WARRANTY_STATUS = ['Under Warranty', 'No Warranty'];
 
 // Shared across electronics / furniture / heavy equipment
 const CONDITIONS  = ['Brand New', 'New - Open Box', 'Ex-Display', 'Refurbished', 'Ex-UK / Imported Used', 'Used - Excellent', 'Used - Good', 'Used - Fair', 'For Spares / Repair'];
@@ -136,6 +147,10 @@ const ASSET_CONFIGS = {
       { key: 'vehicleFuel',    label: 'Fuel Type',      placeholder: 'Petrol/Diesel/Hybrid', required: false, col: 1, selectOther: FUEL_TYPES },
       { key: 'vehicleMileage', label: 'Mileage (km)',   placeholder: 'e.g. 45000',           required: false, col: 1, type: 'number' },
       { key: 'vehicleGearbox', label: 'Gearbox',        placeholder: 'Automatic / Manual',   required: false, col: 1, selectOther: GEARBOX_TYPES },
+      { key: 'vehicleWarrantyStatus',  label: 'Warranty', placeholder: 'Under Warranty / No Warranty', required: false, col: 1, select: WARRANTY_STATUS },
+      { key: 'vehicleWarrantyDetails', label: 'Warranty Details',
+        placeholder: 'What is covered, for how long, and by whom — e.g. 2 years / 50,000 km powertrain, Toyota Kenya',
+        required: false, col: 2, showWhen: { key: 'vehicleWarrantyStatus', is: 'Under Warranty' } },
     ],
   },
   property: {
@@ -145,10 +160,13 @@ const ASSET_CONFIGS = {
     iconColor: '#059669',
     fields: [
       { key: 'propertyType',     label: 'Property Type',  placeholder: 'e.g. Residential Plot',        required: true,  col: 1, selectOther: PROPERTY_TYPES },
-      { key: 'propertySize',     label: 'Size',           placeholder: 'e.g. 0.5 acres or 2500 sq ft', required: true,  col: 1 },
+      { key: 'landSize',         label: 'Land Size',      placeholder: '0.5',                           required: true,  col: 1, measure: LAND_UNITS },
+      { key: 'buildingSize',     label: 'House / Apartment Size', placeholder: '2500',                   required: false, col: 1, measure: BUILDING_UNITS,
+        hint: 'Leave blank for bare land.' },
+      { key: 'bedrooms',         label: 'Bedrooms',       placeholder: '3',                             required: false, col: 1, type: 'number' },
+      { key: 'bathrooms',        label: 'Bathrooms',      placeholder: '2',                             required: false, col: 1, type: 'number' },
       { key: 'propertyLocation', label: 'Location',       placeholder: 'e.g. Westlands, Nairobi',       required: true,  col: 2 },
       { key: 'propertyTitle',    label: 'Title Deed No.', placeholder: 'e.g. IR 12345',                 required: false, col: 1 },
-      { key: 'propertyBedsath',  label: 'Beds / Baths',   placeholder: 'e.g. 3 bed / 2 bath',           required: false, col: 1, selectOther: PROPERTY_BEDS_BATHS },
       { key: 'propertyLandRef',  label: 'Land Reference', placeholder: 'e.g. LR No. 209/123',           required: false, col: 1 },
     ],
   },
@@ -208,7 +226,11 @@ const ASSET_CONFIGS = {
       { key: 'heavySerial',   label: 'Serial / VIN',        placeholder: 'Enter serial number',        required: true,  col: 1, upper: true },
       { key: 'heavyYear',     label: 'Year of Manufacture', placeholder: '2020',                      required: true,  col: 1, type: 'number' },
       { key: 'heavyHours',    label: 'Operating Hours',     placeholder: 'e.g. 3200 hrs',             required: false, col: 1, type: 'number' },
+      { key: 'heavyWarrantyStatus',  label: 'Warranty', placeholder: 'Under Warranty / No Warranty', required: false, col: 1, select: WARRANTY_STATUS },
       { key: 'heavyLocation', label: 'Current Location',    placeholder: 'e.g. Mombasa Port',         required: false, col: 2 },
+      { key: 'heavyWarrantyDetails', label: 'Warranty Details',
+        placeholder: 'What is covered, for how long, and by whom — e.g. 12 months / 2,000 hrs, Mantrac Kenya',
+        required: false, col: 2, showWhen: { key: 'heavyWarrantyStatus', is: 'Under Warranty' } },
       { key: 'specifications', label: 'Specifications',     placeholder: 'Engine size, capacity etc.', required: false, col: 2 },
     ],
   },
@@ -276,12 +298,17 @@ const ImageUpload = ({ images, onAdd, onRemove }) => {
 };
 
 // ── Field component ───────────────────────────────────────────────────────────
+// The label WRAPS its control rather than sitting beside it. A sibling <label>
+// with no htmlFor is decoration: a screen reader announces an unlabelled box
+// and clicking the text focuses nothing. Wrapping gives implicit association
+// for free, including for MeasureInput — where it lands on the figure, and the
+// unit select carries its own aria-label.
 const Field = ({ label, required, error, hint, children }) => (
   <div>
     <label className="block text-xs font-semibold text-muted-foreground mb-1">
       {label} {required && <span className="text-red-500">*</span>}
+      <div className="mt-1 font-normal">{children}</div>
     </label>
-    {children}
     {hint && !error && <p className="text-xs text-muted-foreground mt-0.5">{hint}</p>}
     {error && (
       <p className="text-xs text-red-500 mt-0.5 flex items-center gap-1">
@@ -319,6 +346,68 @@ const SelectWithOther = ({ value, onChange, options, error, placeholder, otherPl
       )}
     </div>
   );
+};
+
+// ── Measurement with its unit ────────────────────────────────────────────────
+// A number and the unit it is in, kept as two values rather than one string.
+// The unit defaults to the first in the list so a figure is never stored
+// unitless — "0.5" on a land listing is meaningless, and guessing later is how
+// half an acre becomes half a square metre.
+const MeasureInput = ({ value, unit, units, onValue, onUnit, error, placeholder }) => (
+  <div className="flex gap-2">
+    <input
+      type="number" min="0" step="any"
+      value={value || ''} onChange={e => onValue(e.target.value)}
+      placeholder={placeholder} className={`${ic(error)} flex-1`}
+    />
+    <select
+      value={unit || units[0]} onChange={e => onUnit(e.target.value)}
+      className={`${ic(false)} w-40 flex-shrink-0`}
+      aria-label="Unit"
+    >
+      {units.map(u => <option key={u} value={u}>{u}</option>)}
+    </select>
+  </div>
+);
+
+/** "0.5" + "Acres" -> "0.5 Acres". Empty in, empty out. */
+export const formatMeasure = (value, unit) => {
+  const n = String(value ?? '').trim();
+  return n === '' ? '' : `${n} ${unit || ''}`.trim();
+};
+
+/**
+ * Pull a structured measure back out of a legacy free-text size.
+ *
+ * Property records written before this form had separate land and building
+ * sizes carry one string — "0.5 acres", "2,500 sq ft". Editing one of those
+ * must not silently blank the field, so the leading number and a recognised
+ * unit word are recovered. Anything unrecognisable is left for the user rather
+ * than guessed at.
+ */
+export const parseLegacySize = (text, units) => {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const num = /^([\d,.]+)/.exec(raw);
+  if (!num) return null;
+  const lower = raw.toLowerCase();
+  const unit =
+    /acre/.test(lower)                          ? 'Acres'
+    : /(sq\.?\s*ft|square\s*f(ee|oo)t|sqft)/.test(lower) ? 'Square Feet'
+    : /(sq\.?\s*m|square\s*met)/.test(lower)   ? 'Square Meters'
+    : null;
+  if (!unit || !units.includes(unit)) return null;
+  return { value: num[1].replace(/,/g, ''), unit };
+};
+
+/** "3 Bed / 2 Bath" -> { bedrooms: '3', bathrooms: '2' }. */
+export const parseLegacyBedsBaths = (text) => {
+  const raw = String(text || '');
+  // The `\+?` matters: "6+ Bed" was a real option in the old list, and without
+  // it that record loses its bedroom count on the first edit.
+  const bed  = /(\d+)\s*\+?\s*bed/i.exec(raw);
+  const bath = /(\d+)\s*\+?\s*bath/i.exec(raw);
+  return { bedrooms: bed ? bed[1] : '', bathrooms: bath ? bath[1] : '' };
 };
 
 // ── Live pricing preview ──────────────────────────────────────────────────────
@@ -377,16 +466,28 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
   const _meta = editData?.metadata || {};
   const _vd   = editData?.vehicleDetails || {};
   const _pd   = editData?.propertyDetails || {};
+
+  // Records written before land and building sizes were separate fields carry
+  // one free-text size and a combined "3 Bed / 2 Bath" string. Recover what can
+  // be recovered rather than blanking the form on edit — see parseLegacySize.
+  const _legacyLand = parseLegacySize(_meta.propertySize || _pd.size, LAND_UNITS);
+  const _legacyBldg = parseLegacySize(_meta.propertySize || _pd.size, BUILDING_UNITS);
+  const _legacyBeds = parseLegacyBedsBaths(_meta.propertyBedsath);
+
   const initial = editData ? {
     assetType:   editData.type || editData.asset_type || '',
     description: editData.description || '',
     status:      editData.status || editData.asset_status || 'available',
     // property
     propertyType:     _meta.propertyType     || _pd.type || '',
-    propertySize:     _meta.propertySize     || _pd.size || '',
+    landSize:         _meta.landSize         || _legacyLand?.value || '',
+    landSizeUnit:     _meta.landSizeUnit     || _legacyLand?.unit  || LAND_UNITS[0],
+    buildingSize:     _meta.buildingSize     || _legacyBldg?.value || '',
+    buildingSizeUnit: _meta.buildingSizeUnit || _legacyBldg?.unit  || BUILDING_UNITS[0],
+    bedrooms:         _meta.bedrooms         ?? _legacyBeds.bedrooms,
+    bathrooms:        _meta.bathrooms        ?? _legacyBeds.bathrooms,
     propertyLocation: _meta.propertyLocation || _pd.location || editData.location || '',
     propertyTitle:    _meta.propertyTitle    || '',
-    propertyBedsath:  _meta.propertyBedsath  || '',
     propertyLandRef:  _meta.propertyLandRef  || '',
     // vehicle
     vehicleMake:    _meta.vehicleMake    || _vd.make    || '',
@@ -399,6 +500,8 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     vehicleFuel:    _meta.vehicleFuel    || '',
     vehicleMileage: _meta.vehicleMileage || '',
     vehicleGearbox: _meta.vehicleGearbox || '',
+    vehicleWarrantyStatus:  _meta.vehicleWarrantyStatus  || '',
+    vehicleWarrantyDetails: _meta.vehicleWarrantyDetails || '',
     // construction
     constCategory: _meta.constCategory || '', constBrand: _meta.constBrand || '', constUnit: _meta.constUnit || '',
     constQty: _meta.constQty || '', constGrade: _meta.constGrade || '', constWarehouse: _meta.constWarehouse || '',
@@ -411,15 +514,20 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     // heavy equipment
     heavyBrand: _meta.heavyBrand || '', heavyModel: _meta.heavyModel || '', heavySerial: _meta.heavySerial || '',
     heavyYear: _meta.heavyYear || '', heavyHours: _meta.heavyHours || '', heavyLocation: _meta.heavyLocation || '',
+    heavyWarrantyStatus:  _meta.heavyWarrantyStatus  || '',
+    heavyWarrantyDetails: _meta.heavyWarrantyDetails || '',
     // generic
     category: _meta.category || '', specifications: editData.specifications || _meta.specifications || '',
   } : {
     assetType: '', description: '', status: 'available',
     // property
-    propertySize: '', propertyLocation: '', propertyType: '', propertyTitle: '', propertyBedsath: '', propertyLandRef: '',
+    landSize: '', landSizeUnit: LAND_UNITS[0], buildingSize: '', buildingSizeUnit: BUILDING_UNITS[0],
+    bedrooms: '', bathrooms: '',
+    propertyLocation: '', propertyType: '', propertyTitle: '', propertyLandRef: '',
     // vehicle
     vehicleMake: '', vehicleModel: '', vehicleYear: '', vehiclePlate: '', vehicleChassis: '',
     vehicleColor: '', vehicleEngine: '', vehicleFuel: '', vehicleMileage: '', vehicleGearbox: '',
+    vehicleWarrantyStatus: '', vehicleWarrantyDetails: '',
     // construction
     constCategory: '', constBrand: '', constUnit: '', constQty: '', constGrade: '', constWarehouse: '',
     // electronics
@@ -428,6 +536,7 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     furnCategory: '', furnMaterial: '', furnBrand: '', furnColor: '', furnDimension: '', furnCondition: '',
     // heavy equipment
     heavyBrand: '', heavyModel: '', heavySerial: '', heavyYear: '', heavyHours: '', heavyLocation: '',
+    heavyWarrantyStatus: '', heavyWarrantyDetails: '',
     // generic
     category: '', specifications: '',
   };
@@ -538,8 +647,27 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     if (!formData.assetType) e.assetType = 'Asset type is required';
     if (!formData.description || formData.description.trim().length < 3) e.description = 'Description must be at least 3 characters';
     if (cfg) {
-      cfg.fields.filter(f => f.required).forEach(f => {
-        if (!formData[f.key] || String(formData[f.key]).trim() === '') e[f.key] = `${f.label} is required`;
+      cfg.fields.forEach(f => {
+        // A field the form is not showing cannot be required — warranty terms
+        // are only asked for once the status says there is a warranty.
+        if (f.showWhen && formData[f.showWhen.key] !== f.showWhen.is) return;
+
+        const val = formData[f.key];
+        if (f.required && (val === undefined || val === null || String(val).trim() === '')) {
+          e[f.key] = `${f.label} is required`;
+          return;
+        }
+        if (val === undefined || String(val).trim() === '') return;
+
+        // A size or a room count that is not a positive number is a typo, and
+        // one that reaches the listing is a buyer filtering on nonsense.
+        if (f.measure && !(parseFloat(val) > 0)) {
+          e[f.key] = `${f.label} must be greater than 0`;
+        }
+        if (f.type === 'number' && (f.key === 'bedrooms' || f.key === 'bathrooms')) {
+          const n = Number(val);
+          if (!Number.isInteger(n) || n < 0 || n > 99) e[f.key] = `${f.label} must be a whole number`;
+        }
       });
     }
     if (formData.assetType === 'vehicle' && formData.vehicleYear) {
@@ -575,6 +703,18 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     return true;
   };
 
+  /** "0.25 Acres · 2,500 Square Feet", or whichever half exists. */
+  const propertySizeSummary = [
+    formatMeasure(formData.landSize, formData.landSizeUnit),
+    formatMeasure(formData.buildingSize, formData.buildingSizeUnit),
+  ].filter(Boolean).join(' · ');
+
+  /** "3 Bed / 2 Bath", rebuilt from the two counts for the same reason. */
+  const bedsBathsSummary = [
+    formData.bedrooms  !== '' && formData.bedrooms  != null ? `${formData.bedrooms} Bed` : null,
+    formData.bathrooms !== '' && formData.bathrooms != null ? `${formData.bathrooms} Bath` : null,
+  ].filter(Boolean).join(' / ');
+
   const handleSubmit = () => {
     if (!validate()) return;
     // Capture every type-specific field (engine, fuel, mileage, etc.) so the
@@ -582,9 +722,18 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     const cfgFields = (ASSET_CONFIGS[formData.assetType] && ASSET_CONFIGS[formData.assetType].fields) || [];
     const details = {};
     cfgFields.forEach(f => {
+      // A hidden field's stale value must not be saved: turning warranty off
+      // and saving has to actually clear the terms, not keep them invisible.
+      if (f.showWhen && formData[f.showWhen.key] !== f.showWhen.is) return;
       const val = formData[f.key];
       if (val !== undefined && val !== '') details[f.key] = val;
+      // A measure is meaningless without its unit, so the two travel together.
+      if (f.measure && val !== undefined && val !== '') {
+        details[`${f.key}Unit`] = formData[`${f.key}Unit`] || f.measure[0];
+      }
     });
+    // Kept for the listing screens that still read the combined string.
+    if (bedsBathsSummary) details.propertyBedsath = bedsBathsSummary;
     onSubmit({
       // Asset details
       type:            formData.assetType,
@@ -610,7 +759,12 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
       // Asset type fields
       location:          formData.propertyLocation || '',
       propertyType:      formData.propertyType     || '',
-      propertySize:      formData.propertySize      || '',
+      // `property_size` is a real column and AssetCard, BrowseAssetsTab and the
+      // details modal all render it, so the structured land/building sizes are
+      // still flattened into the one human-readable string those screens expect.
+      // The structured values go to `details` alongside it, which is what the
+      // form reads back and what anything filtering on size should use.
+      propertySize:      propertySizeSummary,
       propertyTitle:     formData.propertyTitle     || '',
       make:              formData.vehicleMake       || '',
       model:             formData.vehicleModel      || '',
@@ -630,8 +784,11 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
   // ── Type-specific fields renderer ─────────────────────────────────────────
   const renderTypeFields = () => {
     if (!cfg) return null;
-    const singleCols = cfg.fields.filter(f => f.col === 1);
-    const fullCols   = cfg.fields.filter(f => f.col === 2);
+    // A conditional field is filtered out BEFORE the two-column pairing, so
+    // hiding one closes the gap rather than leaving a hole in the grid.
+    const shown      = cfg.fields.filter(f => !f.showWhen || formData[f.showWhen.key] === f.showWhen.is);
+    const singleCols = shown.filter(f => f.col === 1);
+    const fullCols   = shown.filter(f => f.col === 2);
     const pairs = [];
     for (let i = 0; i < singleCols.length; i += 2) pairs.push(singleCols.slice(i, i + 2));
 
@@ -644,10 +801,19 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
         {pairs.map((row, ri) => (
           <div key={ri} className={`grid grid-cols-1 ${row.length > 1 ? 'md:grid-cols-2' : ''} gap-4`}>
             {row.map(f => {
+              if (f.measure) return (
+                <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]} hint={f.hint}>
+                  <MeasureInput
+                    value={formData[f.key]} unit={formData[`${f.key}Unit`]} units={f.measure}
+                    onValue={v => set(f.key, v)} onUnit={u => set(`${f.key}Unit`, u)}
+                    error={errors[f.key]} placeholder={f.placeholder}
+                  />
+                </Field>
+              );
               if (f.selectOther || f.modelsOf) {
                 const parentVal = f.modelsOf ? formData[f.modelsOf] : null;
                 if (f.modelsOf && !parentVal) {
-                  const parentLabel = cfg.fields.find(x => x.key === f.modelsOf)?.label || 'Make';
+                    const parentLabel = cfg.fields.find(x => x.key === f.modelsOf)?.label || 'Make';
                   return (
                     <Field key={f.key} label={f.label} required={f.required} error={errors[f.key]}>
                       <select disabled value="" className={ic(errors[f.key])}>

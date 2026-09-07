@@ -1,4 +1,4 @@
-import React, { forwardRef } from 'react';
+import React, { forwardRef, useId } from 'react';
 import { formatKEPhone } from '../../utils/phoneUtils';
 
 const Input = forwardRef((
@@ -17,6 +17,12 @@ const Input = forwardRef((
   },
   ref
 ) => {
+  // Without this the <label> is only NEAR the input, not attached to it: a
+  // screen reader announces an unlabelled box, and clicking the text does
+  // nothing. A caller-supplied id still wins, since props spread last.
+  const generatedId = useId();
+  const inputId = props.id || generatedId;
+
   const inputClasses = [
     'w-full px-3 py-2 text-sm bg-background border rounded-lg text-foreground placeholder-muted-foreground',
     'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary',
@@ -31,7 +37,7 @@ const Input = forwardRef((
   return (
     <div className={`space-y-1 ${containerClassName}`}>
       {label && (
-        <label className="block text-sm font-medium text-foreground">
+        <label htmlFor={inputId} className="block text-sm font-medium text-foreground">
           {label}
           {required && <span className="text-error ml-1">*</span>}
         </label>
@@ -44,6 +50,7 @@ const Input = forwardRef((
         )}
         <input
           ref={ref}
+          id={inputId}
           type={type}
           disabled={disabled}
           required={required}

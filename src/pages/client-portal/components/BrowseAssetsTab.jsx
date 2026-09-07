@@ -57,12 +57,16 @@ const chipsOf = (n) => {
       return [
         m.vehicleMileage && `${Number(m.vehicleMileage).toLocaleString()} km`,
         m.vehicleGearbox, m.vehicleEngine && `${m.vehicleEngine}cc`, m.vehicleFuel,
+        m.vehicleWarrantyStatus === 'Under Warranty' && 'Under Warranty',
       ];
     case 'property':       return [n.propertyDetails?.type, n.propertyDetails?.size, m.propertyBedsath];
     case 'electronics':    return [m.elecBrand, m.elecCondition, m.elecWarranty];
     case 'furnitures':     return [m.furnCategory, m.furnMaterial, m.furnCondition];
     case 'construction_dealers': return [m.constCategory, m.constQty && `${m.constQty} ${m.constUnit || ''}`.trim(), m.constGrade];
-    case 'heavy_equipment': return [m.heavyBrand, m.heavyModel, m.heavyHours && `${m.heavyHours} hrs`];
+    case 'heavy_equipment': return [
+      m.heavyBrand, m.heavyModel, m.heavyHours && `${m.heavyHours} hrs`,
+      m.heavyWarrantyStatus === 'Under Warranty' && 'Under Warranty',
+    ];
     default:               return [n.specifications];
   }
 };
