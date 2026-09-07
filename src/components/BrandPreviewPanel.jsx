@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Icon from './AppIcon';
+import BrandLogo from './BrandLogo';
 
 /**
  * The dark product-preview panel that sits beside the sign-in and registration
@@ -145,23 +146,9 @@ const BrandPreviewPanel = function(props) {
       <div className="relative z-10 flex flex-col flex-1 min-h-0 overflow-y-auto px-12 pt-11 pb-9">
 
         {/* Brand. Opt-in: pages that already show the lockup on their form side
-            (sign-in) leave it off so it does not appear twice. */}
-        {props.showBrand && (
-          <div className="flex items-center gap-3 mb-8">
-            <div
-              className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{
-                background: 'linear-gradient(135deg, ' + C.primary + ', ' + C.primaryDark + ')',
-                boxShadow: '0 4px 14px rgba(52,193,221,0.35)',
-              }}
-            >
-              <Icon name="Building2" size={22} color={C.navy} />
-            </div>
-            <div style={{ ...SERIF, fontSize: '20px', fontWeight: 700, letterSpacing: '-0.01em', color: C.onNavy }}>
-              Ararat
-            </div>
-          </div>
-        )}
+            (sign-in) leave it off so it does not appear twice. The bare mark is
+            right here — this panel is already the navy the mark is drawn for. */}
+        {props.showBrand && <BrandLogo size={44} wordmark className="mb-8" />}
 
         {/* Heading */}
         <div>

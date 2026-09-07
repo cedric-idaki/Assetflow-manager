@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../../components/AppIcon';
+import BrandLogo from '../../components/BrandLogo';
 import RegistrationForm from './components/RegistrationForm';
 
 const UserRegistrationScreen = () => {
@@ -21,20 +22,9 @@ const UserRegistrationScreen = () => {
           <div className="absolute bottom-40 left-10 w-48 h-48 rounded-full border border-white" />
         </div>
 
-        {/* Logo */}
+        {/* Logo. Bare mark — this panel is already the navy the mark is drawn for. */}
         <div className="relative z-10">
-          <div className="flex items-center gap-3">
-            <div
-              className="flex items-center justify-center w-12 h-12 rounded-lg"
-              style={{ background: 'linear-gradient(135deg, #C9A84C, #D4AF37)' }}
-            >
-              <Icon name="Building2" size={24} color="#0A1628" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Merriweather, serif' }}>Ararat</h1>
-              <p className="text-xs" style={{ color: '#C9A84C' }}>Financial Management Platform</p>
-            </div>
-          </div>
+          <BrandLogo size={50} wordmark tagline="Financial Management Platform" taglineColor="#C9A84C" />
         </div>
 
         {/* Center content */}

@@ -1,7 +1,7 @@
 import React, { lazy, Suspense } from "react";
 import { BrowserRouter, Routes as RouterRoutes, Route, Navigate } from "react-router-dom";
 import { isAndroidAppContext } from "utils/androidApp";
-import Icon from "components/AppIcon";
+import BrandLogo from "components/BrandLogo";
 import ScrollToTop from "components/ScrollToTop";
 import ErrorBoundary from "components/ErrorBoundary";
 import ProtectedRoute from "components/ProtectedRoute";
@@ -54,9 +54,7 @@ const VerifyCertificate         = lazy(() => import('./pages/verify-certificate'
 const RouteFallback = () => (
   <div className="min-h-screen bg-background flex items-center justify-center">
     <div className="flex flex-col items-center gap-4">
-      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center shadow-lg shadow-blue-500/30 animate-pulse">
-        <Icon name="Building2" size={24} color="white" />
-      </div>
+      <BrandLogo size={52} tile className="animate-pulse" />
       <div className="flex items-center gap-2 text-muted-foreground">
         <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase, invokeSupabaseFunction } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import BrandLogo from '../../components/BrandLogo';
 import BrandPreviewPanel from '../../components/BrandPreviewPanel';
 import TermsModal from '../../components/TermsModal';
 import { formatKEPhone } from '../../utils/phoneUtils';
@@ -574,25 +575,10 @@ const AdminRegistration = () => {
 
           {/* Brand, mobile only — on lg+ the dark panel carries the lockup.
               Sits above the step header, so it shows on all four steps. */}
-          <div className="lg:hidden flex items-center gap-3 mb-8">
-            <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{
-                background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`,
-                boxShadow: '0 4px 14px rgba(52,193,221,0.35)',
-              }}>
-              <Icon name="Building2" size={22} color={C.navy} />
-            </div>
-            <h1
-              style={{
-                fontFamily: "Georgia, 'Times New Roman', serif",
-                fontSize: '20px',
-                fontWeight: 700,
-                letterSpacing: '-0.01em',
-                color: C.navy,
-              }}
-            >
-              Ararat
-            </h1>
+          {/* The wrapper carries lg:hidden: BrandLogo sets its own display, and
+              an inline style would win over the utility class. */}
+          <div className="lg:hidden mb-8">
+            <BrandLogo size={44} tile wordmark wordmarkColor="#a96f2b" />
           </div>
 
           {/* Step header */}

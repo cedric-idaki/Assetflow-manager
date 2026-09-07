@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import Icon from '../../components/AppIcon';
+import BrandLogo from '../../components/BrandLogo';
 
 // Shown to the super admin right after login — pick which portal to work in.
 // Both portals stay reachable afterwards via the sidebar and /profile.
@@ -43,12 +44,8 @@ const ChoosePortal = () => {
     <div className="min-h-screen bg-background flex flex-col">
       {/* Top bar */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: '#34c1dd' }}>
-            <Icon name="Building2" size={18} color="#0c2037" />
-          </div>
-          <span className="font-bold text-foreground" style={{ fontFamily: 'Georgia, serif' }}>Ararat</span>
-        </div>
+        {/* Tiled: this bar follows the page theme, which is light by default. */}
+        <BrandLogo size={38} tile wordmark wordmarkColor="#a96f2b" />
         <button onClick={logout} className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-red-500 transition-colors">
           <Icon name="LogOut" size={14} color="currentColor" />
           Sign out

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, setRememberDevice as persistRememberChoice, REMEMBER_DEVICE_KEY } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import BrandLogo from '../../components/BrandLogo';
 import BrandPreviewPanel from '../../components/BrandPreviewPanel';
 import { isAndroidAppContext } from '../../utils/androidApp';
 
@@ -163,16 +164,11 @@ const LoginPage = () => {
   };
 
   const brand = (
-    <div className="relative z-10 flex items-center gap-3">
-      {/* Navy tile with a cyan glyph — the landing page's brand-mark. A cyan
-          tile would disappear into the cyan ground. */}
-      <div
-        className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
-        style={{ background: C.navy, boxShadow: '0 4px 14px rgba(12,32,55,0.30)' }}
-      >
-        <Icon name="Building2" size={22} color={C.primary} />
-      </div>
-      <div style={{ ...SERIF, fontSize: '20px', fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>Ararat</div>
+    <div className="relative z-10">
+      {/* Tiled: the mark's gold and teal are drawn for a navy ground and go
+          flat on this page's near-white. The wordmark drops to the logo's
+          deepest gold so it still clears contrast on light. */}
+      <BrandLogo size={44} tile wordmark wordmarkColor="#a96f2b" />
     </div>
   );
 

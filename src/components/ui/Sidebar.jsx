@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import Icon from '../AppIcon';
+import BrandLogo from '../BrandLogo';
 import { useAuth } from '../../contexts/AuthContext';
 import { useModules } from '../../contexts/TenantModulesContext';
 import { supabase } from '../../lib/supabase';
@@ -224,20 +225,20 @@ var Sidebar = function(props) {
         gap: isCollapsed ? 0 : '12px',
         justifyContent: isCollapsed ? 'center' : 'flex-start',
       }}>
-        {/* Icon mark */}
-        <div style={{
-          width: '36px', height: '36px', borderRadius: '8px', flexShrink: 0,
-          background: B.accent, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Icon name="Building2" size={18} color={B.dark} />
-        </div>
+        {/* The sidebar is already navy, so the bare mark sits on it directly —
+            a tile here would read as a second, smaller panel. */}
+        <BrandLogo size={36} />
 
         {!isCollapsed && (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: '16px', color: B.textBright, letterSpacing: '-0.01em' }}>
-              Ararat
+            <span style={{
+              fontFamily: 'Futura, Century Gothic, Segoe UI, Arial, sans-serif',
+              fontWeight: 600, fontSize: '15px', color: '#cb964a',
+              letterSpacing: '0.22em', display: 'block',
+            }}>
+              ARARAT
             </span>
-            <p style={{ fontSize: '11px', color: B.accent, lineHeight: 1, marginTop: '2px', fontFamily: 'Open Sans, Arial, sans-serif' }}>
+            <p style={{ fontSize: '11px', color: B.accent, lineHeight: 1, marginTop: '3px', fontFamily: 'Open Sans, Arial, sans-serif' }}>
               {roleLabel(role)}
             </p>
           </div>

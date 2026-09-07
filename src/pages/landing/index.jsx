@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../../components/AppIcon';
+import BrandLogo from '../../components/BrandLogo';
 
 // ── Landing page ────────────────────────────────────────────────────────
 // Layout/structure follows the marketing design brief (ledger + receipt
@@ -68,8 +69,7 @@ const CSS = `
 }
 .arr .nav-inner{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 32px;max-width:1180px;margin:0 auto;}
 @media (max-width:640px){.arr .nav-inner{padding:14px 20px;}}
-.arr .brand{display:flex;align-items:center;gap:10px;font-family:'Fraunces',serif;font-weight:600;font-size:22px;letter-spacing:-0.01em;color:var(--accent-deep);}
-.arr .brand-mark{width:32px;height:32px;flex-shrink:0;border-radius:8px;background:var(--ink);display:flex;align-items:center;justify-content:center;}
+.arr .brand{display:flex;align-items:center;}
 .arr .nav-actions{display:flex;align-items:center;gap:8px;}
 .arr .nav-link-btn{background:none;border:none;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:14px;color:var(--text-muted);padding:8px 12px;transition:color 0.2s ease;}
 .arr .nav-link-btn:hover{color:var(--accent-deep);}
@@ -302,7 +302,6 @@ const CSS = `
 .arr footer{background:var(--ink);color:var(--text-on-ink-muted);padding:56px 0 40px;font-size:13.5px;border-top:3px solid var(--accent);}
 .arr .foot-inner{display:grid;grid-template-columns:1.15fr 1fr;gap:56px;align-items:start;}
 @media (max-width:760px){.arr .foot-inner{grid-template-columns:1fr;gap:40px;}}
-.arr .foot-inner .fbrand{font-family:'Fraunces',serif;color:var(--accent-deep);font-weight:700;font-size:20px;letter-spacing:0.01em;}
 .arr .foot-tagline{margin-top:12px;line-height:1.7;max-width:38ch;}
 
 .arr .foot-heading{
@@ -421,9 +420,10 @@ const LandingPage = () => {
       {/* ── Nav ──────────────────────────────────────────────────────── */}
       <header className="site-nav">
         <div className="nav-inner">
+          {/* Tiled: the nav sits on paper, and the mark's gold and teal are
+              drawn for a navy ground. */}
           <div className="brand">
-            <span className="brand-mark"><Icon name="Building2" size={17} color="#34c1dd" /></span>
-            Ararat
+            <BrandLogo size={44} tile wordmark wordmarkColor="#a96f2b" />
           </div>
           <div className="nav-actions">
             <button className="nav-link-btn" onClick={goRegister('company')}>Register Your Company</button>
@@ -688,7 +688,8 @@ const LandingPage = () => {
       <footer>
         <div className="wrap foot-inner">
           <div>
-            <div className="fbrand">Ararat</div>
+            {/* The footer is already navy — the bare mark belongs on it. */}
+            <BrandLogo size={48} wordmark />
             <div className="foot-tagline">
               Every shilling accounted for. Every payment tracked. Every client and member connected.
             </div>

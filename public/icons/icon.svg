@@ -1,23 +1,59 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Ararat">
+  <!--
+    The Ararat mark: a diamond split at the waist. The top half is the gold
+    mountain (the main peak, with the lesser peak notched into the right arm —
+    Ararat has two summits); the bottom half is the teal shield with the blade
+    running down its centre.
+
+    Everything is expressed as explicit path geometry rather than strokes so the
+    shape survives being scaled to a 16px favicon and flattened by Android's
+    maskable crop. scripts/generate-icons.mjs rewrites the #mark group and the
+    background rect by string match — keep those two attributes as written.
+  -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#122c4a"/>
       <stop offset="0.55" stop-color="#0c2037"/>
       <stop offset="1" stop-color="#081726"/>
     </linearGradient>
-    <!-- userSpaceOnUse, not the default objectBoundingBox: the crossbar is a
-         perfectly horizontal line, so its bounding box has zero height, and the
-         SVG spec says an element referencing an objectBoundingBox gradient with
-         a zero-height box is not rendered at all. It also keeps one continuous
-         gradient across both strokes instead of restarting on each. -->
-    <linearGradient id="mark" gradientUnits="userSpaceOnUse" x1="140" y1="130" x2="380" y2="400">
-      <stop offset="0" stop-color="#5fd8ef"/>
-      <stop offset="1" stop-color="#34c1dd"/>
+    <!-- userSpaceOnUse throughout: the objectBoundingBox default would restart
+         the ramp on each shape, so the mountain and the shield would stop
+         sharing one continuous light source. -->
+    <linearGradient id="gold" gradientUnits="userSpaceOnUse" x1="96" y1="56" x2="424" y2="232">
+      <stop offset="0" stop-color="#e8bf7d"/>
+      <stop offset="0.5" stop-color="#cb964a"/>
+      <stop offset="1" stop-color="#a96f2b"/>
+    </linearGradient>
+    <linearGradient id="teal" gradientUnits="userSpaceOnUse" x1="120" y1="452" x2="416" y2="244">
+      <stop offset="0" stop-color="#177c74"/>
+      <stop offset="0.45" stop-color="#1aa295"/>
+      <stop offset="1" stop-color="#19c4b2"/>
+    </linearGradient>
+    <linearGradient id="blade" gradientUnits="userSpaceOnUse" x1="233" y1="235" x2="279" y2="452">
+      <stop offset="0" stop-color="#14837c"/>
+      <stop offset="1" stop-color="#15a99b"/>
     </linearGradient>
   </defs>
+
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <g fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M128 390 L256 138 L384 390" stroke-width="54"/>
-    <path d="M186 316 H326" stroke-width="46"/>
+
+  <g id="mark">
+    <!-- Mountain. Outer contour up to the summit and back down, then the inner
+         contour home along the underside — the zig at 292/309/330 is the saddle
+         that cuts the lesser peak out of the right arm. -->
+    <path fill="url(#gold)"
+          d="M83 224 L256 56 L429 224 L347 224 L330 210 L309 160 L294 181 L256 151 L167 224 Z"/>
+
+    <!-- Shield: the inverted triangle with its centre hollowed out. evenodd
+         subtracts the second subpath instead of painting it. -->
+    <path fill="url(#teal)" fill-rule="evenodd"
+          d="M83 235 L429 235 L256 459 Z
+             M158 275 L354 275 Q332 342 256 418 Q182 344 158 275 Z"/>
+
+    <!-- Blade, with the slit at its head cut by the same evenodd trick so the
+         gap is transparent rather than painted in the background colour. -->
+    <path fill="url(#blade)" fill-rule="evenodd"
+          d="M231 235 L281 235 L272 360 L256 453 L240 360 Z
+             M252 235 L260 235 L260 276 L252 276 Z"/>
   </g>
 </svg>

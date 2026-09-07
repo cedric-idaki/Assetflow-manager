@@ -39,13 +39,20 @@ describe('company platform invoice', () => {
     expect(doc).toContain('INVOICE');
   });
 
-  it('carries the Ararat wordmark, not the retired AssetFlow one', () => {
+  it('carries the Ararat lockup, not the retired AssetFlow one', () => {
     // The letterhead is the PLATFORM billing the tenant, so the brand is ours
     // and hardcoded — unlike payslips or tenant invoices, which take the
     // tenant's own company_name. It had been left on the old name while the
     // footer of the same page already said Ararat.
-    expect(doc).toContain('>Ararat<');
+    expect(doc).toContain('>ARARAT<');
     expect(doc).not.toMatch(/AssetFlow|Asset<span>Flow/);
+  });
+
+  it('draws the logo inline rather than linking it', () => {
+    // The document is written into a blank popup, whose base URL for resolving
+    // a relative <img src> is not something to bet a printed invoice on.
+    expect(doc).toContain('aria-label="Ararat"');
+    expect(doc).not.toMatch(/<img[^>]+icon\.svg/);
   });
 
   it('itemises the user charge and the one-time installation separately', () => {
@@ -126,8 +133,9 @@ describe('sacco platform invoice', () => {
 
   const doc = buildSaccoInvoice(row, sacco);
 
-  it('carries the Ararat wordmark, not the retired AssetFlow one', () => {
-    expect(doc).toContain('>Ararat<');
+  it('carries the Ararat lockup, not the retired AssetFlow one', () => {
+    expect(doc).toContain('>ARARAT<');
+    expect(doc).toContain('aria-label="Ararat"');
     expect(doc).not.toMatch(/AssetFlow|Asset<span>Flow/);
   });
 

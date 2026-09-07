@@ -15,46 +15,58 @@
  * the frame and puts nothing important in the corners.
  */
 import sharp from 'sharp';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'store-assets');
 
+/**
+ * The mark is lifted straight out of the app icon rather than redrawn here, so
+ * the listing artwork can never drift from what the launcher shows.
+ */
+const iconSvg = readFileSync(join(root, 'public', 'icons', 'icon.svg'), 'utf8');
+
+const lift = (label, re) => {
+  const found = iconSvg.match(re);
+  if (!found) throw new Error(`could not lift the ${label} out of public/icons/icon.svg`);
+  return found[0];
+};
+
+const markGradients = ['gold', 'teal', 'blade']
+  .map((id) => lift(`${id} gradient`, new RegExp(`<linearGradient id="${id}"[\\s\\S]*?</linearGradient>`)))
+  .join('\n    ');
+const markGroup = lift('mark', /<g id="mark">[\s\S]*?<\/g>/);
+
 const featureGraphic = `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500" width="1024" height="500">
   <defs>
-    <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="500">
+    ${markGradients}
+    <linearGradient id="fg-bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="500">
       <stop offset="0" stop-color="#12314f"/>
       <stop offset="0.5" stop-color="#0c2037"/>
       <stop offset="1" stop-color="#071522"/>
     </linearGradient>
-    <radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="245" cy="250" r="260">
-      <stop offset="0" stop-color="#34c1dd" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#34c1dd" stop-opacity="0"/>
+    <radialGradient id="fg-glow" gradientUnits="userSpaceOnUse" cx="245" cy="250" r="270">
+      <stop offset="0" stop-color="#1fbfae" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#1fbfae" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="mark" gradientUnits="userSpaceOnUse" x1="150" y1="140" x2="330" y2="360">
-      <stop offset="0" stop-color="#6fdff2"/>
-      <stop offset="1" stop-color="#34c1dd"/>
-    </linearGradient>
   </defs>
 
-  <rect width="1024" height="500" fill="url(#bg)"/>
-  <rect width="1024" height="500" fill="url(#glow)"/>
+  <rect width="1024" height="500" fill="url(#fg-bg)"/>
+  <rect width="1024" height="500" fill="url(#fg-glow)"/>
 
-  <!-- The same A as the app icon, so the listing and the launcher agree. -->
-  <g fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round"
-     transform="translate(245 250) scale(0.62) translate(-256 -256)">
-    <path d="M128 390 L256 138 L384 390" stroke-width="54"/>
-    <path d="M186 316 H326" stroke-width="46"/>
+  <!-- The app icon's own mark, so the listing and the launcher agree. -->
+  <g transform="translate(245 250) scale(0.78) translate(-256 -256)">
+    ${markGroup}
   </g>
 
   <g font-family="Segoe UI, Selawik, DejaVu Sans, Arial, sans-serif">
-    <text x="410" y="228" fill="#ffffff" font-size="86" font-weight="700" letter-spacing="-1.5">Ararat</text>
-    <text x="413" y="286" fill="#7fd7e8" font-size="30" font-weight="600" letter-spacing="0.5">Management Platform</text>
-    <text x="413" y="345" fill="#9fb3c8" font-size="25" font-weight="400">Assets, SACCOs, KYC, payments</text>
-    <text x="413" y="381" fill="#9fb3c8" font-size="25" font-weight="400">and e-signature in one portal.</text>
+    <text x="425" y="222" fill="url(#gold)" font-size="76" font-weight="600" letter-spacing="13">ARARAT</text>
+    <text x="429" y="282" fill="#35c9b8" font-size="30" font-weight="600" letter-spacing="0.5">Management Platform</text>
+    <text x="429" y="341" fill="#9fb3c8" font-size="25" font-weight="400">Assets, SACCOs, KYC, payments</text>
+    <text x="429" y="377" fill="#9fb3c8" font-size="25" font-weight="400">and e-signature in one portal.</text>
   </g>
 </svg>`;
 

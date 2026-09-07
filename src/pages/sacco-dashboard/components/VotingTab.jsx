@@ -13,6 +13,17 @@ const defaultVotingEnd = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 
+// A recorded vote is final, so a click here only stages the choice — the clerk
+// reads it back on a second screen before anything reaches sacco_votes. Members
+// get the same review step in their portal (see the member VotingTab).
+const CHOICES = [
+  { value: 'yes',     label: 'Yes',     icon: 'ThumbsUp',   btn: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200', pill: 'border-emerald-300 bg-emerald-50 text-emerald-700' },
+  { value: 'no',      label: 'No',      icon: 'ThumbsDown', btn: 'bg-red-100 text-red-700 hover:bg-red-200',             pill: 'border-red-300 bg-red-50 text-red-700' },
+  { value: 'abstain', label: 'Abstain', icon: 'Minus',      btn: 'bg-slate-100 text-slate-600 hover:bg-slate-200',       pill: 'border-slate-300 bg-slate-50 text-slate-600' },
+];
+
+const choiceOf = (value) => CHOICES.find((c) => c.value === value);
+
 const VotingTab = ({ ctx }) => {
   const { motions, members, votes, createMotion, secondMotion, openVoting, castVote, publishResults, notifyMotion } = ctx;
   const toast = useToast();
@@ -25,6 +36,7 @@ const VotingTab = ({ ctx }) => {
   const [form, setForm] = useState({ title: '', description: '', ballot_type: 'visible', proposer_id: '', quorum_percent: '' });
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
   const [voter, setVoter] = useState('');
+  const [pendingChoice, setPendingChoice] = useState('');   // staged, not yet cast
 
   const memberName = (id) => members.find((m) => m.id === id)?.full_name || '—';
   const hasVoted = (motionId, memberId) => votes.some((v) => v.motion_id === motionId && v.member_id === memberId);
@@ -80,11 +92,33 @@ const VotingTab = ({ ctx }) => {
       else toast.success(`Motion not carried (${r?.yes ?? 0} yes / ${r?.no ?? 0} no).`);
     } catch (e) { toast.error(e.message || 'Could not close the motion.'); }
   };
-  const submitVote = async (choice) => {
+  const openVoteModal = (m) => { setVoteMotion(m); setVoter(''); setPendingChoice(''); };
+  const closeVoteModal = () => { setVoteMotion(null); setVoter(''); setPendingChoice(''); };
+
+  // Step 1 — stage the choice. Nothing is written; the clerk still has to read
+  // the member and the choice back on the confirmation screen.
+  const stageVote = (choice) => {
     if (!voter) { toast.error('Choose the voting member.'); return; }
     if (hasVoted(voteMotion.id, voter)) { toast.error('That member has already voted — votes are final.'); return; }
+    setPendingChoice(choice);
+  };
+
+  // Step 2 — confirmed against the summary, so record it. Re-check the ballot
+  // in case the member voted from their own portal while this modal was open.
+  const confirmVote = async () => {
+    if (!voter || !pendingChoice) return;
+    if (hasVoted(voteMotion.id, voter)) {
+      toast.error('That member has already voted — votes are final.');
+      setPendingChoice('');
+      return;
+    }
     setSaving(true);
-    try { await castVote(voteMotion, voter, choice); toast.success('Vote recorded.'); setVoter(''); }
+    try {
+      await castVote(voteMotion, voter, pendingChoice);
+      toast.success(`Vote recorded for ${memberName(voter)}: ${choiceOf(pendingChoice)?.label}. It is final.`);
+      setVoter('');
+      setPendingChoice('');
+    }
     catch (e) { toast.error(e.message || 'Could not vote.'); } finally { setSaving(false); }
   };
 
@@ -127,7 +161,7 @@ const VotingTab = ({ ctx }) => {
                       {m.status === 'proposed' && <button onClick={() => doSecond(m)} className="text-xs text-indigo-600 font-semibold hover:underline">Second motion</button>}
                       {m.status === 'seconded' && <button onClick={() => openOpenModal(m)} className="text-xs text-sky-600 font-semibold hover:underline">Open voting</button>}
                       {m.status === 'open' && <>
-                        <button onClick={() => { setVoteMotion(m); setVoter(''); }} className="text-xs text-primary font-semibold hover:underline">Cast vote</button>
+                        <button onClick={() => openVoteModal(m)} className="text-xs text-primary font-semibold hover:underline">Cast vote</button>
                         <button onClick={() => doPublish(m)} className="text-xs text-emerald-600 font-semibold hover:underline">Close & publish</button>
                       </>}
                     </div>
@@ -170,10 +204,22 @@ const VotingTab = ({ ctx }) => {
         </div>
       </Modal>
 
-      {/* Cast vote */}
-      <Modal open={!!voteMotion} onClose={() => setVoteMotion(null)} title={voteMotion ? `Vote · ${voteMotion.title}` : ''}
-        footer={<GhostButton onClick={() => setVoteMotion(null)}>Done</GhostButton>}>
-        {voteMotion && (
+      {/* Cast vote — pick, then confirm. A vote cannot be taken back, so the
+          choice is read back to the clerk before it is recorded. */}
+      <Modal
+        open={!!voteMotion}
+        onClose={() => { if (!saving) closeVoteModal(); }}
+        title={voteMotion ? `${pendingChoice ? 'Confirm vote' : 'Vote'} · ${voteMotion.title}` : ''}
+        footer={pendingChoice ? (
+          <>
+            <GhostButton onClick={() => setPendingChoice('')} disabled={saving}>Go back</GhostButton>
+            <PrimaryButton icon="Vote" onClick={confirmVote} disabled={saving}>
+              {saving ? 'Recording…' : `Confirm “${choiceOf(pendingChoice)?.label}” vote`}
+            </PrimaryButton>
+          </>
+        ) : <GhostButton onClick={closeVoteModal}>Done</GhostButton>}
+      >
+        {voteMotion && !pendingChoice && (
           <>
             <Field label="Voting member *">
               <Select value={voter} onChange={(e) => setVoter(e.target.value)}>
@@ -186,12 +232,23 @@ const VotingTab = ({ ctx }) => {
               </Select>
             </Field>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
-              <button onClick={() => submitVote('yes')} disabled={saving} className="py-2 rounded-lg text-sm font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 disabled:opacity-60">Yes</button>
-              <button onClick={() => submitVote('no')} disabled={saving} className="py-2 rounded-lg text-sm font-semibold bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-60">No</button>
-              <button onClick={() => submitVote('abstain')} disabled={saving} className="py-2 rounded-lg text-sm font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:opacity-60">Abstain</button>
+              {CHOICES.map((c) => (
+                <button
+                  key={c.value}
+                  onClick={() => stageVote(c.value)}
+                  disabled={saving}
+                  className={`inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-semibold disabled:opacity-60 ${c.btn}`}
+                >
+                  <Icon name={c.icon} size={14} color="currentColor" />
+                  {c.label}
+                </button>
+              ))}
             </div>
             <p className="text-xs text-muted-foreground mt-3">
               A member votes once and the ballot is final — members who have already voted cannot be selected here.
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              You confirm the member and the choice on the next screen before anything is recorded.
             </p>
             <p className="text-xs text-muted-foreground mt-1">
               {voteMotion.ballot_type === 'secret'
@@ -199,6 +256,41 @@ const VotingTab = ({ ctx }) => {
                 : 'Visible ballot — the breakdown is shown to members after the vote closes.'}
             </p>
           </>
+        )}
+
+        {voteMotion && pendingChoice && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200">
+              <Icon name="AlertTriangle" size={15} color="#dc2626" />
+              <p className="text-xs text-red-700 leading-relaxed">
+                <strong>Votes are final.</strong> Once recorded this ballot cannot be withdrawn, and the
+                member can no longer vote on this motion from their own portal.
+              </p>
+            </div>
+            <div className="p-4 rounded-xl border border-border text-center space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Motion</p>
+                <p className="text-sm font-semibold text-foreground mt-0.5">{voteMotion.title}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Recording the vote of</p>
+                <p className="text-sm font-semibold text-foreground mt-0.5">{memberName(voter)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">Their choice</p>
+                <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${choiceOf(pendingChoice)?.pill || ''}`}>
+                  <Icon name={choiceOf(pendingChoice)?.icon} size={16} color="currentColor" />
+                  {choiceOf(pendingChoice)?.label}
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Check both against the ballot paper before confirming.
+              {voteMotion.ballot_type === 'secret'
+                ? ' Secret ballot — only the totals are ever displayed.'
+                : ''}
+            </p>
+          </div>
         )}
       </Modal>
 

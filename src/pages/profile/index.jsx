@@ -13,6 +13,7 @@ import SaccoBillingSection from '../sacco-dashboard/components/BillingTab';
 import { PASSWORD_POLICY } from '../../utils/validation';
 import { html, rawHtml } from '../../utils/htmlEscape';
 import { invoiceForSubscription } from '../../utils/systemInvoice';
+import { brandMarkSvg, WORDMARK_FONT, GOLD_DEEP } from '../../components/BrandLogo';
 import DevicesCard from './components/DevicesCard';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
@@ -521,7 +522,10 @@ export const buildInvoiceHtml = (row, billTo, modules = null) => {
   *{box-sizing:border-box;font-family:'Segoe UI',Arial,sans-serif;}
   body{margin:0;padding:40px;color:#0c2037;}
   .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1A56DB;padding-bottom:20px;}
-  .brand{font-family:Georgia,serif;font-size:24px;font-weight:700;letter-spacing:-0.01em;color:#0c2037;}
+  .lockup{display:flex;align-items:center;gap:12px;}
+  /* The wordmark drops to the logo's deepest gold: its lighter #cb964a
+     only reaches 2.5:1 on paper, and this document gets printed. */
+  .brand{font-family:${WORDMARK_FONT};font-size:23px;font-weight:600;letter-spacing:0.22em;color:${GOLD_DEEP};}
   .muted{color:#5a7185;font-size:12px;}
   .grid{display:flex;justify-content:space-between;margin:24px 0;}
   .grid div{font-size:13px;line-height:1.7;}
@@ -538,7 +542,9 @@ export const buildInvoiceHtml = (row, billTo, modules = null) => {
   .foot{margin-top:40px;font-size:11px;color:#9aa7b4;text-align:center;border-top:1px solid #e5ebf1;padding-top:16px;}
 </style></head><body>
   <div class="head">
-    <div><div class="brand">Ararat</div><div class="muted">Platform Subscription — Tax Invoice</div></div>
+    <div class="lockup">${rawHtml(brandMarkSvg({ size: 52 }))}
+      <div><div class="brand">ARARAT</div><div class="muted">Platform Subscription — Tax Invoice</div></div>
+    </div>
     <div class="right"><div style="font-size:20px;font-weight:800;">INVOICE</div><div class="muted">${invoiceNo(row)}</div></div>
   </div>
   <div class="grid">
