@@ -74,20 +74,37 @@ export const useActiveLegalDocument = (docKind = 'terms') => {
   return { doc, loading, error };
 };
 
-/** Record that this person accepted whatever version is currently active. */
+/**
+ * Record that this person accepted whatever version is currently active.
+ *
+ * NOTHING ESCAPES THIS FUNCTION. It is called from the registration path
+ * WITHOUT being awaited, so a rejection here does not fail a signup — it
+ * becomes an unhandled rejection, which in a browser is a console error and in
+ * a test run is a failure in whatever happened to be running at the time. The
+ * whole body is therefore inside a try/catch, not just the `error` branch:
+ * `supabase.rpc` can throw as well as resolve with an error, and the first
+ * version of this only handled the second.
+ *
+ * A missing acceptance row is a gap in the record. A registration that fails
+ * because of one is a lost customer. The gap is the better trade, but it is
+ * logged so it is a gap somebody can find.
+ */
 export const recordLegalAcceptance = async ({ docKind = 'terms', email, fullName } = {}) => {
-  const { data, error } = await supabase.rpc('record_legal_acceptance', {
-    p_doc_kind:  docKind,
-    p_email:     email || null,
-    p_full_name: fullName || null,
-  });
-  if (error) {
-    // Never block a signup on this. A missing acceptance row is a gap in the
-    // record; a registration that fails because of one is a lost customer.
-    logger.warn('[recordLegalAcceptance] not recorded', { message: error.message });
+  try {
+    const { data, error } = await supabase.rpc('record_legal_acceptance', {
+      p_doc_kind:  docKind,
+      p_email:     email || null,
+      p_full_name: fullName || null,
+    });
+    if (error) {
+      logger.warn('[recordLegalAcceptance] not recorded', { message: error.message });
+      return null;
+    }
+    return data;
+  } catch (err) {
+    logger.warn('[recordLegalAcceptance] threw', { message: err?.message });
     return null;
   }
-  return data;
 };
 
 /**

@@ -829,14 +829,27 @@ export const flatMetric = (scorecards = [], sortValue = 'open') => {
 };
 
 const AGENT_COLS  = 'id, user_id, admin_id, full_name, agent_code, email, phone, region, agent_status, '
-                  + 'commission_rate, total_sales, total_commission, target_amount, created_at';
+                  + 'agent_type, commission_rate, total_sales, total_commission, target_amount, created_at';
 const LEAD_COLS   = 'id, agent_id, full_name, phone, email, stage, priority, source, asset_interest, budget_range, '
                   + 'last_contact_at, next_follow_up_at, interaction_count, last_interaction_type, converted_at, converted_entity, created_at, '
                   + 'lost_reason, lost_notes, lost_at';
 const TOUCH_COLS  = 'id, agent_id, lead_id, client_id, contact_name, interaction_type, direction, subject, summary, outcome, duration_minutes, occurred_at, next_step, created_at';
 const FOLLOW_COLS = 'id, agent_id, lead_id, lead_name, appointment_type, scheduled_at, is_completed, completed_at, outcome, location, notes';
 
-export const useCrmOversight = () => {
+/**
+ * @param {object}  opts
+ * @param {string=} opts.agentType  narrow to one sales force — 'sacco' or
+ *   'company'. Omitted means every agent in the tenant, which is what the
+ *   business-side screens want.
+ *
+ *   The two forces share `public.agents` and are told apart by `agent_type`
+ *   (20260716090000), so this is a filter rather than a second module: the
+ *   pipeline, follow-ups, loss analysis and leaderboard are the same work
+ *   whichever portal the agent signed in through, and keeping one
+ *   implementation is what stops the two drifting into disagreeing about what
+ *   a converted lead is.
+ */
+export const useCrmOversight = ({ agentType } = {}) => {
   const { userProfile } = useAuth();
   const role = userProfile?.role || null;
   const canView = CRM_SUPERVISOR_ROLES.includes(role);
@@ -867,10 +880,15 @@ export const useCrmOversight = () => {
       // created. Same rule, no special case.
       const adminId = await getTenantAdminId();
 
-      const agentQuery = supabase.from('agents')
+      let agentQuery = supabase.from('agents')
         .select(AGENT_COLS)
         .eq('admin_id', adminId)
         .order('full_name');
+
+      // Narrowing the AGENT list is enough to narrow everything: leads,
+      // interactions and follow-ups are all scoped to `allowed` below, which
+      // is built from whatever this query returns.
+      if (agentType) agentQuery = agentQuery.eq('agent_type', agentType);
 
       const [agentRes, leadRes, touchRes, followRes] = await Promise.all([
         agentQuery,
@@ -910,7 +928,7 @@ export const useCrmOversight = () => {
     } finally {
       setLoading(false);
     }
-  }, [canView]);
+  }, [canView, agentType]);
 
   useAuthScopedLoader(fetchAll, reset);
 

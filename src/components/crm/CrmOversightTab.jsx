@@ -938,13 +938,13 @@ const AgentLostDeals = ({ leads, onOpenLead }) => {
 };
 
 // ── Main ────────────────────────────────────────────────────────────────────
-const CrmOversightTab = ({ onExport }) => {
+const CrmOversightTab = ({ onExport, agentType }) => {
   const {
     canView, isPlatformOwner, scorecards, totals, pipeline, leaderboard,
     sources, losses,
     neglectedLeads, recentInteractions, leads, interactions, followUps,
     loading, error, refetch,
-  } = useCrmOversight();
+  } = useCrmOversight({ agentType });
 
   const [selectedAgent, setSelectedAgent] = useState(null);
   // Which KPI tile is expanded, by key. One at a time: two open breakdowns push
