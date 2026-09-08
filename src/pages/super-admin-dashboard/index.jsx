@@ -13,6 +13,7 @@ import AuditTrail from './components/AuditTrail';
 import SalesAgentsList from './components/SalesAgentsList';
 import WithdrawalRequestsTab from './components/WithdrawalRequestsTab';
 import PaymentApprovalTab from './components/PaymentApprovalTab';
+import LegalDocumentsTab from './components/LegalDocumentsTab';
 import CreateAgentModal from './components/CreateAgentModal';
 
 // Admin portal tabs for super admin
@@ -180,6 +181,7 @@ const SuperAdminDashboard = () => {
     { id: 'companies',    label: 'Companies',               icon: 'Building2' },
     { id: 'onboarding',   label: 'Installations',           icon: 'Wrench' },
     { id: 'mpesa',        label: 'M-Pesa',                  icon: 'Smartphone' },
+    { id: 'legal',        label: 'Terms & Policies',        icon: 'Scale' },
     { id: 'audit',        label: 'Audit Trail',             icon: 'Shield', badge: auditTrail?.filter(a => a.action === 'delete').length || 0 },
   ];
 
@@ -443,6 +445,10 @@ const SuperAdminDashboard = () => {
 
         {/* M-PESA TAB */}
         {activeTab === 'mpesa' && <MpesaSettingsTab />}
+
+        {/* Owns its own fetching; not swapped for the page skeleton on a
+            background refetch, which would drop a half-filled upload form. */}
+        {activeTab === 'legal' && <LegalDocumentsTab />}
 
         {/* PAYMENT REMINDERS TAB */}
         {activeTab === 'reminders' && (

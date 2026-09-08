@@ -27,6 +27,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 import Icon from '../../../components/AppIcon';
 import TermsModal from '../../../components/TermsModal';
+import { recordLegalAcceptance } from '../../../hooks/useLegalDocuments';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 import { isPasswordStrong } from '../../../utils/validation';
 import PasswordStrengthMeter from './PasswordStrengthMeter';
@@ -264,6 +265,18 @@ const RegistrationForm = () => {
         agentCode: formData.agentCode.trim() || null,
         password: formData.password,
       });
+      // Record WHICH VERSION of the terms this person ticked, now that the
+      // account exists to attach it to. The server resolves the active
+      // version itself — see record_legal_acceptance.
+      //
+      // Deliberately after setResult and deliberately not awaited into the
+      // failure path: a missing acceptance row is a gap in the record, but a
+      // registration that fails because of one is a lost customer.
+      recordLegalAcceptance({
+        email:    formData.email.trim().toLowerCase(),
+        fullName: formData.fullName.trim(),
+      });
+
       setResult(data);
     } catch (err) {
       setServerError(err?.message || 'Registration failed. Please try again.');

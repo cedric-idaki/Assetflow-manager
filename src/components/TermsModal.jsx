@@ -1,12 +1,32 @@
 import React, { useEffect } from 'react';
 import Icon from './AppIcon';
+import { useActiveLegalDocument, legalDocumentUrl } from '../hooks/useLegalDocuments';
 
-// Google Drive preview of the Ararat Terms & Conditions / Privacy Policy.
+/**
+ * The version that was hardcoded here before 20260909140000.
+ *
+ * Kept only as the last-resort fallback for a database that has not had that
+ * migration applied yet — the modal must never come up empty during a
+ * registration. Nothing should link to it; the live document comes from
+ * `legal_documents`, where it is versioned and its acceptance is recorded.
+ */
 export const TERMS_DOC_URL = 'https://drive.google.com/file/d/1t8fTwvCcbiYa-iDAPZ9mQv8SOd-Ly6IA/preview';
 
-// Full-screen overlay that shows the Terms & Privacy Policy document in the
-// same tab (no new window). Used during account registration.
+/**
+ * The terms, as currently published.
+ *
+ * Shows whichever version is ACTIVE, and names it on screen. That version
+ * number is the same one `record_legal_acceptance` writes against the tick on
+ * the registration form, so what somebody agreed to can be produced later —
+ * which a link to a mutable Drive file could never do.
+ */
 const TermsModal = ({ open, onClose }) => {
+  const { doc, loading } = useActiveLegalDocument('terms');
+
+  // Inline HTML renders in place; a PDF or a link renders in the frame.
+  const src = legalDocumentUrl(doc) || TERMS_DOC_URL;
+  const heading = doc?.title || 'Terms & Privacy Policy';
+
   // Close on Escape and lock body scroll while open.
   useEffect(() => {
     if (!open) return;
@@ -40,13 +60,24 @@ const TermsModal = ({ open, onClose }) => {
         <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: '#d0dce6' }}>
           <div className="flex items-center gap-2">
             <Icon name="FileText" size={18} color="#1da8c5" />
-            <h3 className="text-base font-bold" style={{ color: '#0c2037' }}>
-              Terms &amp; Privacy Policy
-            </h3>
+            <div>
+              <h3 className="text-base font-bold" style={{ color: '#0c2037' }}>
+                {heading}
+              </h3>
+              {/* The version is on screen because it is what the acceptance
+                  record refers to. "I agreed to the terms" is only meaningful
+                  alongside which terms. */}
+              {doc?.version && (
+                <p className="text-[11px]" style={{ color: '#5a7185' }}>
+                  Version {doc.version}
+                  {doc.effective_from ? ` · in force from ${new Date(doc.effective_from).toLocaleDateString()}` : ''}
+                </p>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <a
-              href={TERMS_DOC_URL}
+              href={src}
               target="_blank"
               rel="noopener noreferrer"
               className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
@@ -68,13 +99,28 @@ const TermsModal = ({ open, onClose }) => {
         </div>
 
         {/* Document */}
-        <div className="flex-1 bg-slate-50">
+        <div className="flex-1 bg-slate-50 overflow-y-auto">
+          {loading ? (
+            <div className="h-full flex items-center justify-center text-sm" style={{ color: '#5a7185' }}>
+              Loading the current terms&hellip;
+            </div>
+          ) : doc?.body_html ? (
+            // Published as text rather than a file. Rendered directly so a
+            // clause can be corrected without re-uploading a PDF.
+            <div
+              className="prose prose-sm max-w-none p-6"
+              style={{ color: '#0c2037' }}
+              // eslint-disable-next-line react/no-danger
+              dangerouslySetInnerHTML={{ __html: doc.body_html }}
+            />
+          ) : (
           <iframe
-            src={TERMS_DOC_URL}
-            title="Ararat Terms and Privacy Policy"
+            src={src}
+            title={heading}
             className="w-full h-full border-0"
             allow="autoplay"
           />
+          )}
         </div>
       </div>
     </div>
