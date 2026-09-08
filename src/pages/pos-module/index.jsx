@@ -411,25 +411,43 @@ const POSModule = () => {
 
       if (totalAmount > LARGE_TXN_THRESHOLD && !isManagerRole) {
         const ref = `TXN-${Date.now().toString(36).toUpperCase()}`;
-        await supabase.from('maker_checker_queue').insert({
-          action_type:     'large_transaction',
+        // `high_value_transaction`, not `large_transaction` — the latter is not
+        // a value of mc_action_type and every insert using it was rejected with
+        // 22P02. See migration 20260909120000.
+        const { error: qErr } = await supabase.from('maker_checker_queue').insert({
+          action_type:     'high_value_transaction',
           title:           `Large Transaction — ${fmt(totalAmount)} for ${selectedClient?.full_name}`,
-          description:     `Sales agent requesting approval for ${pricingModel === 'cash' ? 'cash sale' : 'hire purchase'} of ${selectedAsset?.description} valued at ${fmt(totalAmount)}. Exceeds KES 50,000 threshold.`,
+          description:     `Sales agent requesting approval for ${pricingModel === 'cash' ? 'cash sale' : 'hire purchase'} of ${selectedAsset?.description} valued at ${fmt(totalAmount)}. Exceeds ${fmt(LARGE_TXN_THRESHOLD)} threshold.`,
+          initiator_id:    currentUser.id,
           initiator_name:  currentProfile?.full_name || currentUser.email,
-          initiator_email: currentUser.email,
+          initiator_role:  currentProfile?.role || 'sales_agent',
           status:          'pending',
           priority:        totalAmount > 200000 ? 'high' : 'medium',
-          affected_entity: selectedAsset?.id,
+          affected_entity: 'assets',
+          affected_entity_id: selectedAsset?.id,
           admin_id:        currentProfile?.admin_id || currentUser.id,
-          metadata: {
+          change_details: {
             ref,
-            client_id:     selectedClient?.id,
-            asset_id:      selectedAsset?.id,
-            total_amount:  totalAmount,
-            pricing_model: pricingModel,
+            client_id:      selectedClient?.id,
+            client_name:    selectedClient?.full_name,
+            asset_id:       selectedAsset?.id,
+            total_amount:   totalAmount,
+            pricing_model:  pricingModel,
             deposit_amount: parseFloat(depositAmount) || 0,
+            requested_by_email: currentUser.email,
           },
         });
+        // THE ERROR MUST NOT BE SWALLOWED. This used to be a bare `await` with
+        // no error check, so a rejected insert still set the reference and told
+        // the agent their sale was awaiting approval. Nothing was queued, no
+        // approver ever saw it, and the sale silently never happened.
+        if (qErr) {
+          setGlobalError(
+            `This sale needs approval, but the request could not be queued: ${qErr.message}. ` +
+            'Nothing has been submitted — tell a manager before trying again.',
+          );
+          return;
+        }
         setTxnApprovalRef(ref);
         setPendingTxnApproval(true);
         return;
@@ -445,28 +463,41 @@ const POSModule = () => {
 
         if (!isManager) {
           const ref = `DISC-${Date.now().toString(36).toUpperCase()}`;
+          // `discount_approval` was not a value of mc_action_type until
+          // 20260909120000 added it, so every one of these was rejected too.
           const { error: qErr } = await supabase.from('maker_checker_queue').insert({
             action_type:      'discount_approval',
             title:            `Discount Approval — ${discPct}% on ${selectedAsset?.description}`,
             description:      `Sales agent requesting ${discPct}% discount (${fmt(discountAmount)}) on ${selectedAsset?.description} for client ${selectedClient?.full_name}. Reason: ${discountReason || 'Not provided'}`,
+            initiator_id:     user.id,
             initiator_name:   profile?.full_name || user.email,
-            initiator_email:  user.email,
+            initiator_role:   profile?.role || 'sales_agent',
             status:           'pending',
             priority:         discPct > 15 ? 'high' : 'medium',
-            affected_entity:  selectedAsset?.id,
+            affected_entity:  'assets',
+            affected_entity_id: selectedAsset?.id,
             admin_id:         profile?.admin_id || user.id,
-            metadata: {
+            is_bulk_eligible: true,
+            change_details: {
               ref,
-              client_id:      selectedClient?.id,
-              asset_id:       selectedAsset?.id,
-              selling_price:  parseFloat(sellingPrice),
-              discount_pct:   discPct,
+              client_id:       selectedClient?.id,
+              client_name:     selectedClient?.full_name,
+              asset_id:        selectedAsset?.id,
+              selling_price:   parseFloat(sellingPrice),
+              discount_pct:    discPct,
               discount_amount: discountAmount,
               discount_reason: discountReason,
-              pricing_model:  pricingModel,
+              pricing_model:   pricingModel,
+              requested_by_email: user.email,
             },
           });
-          if (qErr) throw qErr;
+          if (qErr) {
+            setGlobalError(
+              `This discount needs approval, but the request could not be queued: ${qErr.message}. ` +
+              'Nothing has been submitted — reduce the discount or ask a manager to ring it up.',
+            );
+            return;
+          }
           setApprovalRef(ref);
           setPendingApproval(true);
           return;

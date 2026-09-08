@@ -94,13 +94,32 @@ const PenaltyCalculationPanel = () => {
     if (!selectedClient || calculatedPenalty === null) return;
     setApplying(true);
     try {
-      // Insert a pending maker-checker request for the penalty
+      // This insert was written against audit_logs' shape, not this table's:
+      // `record_id`, `table_name`, `new_values` and `severity` are all columns
+      // of audit_logs and none of them exist here, `title`/`initiator_name`/
+      // `initiator_role` are NOT NULL and were absent, and 'apply_penalty' is
+      // not a value of mc_action_type. Every penalty ever submitted was
+      // rejected. `debt_adjustment` is the value the queue was designed to
+      // receive from this panel — see makerCheckerWorkflow.test.jsx.
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: profile } = await supabase
+        .from('user_profiles').select('full_name, role, admin_id').eq('id', user?.id).maybeSingle();
+
+      const penaltyLabel = penaltyTypeOptions.find(t => t.value === penaltyType)?.label || penaltyType;
+
       const { error } = await supabase.from('maker_checker_queue').insert({
-        action_type: 'apply_penalty',
-        record_id: selectedClient.id,
-        table_name: 'clients',
-        description: `Penalty of KES ${calculatedPenalty.toFixed(2)} on ${selectedClient.full_name} — ${penaltyTypeOptions.find(t => t.value === penaltyType)?.label}`,
-        new_values: {
+        action_type: 'debt_adjustment',
+        title: `Penalty — KES ${calculatedPenalty.toFixed(2)} on ${selectedClient.full_name}`,
+        description: `Penalty of KES ${calculatedPenalty.toFixed(2)} on ${selectedClient.full_name} — ${penaltyLabel}. Outstanding balance KES ${Number(overdueAmount || 0).toFixed(2)}.`,
+        initiator_id: user?.id || null,
+        initiator_name: profile?.full_name || user?.email || 'Unknown',
+        initiator_role: profile?.role || 'staff',
+        status: 'pending',
+        priority: 'medium',
+        affected_entity: 'clients',
+        affected_entity_id: selectedClient.id,
+        admin_id: profile?.admin_id || user?.id || null,
+        change_details: {
           penalty_amount: calculatedPenalty,
           penalty_type: penaltyType,
           penalty_value: parseFloat(penaltyValue),
@@ -108,9 +127,6 @@ const PenaltyCalculationPanel = () => {
           client_id: selectedClient.id,
           client_name: selectedClient.full_name,
         },
-        status: 'pending',
-        severity: 'medium',
-        created_at: new Date().toISOString(),
       });
 
       if (error) throw error;

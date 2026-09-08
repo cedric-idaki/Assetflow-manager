@@ -23,6 +23,7 @@ const FILTER_OPTIONS = [
   { value: 'commission_override', label: 'Commission Override' },
   { value: 'role_change', label: 'Role Change' },
   { value: 'high_value_transaction', label: 'High Value Txn' },
+  { value: 'discount_approval',      label: 'Discount' },
   { value: 'kyc_approval', label: 'KYC Approval' },
   { value: 'user_creation', label: 'User Creation' },
   { value: 'asset_deletion', label: 'Asset Deletion' },
