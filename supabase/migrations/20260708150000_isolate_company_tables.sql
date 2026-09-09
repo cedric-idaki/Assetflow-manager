@@ -39,13 +39,16 @@ DROP POLICY IF EXISTS "clients_read_own_row"        ON public.clients;
 DROP POLICY IF EXISTS "clients_read_own_by_auth_id" ON public.clients;
 DROP POLICY IF EXISTS "client_updates_own_row"      ON public.clients;
 
+DROP POLICY IF EXISTS clients_tenant_manage ON public.clients;
 CREATE POLICY clients_tenant_manage ON public.clients FOR ALL TO authenticated
   USING      ((admin_id = public.current_admin_id() AND public.is_staff_member()) OR public.is_global_viewer())
   WITH CHECK ((admin_id = public.current_admin_id() AND public.is_staff_member()) OR public.is_global_viewer());
 
+DROP POLICY IF EXISTS clients_self_read ON public.clients;
 CREATE POLICY clients_self_read ON public.clients FOR SELECT TO authenticated
   USING (client_auth_id = auth.uid() OR lower(email) = lower(coalesce(auth.email(),'')));
 
+DROP POLICY IF EXISTS clients_self_update ON public.clients;
 CREATE POLICY clients_self_update ON public.clients FOR UPDATE TO authenticated
   USING      (client_auth_id = auth.uid() OR lower(email) = lower(coalesce(auth.email(),'')))
   WITH CHECK (client_auth_id = auth.uid() OR lower(email) = lower(coalesce(auth.email(),'')));
@@ -58,6 +61,7 @@ ALTER TABLE public.clients ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "admins_manage_own_assets"        ON public.assets;
 DROP POLICY IF EXISTS "Admin and staff can update assets" ON public.assets;
 
+DROP POLICY IF EXISTS assets_tenant_manage ON public.assets;
 CREATE POLICY assets_tenant_manage ON public.assets FOR ALL TO authenticated
   USING (
     registered_by = auth.uid()
@@ -76,6 +80,7 @@ ALTER TABLE public.assets ENABLE ROW LEVEL SECURITY;
 -- ---------------------------------------------------------------------------
 DROP POLICY IF EXISTS "scoped_payments_access" ON public.payments;
 
+DROP POLICY IF EXISTS payments_tenant_manage ON public.payments;
 CREATE POLICY payments_tenant_manage ON public.payments FOR ALL TO authenticated
   USING (
     public.is_global_viewer()
@@ -103,6 +108,7 @@ DROP POLICY IF EXISTS "all_authenticated_manage_agents" ON public.agents;
 DROP POLICY IF EXISTS "agents_self_access"              ON public.agents;
 DROP POLICY IF EXISTS "super_admin_all_agents"          ON public.agents;
 
+DROP POLICY IF EXISTS agents_tenant_manage ON public.agents;
 CREATE POLICY agents_tenant_manage ON public.agents FOR ALL TO authenticated
   USING      ((admin_id = public.current_admin_id() AND public.is_staff_member()) OR user_id = auth.uid() OR public.is_global_viewer())
   WITH CHECK ((admin_id = public.current_admin_id() AND public.is_staff_member()) OR public.is_global_viewer());

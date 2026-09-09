@@ -37,8 +37,8 @@
 -- WHAT THIS MIGRATION DOES
 -- ------------------------
 -- Only the part that has to happen in the database: adds 'discount_approval'
--- to the enum and gives it a threshold row. The other three defects are in the
--- application and are fixed in the same commit.
+-- to the enum. Its threshold row follows in 20260909130000 (see below). The
+-- other three defects are in the application and are fixed in the same commit.
 --
 -- 'large_transaction' is NOT added. 'high_value_transaction' already exists,
 -- already means exactly that, and is already the label the approvals screen
@@ -49,36 +49,16 @@
 -- ============================================================================
 
 -- ADD VALUE is transaction-safe on PG12+ as long as the new value is not USED
--- in the same transaction. It is not: the only use is the seed below, which is
--- deliberately in its own statement after a commit boundary would fall, and
--- guarded so a re-run does not depend on it.
+-- in the same transaction. Nothing here uses it.
 alter type public.mc_action_type add value if not exists 'discount_approval';
 
 comment on type public.mc_action_type is
   'What a queued approval is about. discount_approval was added in 20260909120000 — the POS had been writing it since it shipped, against an enum that did not contain it.';
 
--- ----------------------------------------------------------------------------
--- The threshold row.
---
--- Separate statement, and tolerant of the enum value not being visible yet:
--- inside a single transaction the value added above cannot be cast, so on a
--- fresh apply this is skipped and the row is created on the next run. The
--- queue works without it — approval_thresholds only configures auto-approval
--- and SLA — so a missing row costs configuration, not function.
--- ----------------------------------------------------------------------------
-do $$
-begin
-  insert into public.approval_thresholds
-    (action_type, display_name, requires_approval, auto_approve_below,
-     escalate_above, sla_hours, bulk_eligible, required_checker_role)
-  values
-    ('discount_approval'::public.mc_action_type, 'Discount Approval', true,
-     null, null, 12, true, 'admin')
-  on conflict (action_type) do nothing;
-exception
-  when invalid_text_representation or undefined_object then
-    raise notice 'discount_approval not yet visible in this transaction; re-run this migration to seed its threshold row.';
-end
-$$;
+-- The threshold row that configures this action type is seeded by
+-- 20260909130000. It cannot live here: Postgres refuses to CAST a value added
+-- by ALTER TYPE in the transaction that added it (55P04), and each migration
+-- file is one transaction. The queue works without the row — approval_thresholds
+-- only carries auto-approval and SLA settings — so the split costs nothing.
 
 notify pgrst, 'reload schema';

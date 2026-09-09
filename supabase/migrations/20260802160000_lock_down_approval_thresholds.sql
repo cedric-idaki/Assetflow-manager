@@ -29,6 +29,7 @@ DROP POLICY IF EXISTS authenticated_manage_approval_thresholds ON public.approva
 
 -- Read: any internal staff member. The app needs the thresholds in order to
 -- enforce them, and they carry no tenant or personal data.
+DROP POLICY IF EXISTS approval_thresholds_staff_read ON public.approval_thresholds;
 CREATE POLICY approval_thresholds_staff_read
   ON public.approval_thresholds
   FOR SELECT
@@ -38,6 +39,7 @@ CREATE POLICY approval_thresholds_staff_read
 -- Write: super_admin only. Deliberately NOT is_global_viewer() — that also
 -- matches `director`, and directors are read-only overseers. This mirrors the
 -- table's own `required_checker_role = 'super_admin'` for system_config.
+DROP POLICY IF EXISTS approval_thresholds_super_admin_write ON public.approval_thresholds;
 CREATE POLICY approval_thresholds_super_admin_write
   ON public.approval_thresholds
   FOR ALL

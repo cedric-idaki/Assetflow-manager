@@ -31,10 +31,12 @@ drop policy if exists "open_access_payment_alert_configs" on public.payment_aler
 drop policy if exists "open_access_payment_alerts_log"    on public.payment_alerts_log;
 
 -- payment_alert_configs — platform config. Global viewers read; super_admin edits.
+DROP POLICY IF EXISTS payment_alert_configs_read ON public.payment_alert_configs;
 create policy payment_alert_configs_read on public.payment_alert_configs
 for select to authenticated
 using (public.is_global_viewer());
 
+DROP POLICY IF EXISTS payment_alert_configs_update ON public.payment_alert_configs;
 create policy payment_alert_configs_update on public.payment_alert_configs
 for update to authenticated
 using (
@@ -48,6 +50,7 @@ with check (
 
 -- payment_alerts_log — append-only audit trail written by the Edge Function.
 -- No INSERT/UPDATE/DELETE policy at all: service_role is the only writer.
+DROP POLICY IF EXISTS payment_alerts_log_read ON public.payment_alerts_log;
 create policy payment_alerts_log_read on public.payment_alerts_log
 for select to authenticated
 using (public.is_global_viewer());

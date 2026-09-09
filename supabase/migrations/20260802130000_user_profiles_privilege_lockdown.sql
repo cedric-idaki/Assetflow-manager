@@ -147,6 +147,7 @@ drop policy if exists "profiles_access"                             on public.us
 -- the agent portal both resolve their admin by id); colleagues in my tenant
 -- (staff only — a client or sacco_member never enumerates staff); everything,
 -- for super_admin / director.
+DROP POLICY IF EXISTS user_profiles_select ON public.user_profiles;
 create policy user_profiles_select on public.user_profiles
 for select to authenticated
 using (
@@ -157,6 +158,7 @@ using (
   or public.is_global_viewer()
 );
 
+DROP POLICY IF EXISTS user_profiles_insert ON public.user_profiles;
 create policy user_profiles_insert on public.user_profiles
 for insert to authenticated
 with check (
@@ -166,6 +168,7 @@ with check (
   or public.is_global_viewer()
 );
 
+DROP POLICY IF EXISTS user_profiles_update ON public.user_profiles;
 create policy user_profiles_update on public.user_profiles
 for update to authenticated
 using (
@@ -183,6 +186,7 @@ with check (
 
 -- Deliberately NOT self-deletable: a user who removes their own row comes back
 -- with role = null, which RoleGuard.jsx treats as "allow through".
+DROP POLICY IF EXISTS user_profiles_delete ON public.user_profiles;
 create policy user_profiles_delete on public.user_profiles
 for delete to authenticated
 using (

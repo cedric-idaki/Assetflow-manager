@@ -80,8 +80,13 @@ create table if not exists public.document_archive (
   -- is not the same as created_at (when it was filed) -- a receipt reprinted in
   -- June for a March sale is a March document.
   issued_at     timestamptz not null default now(),
-  issued_year   integer generated always as (extract(year  from issued_at)::integer) stored,
-  issued_month  integer generated always as (extract(month from issued_at)::integer) stored,
+  -- Bucketed in Africa/Nairobi rather than UTC: a receipt issued at 01:00 EAT
+  -- on 1 March belongs to March, not to the previous month. The explicit zone
+  -- is also what makes these expressions IMMUTABLE -- extract() straight off a
+  -- timestamptz reads the session TimeZone, so Postgres refuses it in a stored
+  -- generated column (42P17).
+  issued_year   integer generated always as (extract(year  from (issued_at at time zone 'Africa/Nairobi'))::integer) stored,
+  issued_month  integer generated always as (extract(month from (issued_at at time zone 'Africa/Nairobi'))::integer) stored,
 
   created_by    uuid,
   created_at    timestamptz not null default now(),
