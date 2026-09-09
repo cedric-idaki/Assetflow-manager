@@ -56,7 +56,10 @@ describe('finhubPipeline mirrors the migration', () => {
   });
 
   it('has exactly the transitions payment_request_transition_ok allows', () => {
-    const body = /payment_request_transition_ok[\s\S]*?select \(p_from, p_to\) in \(([\s\S]*?)\n  \);/i.exec(sql);
+    // `\n {2}\);` rather than a literal two-space run: consecutive spaces in a
+    // regex are invisible to a reader and to review, which is what no-regex-spaces
+    // is for.
+    const body = /payment_request_transition_ok[\s\S]*?select \(p_from, p_to\) in \(([\s\S]*?)\n {2}\);/i.exec(sql);
     expect(body).not.toBeNull();
 
     const declared = [...body[1].matchAll(/\('([a-z_]+)',\s*'([a-z_]+)'\)/g)]
