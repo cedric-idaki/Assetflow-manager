@@ -87,13 +87,19 @@ const KycReviewPanel = ({ client, onClose, onStatusChange }) => {
     setTimeout(() => setToast(null), 3500);
   };
 
+  const [loadError, setLoadError] = useState(null);
+
   const fetchDocs = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('kyc_documents')
       .select('*')
       .eq('client_id', client._id)
       .order('created_at', { ascending: false });
+    // A failed read used to land here as an empty list, which reads on screen as
+    // "this client uploaded nothing" -- the one conclusion a reviewer must not
+    // draw from a network error.
+    setLoadError(error ? error.message : null);
     setDocs(data || []);
     setLoading(false);
   }, [client._id]);
@@ -102,54 +108,118 @@ const KycReviewPanel = ({ client, onClose, onStatusChange }) => {
 
   const getDoc = (type) => docs.find(d => d.document_type === type);
 
+  /**
+   * An UPDATE that can tell you whether it changed anything.
+   *
+   * Without `.select()` PostgREST answers 204 whether it matched a row or
+   * row-level security filtered that row away, so a bare
+   * `await supabase.from(...).update(...)` cannot tell a write from a refusal.
+   * Every write on this screen did exactly that and then reported success either
+   * way. A reviewer whose account was not permitted to verify clients was told
+   * the client was verified, and the list beside them updated to match, while
+   * the database still held the old status.
+   *
+   * Asking for the id back turns that into an answer: an empty array means no
+   * row was touched.
+   */
+  const applyUpdate = async (table, patch, id) => {
+    const { data, error } = await supabase.from(table).update(patch).eq('id', id).select('id');
+    if (error) return { ok: false, message: error.message };
+    if (!data || data.length === 0) {
+      return {
+        ok: false,
+        message: 'The database accepted the request but changed no row. Your account is most '
+               + 'likely not permitted to make this change. Nothing was saved.',
+      };
+    }
+    return { ok: true };
+  };
+
+  const docLabel = (doc) => DOC_LABELS[doc.document_type] || 'that document';
+
   const approveDoc = async (doc) => {
     setProcessing(true);
-    await supabase.from('kyc_documents').update({ status: 'approved', reviewer_notes: '' }).eq('id', doc.id);
+    const res = await applyUpdate('kyc_documents', { status: 'approved', reviewer_notes: '' }, doc.id);
+    if (!res.ok) showToast(`Could not approve ${docLabel(doc)}. ${res.message}`, 'error');
     await fetchDocs();
     setProcessing(false);
+    return res.ok;
   };
 
   const rejectDoc = async (doc, reason) => {
     setProcessing(true);
-    await supabase.from('kyc_documents').update({ status: 'rejected', reviewer_notes: reason }).eq('id', doc.id);
+    const res = await applyUpdate('kyc_documents', { status: 'rejected', reviewer_notes: reason }, doc.id);
+    if (!res.ok) showToast(`Could not reject ${docLabel(doc)}. ${res.message}`, 'error');
     await fetchDocs();
     setProcessing(false);
+    return res.ok;
   };
 
-  // Check if all required docs are approved → auto-approve client
+  /**
+   * Mark the client verified, but only once every required document is present
+   * AND approved. `freshDocs` is read back from the database rather than taken
+   * from component state, so the decision rests on what was actually saved.
+   */
   const checkAndAutoApprove = useCallback(async (freshDocs) => {
     const allApproved = REQUIRED_DOCS.every(type => {
       const doc = freshDocs.find(d => d.document_type === type);
       return doc && doc.status === 'approved';
     });
-    if (allApproved) {
-      await supabase.from('clients')
-        .update({ kyc_status: 'verified', kyc_rejection_reason: null })
-        .eq('id', client._id);
-      showToast('All required documents approved — client KYC verified automatically! ✓');
-      onStatusChange('verified');
+    if (!allApproved) return false;
+
+    const res = await applyUpdate('clients', { kyc_status: 'verified', kyc_rejection_reason: null }, client._id);
+    if (!res.ok) {
+      showToast(`All documents are approved, but the client was NOT marked verified. ${res.message}`, 'error');
+      return false;
     }
-    return allApproved;
-  }, [client._id, onStatusChange]);
+    await auditLogsService?.log('update', 'clients', `KYC verified for ${client.fullName}`);
+    showToast('All required documents approved — client KYC verified automatically! ✓');
+    onStatusChange('verified');
+    return true;
+  }, [client._id, client.fullName, onStatusChange]);
 
   const handleApproveDoc = async (doc) => {
-    await approveDoc(doc);
-    const { data: freshDocs } = await supabase.from('kyc_documents').select('*').eq('client_id', client._id);
-    await checkAndAutoApprove(freshDocs || []);
+    const approved = await approveDoc(doc);
+    const { data: freshDocs, error } = await supabase.from('kyc_documents').select('*').eq('client_id', client._id);
+    if (error) {
+      showToast(`Could not re-read the documents after saving. ${error.message}`, 'error');
+      return;
+    }
     setDocs(freshDocs || []);
+    if (approved) await checkAndAutoApprove(freshDocs || []);
   };
 
   const handleApproveAll = async () => {
-    setProcessing(true);
-    const uploadedDocs = REQUIRED_DOCS.map(getDoc).filter(Boolean);
-    for (const doc of uploadedDocs) {
-      await supabase.from('kyc_documents').update({ status: 'approved', reviewer_notes: '' }).eq('id', doc.id);
+    // Approve All used to skip documents that were never uploaded and then mark
+    // the client verified anyway, so a client missing two of the five could be
+    // verified in one click. Refuse outright instead.
+    const missing = REQUIRED_DOCS.filter(t => !getDoc(t));
+    if (missing.length) {
+      showToast(
+        `Cannot verify: ${missing.map(t => DOC_LABELS[t] || t).join(', ')} `
+        + `${missing.length === 1 ? 'has' : 'have'} not been uploaded.`, 'error');
+      return;
     }
-    await supabase.from('clients')
-      .update({ kyc_status: 'verified', kyc_rejection_reason: null })
-      .eq('id', client._id);
-    showToast('Client KYC fully verified! ✓');
-    onStatusChange('verified');
+
+    setProcessing(true);
+    for (const doc of REQUIRED_DOCS.map(getDoc)) {
+      const res = await applyUpdate('kyc_documents', { status: 'approved', reviewer_notes: '' }, doc.id);
+      if (!res.ok) {
+        showToast(`Stopped at ${docLabel(doc)}. ${res.message} The client was not marked verified.`, 'error');
+        await fetchDocs();
+        setProcessing(false);
+        return;
+      }
+    }
+
+    const res = await applyUpdate('clients', { kyc_status: 'verified', kyc_rejection_reason: null }, client._id);
+    if (!res.ok) {
+      showToast(`Every document was approved, but the client was NOT marked verified. ${res.message}`, 'error');
+    } else {
+      await auditLogsService?.log('update', 'clients', `KYC verified for ${client.fullName}`);
+      showToast('Client KYC fully verified! ✓');
+      onStatusChange('verified');
+    }
     await fetchDocs();
     setProcessing(false);
   };
@@ -157,9 +227,13 @@ const KycReviewPanel = ({ client, onClose, onStatusChange }) => {
   const handleRejectClient = async () => {
     if (!rejectReason.trim()) { showToast('Please enter a rejection reason.', 'error'); return; }
     setProcessing(true);
-    await supabase.from('clients')
-      .update({ kyc_status: 'rejected', kyc_rejection_reason: rejectReason })
-      .eq('id', client._id);
+    const res = await applyUpdate(
+      'clients', { kyc_status: 'rejected', kyc_rejection_reason: rejectReason }, client._id);
+    if (!res.ok) {
+      showToast(`The client was not rejected. ${res.message}`, 'error');
+      setProcessing(false);
+      return;
+    }
     await auditLogsService?.log('update', 'clients', `KYC rejected for ${client.fullName}: ${rejectReason}`);
     showToast('Client KYC rejected.');
     onStatusChange('rejected');
@@ -250,6 +324,15 @@ const KycReviewPanel = ({ client, onClose, onStatusChange }) => {
           {/* Document list */}
           <div className="space-y-3">
             <h3 className="font-semibold text-sm text-foreground">Documents</h3>
+            {loadError && (
+              <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                <Icon name="AlertTriangle" size={15} color="currentColor" className="flex-shrink-0 mt-0.5" />
+                <span>
+                  This list could not be loaded, so it may be incomplete or empty when the client
+                  has in fact uploaded documents. Do not approve or reject from it. {loadError}
+                </span>
+              </div>
+            )}
             {loading ? (
               [1,2,3,4,5].map(i => <div key={i} className="h-20 bg-muted rounded-xl animate-pulse" />)
             ) : (
