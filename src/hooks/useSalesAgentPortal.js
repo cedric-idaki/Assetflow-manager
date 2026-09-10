@@ -3,10 +3,17 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAuthScopedLoader } from './useAuthScopedLoader';
 import { auditLogsService } from '../services/supabaseService';
+
+// Module-level counter: these eight channel names were unique per AGENT but
+// fixed across remounts, so navigating off the portal and back re-ran this
+// effect while removeChannel() was still settling and .on() threw.
+let _agentPortalChannelSeq = 0;
 import { sendAssistRequest, sendAssistUpdate } from '../services/emailService';
 import {
   helpTypeLabel, declineReasonLabel, isHelpType, isDeclineReason,
 } from '../utils/assistReasons';
+import { toFollowUpChannel, channelMeta } from '../config/crmVocabulary';
+import { summariseOpportunities } from '../utils/pipelineValue';
 
 // What a gold agent earns for taking an admin through onboarding on a bronze
 // agent's behalf. Paid on completion, not on request.
@@ -423,9 +430,10 @@ export const useSalesAgentPortal = () => {
   useEffect(() => {
     if (!agentProfile?.id) return;
     const agentId = agentProfile.id;
+    const t = ++_agentPortalChannelSeq;
 
     const agentProfileChannel = supabase
-      .channel(`agent_profile_${agentId}`)
+      .channel(`agent_profile_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agents', filter: `id=eq.${agentId}` }, async (payload) => {
         if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
           const nextProfile = payload.new || payload?.new?.[0] || null;
@@ -440,22 +448,22 @@ export const useSalesAgentPortal = () => {
       .subscribe();
 
     const leadsChannel = supabase
-      .channel(`leads_${agentId}`)
+      .channel(`leads_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads', filter: `agent_id=eq.${agentId}` }, () => fetchLeads(agentId))
       .subscribe((status) => { if (status === 'SUBSCRIBED') setConnected(true); });
 
     const walletChannel = supabase
-      .channel(`wallet_${agentId}`)
+      .channel(`wallet_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_wallets', filter: `agent_id=eq.${agentId}` }, () => fetchWallet(agentId))
       .subscribe();
 
     const expensesChannel = supabase
-      .channel(`expenses_${agentId}`)
+      .channel(`expenses_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_expenses', filter: `agent_id=eq.${agentId}` }, () => fetchExpenses(agentId))
       .subscribe();
 
     const followUpsChannel = supabase
-      .channel(`followups_${agentId}`)
+      .channel(`followups_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'follow_ups', filter: `agent_id=eq.${agentId}` }, () => {
         fetchFollowUps(agentId);
         fetchCompletedFollowUps(agentId);
@@ -463,7 +471,7 @@ export const useSalesAgentPortal = () => {
       .subscribe();
 
     const auditChannel = supabase
-      .channel(`audit_${user?.id}`)
+      .channel(`audit_${user?.id}_${t}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs', filter: `user_id=eq.${user?.id}` }, () => fetchActivityFeed())
       .subscribe();
 
@@ -471,12 +479,12 @@ export const useSalesAgentPortal = () => {
     // own channel. The incoming one is the point of the feature: a gold agent
     // should see "someone needs help" while it is still useful, not at payday.
     const assistsInChannel = supabase
-      .channel(`assists_in_${agentId}`)
+      .channel(`assists_in_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists', filter: `gold_agent_id=eq.${agentId}` }, () => fetchAssists(agentId))
       .subscribe();
 
     const assistsOutChannel = supabase
-      .channel(`assists_out_${agentId}`)
+      .channel(`assists_out_${agentId}_${t}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_assists', filter: `bronze_agent_id=eq.${agentId}` }, () => fetchAssists(agentId))
       .subscribe();
 
@@ -504,14 +512,43 @@ export const useSalesAgentPortal = () => {
         })
         .reduce((sum, t) => sum + parseFloat(t.total_earned || 0), 0);
     })(),
+    /**
+     * What the agent may actually draw.
+     *
+     * A REJECTED WITHDRAWAL DOES NOT REDUCE THE BALANCE. This used to subtract
+     * every withdrawal row regardless of outcome, so an agent whose request was
+     * turned down was charged for it anyway and could never ask again for the
+     * money they still had. The gap was invisible until `status` existed at all
+     * (migration 20260904120000); it matters now because
+     * finhub_validate_payment_request checks a request against this same
+     * arithmetic server-side, and a screen that disagreed with the validator
+     * would show an agent a balance they are then refused.
+     *
+     * Rows with no status are counted: they predate the column, and every one
+     * of them was a real payout.
+     */
     walletBalance: (() => {
       const credits = walletTransactions.filter(t => t.tx_type === 'credit').reduce((s, t) => s + parseFloat(t.total_earned || 0), 0);
-      const withdrawals = walletTransactions.filter(t => t.tx_type === 'withdrawal').reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0);
+      const withdrawals = walletTransactions
+        .filter(t => t.tx_type === 'withdrawal' && (t.status || 'pending') !== 'rejected')
+        .reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0);
       return credits - withdrawals;
     })(),
     totalEarned: walletTransactions.filter(t => t.tx_type === 'credit').reduce((s, t) => s + parseFloat(t.total_earned || 0), 0),
-    totalWithdrawn: walletTransactions.filter(t => t.tx_type === 'withdrawal').reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0),
+    totalWithdrawn: walletTransactions
+      .filter(t => t.tx_type === 'withdrawal' && (t.status || 'pending') !== 'rejected')
+      .reduce((s, t) => s + parseFloat(t.total_withdrawn || 0), 0),
     totalExpenses: expenses.reduce((s, e) => s + parseFloat(e.amount || 0), 0),
+
+    /**
+     * The pipeline measured in money rather than headcount.
+     *
+     * `leadsInPipeline` above counts deals, which is the number that made an
+     * agent working one KES 12M deal look identical to one working forty KES
+     * 200k deals. Derived here rather than in the panel so the KPI card, the
+     * opportunities panel and anything added later all read the same figure.
+     */
+    pipeline: summariseOpportunities(leads),
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -526,6 +563,15 @@ export const useSalesAgentPortal = () => {
         email:                  formData.email,
         asset_interest:         formData.assetInterest,
         budget_range:           formData.budgetRange            || null,
+        // The deal, as opposed to the person. budget_range stays what it always
+        // was — the buyer's own words about what they can spend — while
+        // deal_value is the agent's figure for what this is worth if it lands.
+        // Both nullable: a lead taken over the phone in thirty seconds should
+        // not require a price before it can be saved.
+        deal_value:             formData.dealValue === '' || formData.dealValue === undefined || formData.dealValue === null
+                                  ? null
+                                  : Number(formData.dealValue),
+        expected_close_date:    formData.expectedCloseDate      || null,
         priority:               formData.priority || 'medium',
         stage:                  'new_lead',
         source:                 formData.source,
@@ -552,48 +598,186 @@ export const useSalesAgentPortal = () => {
     return data;
   }, [agentProfile?.id, user?.id]);
 
-  const updateLeadStage = useCallback(async (leadId, newStage) => {
+  /**
+   * Move a lead along the pipeline.
+   *
+   * `lost` carries why the deal died, and is only meaningful when the lead is
+   * being closed WITHOUT converting. The database clears lost_reason/lost_notes
+   * automatically if the lead is later revived or converted
+   * (trg_leads_stamp_lost), so nothing here has to remember to undo it — a lead
+   * that comes back to life must not stay in the loss report.
+   */
+  const updateLeadStage = useCallback(async (leadId, newStage, lost = null) => {
+    const patch = { stage: newStage, updated_at: new Date().toISOString() };
+
+    if (newStage === 'closed' && lost?.reason) {
+      patch.lost_reason = lost.reason;
+      patch.lost_notes  = lost.notes?.trim() || null;
+    }
+
     const { error: err } = await supabase
       .from('leads')
-      .update({ stage: newStage, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq('id', leadId);
     if (err) throw err;
-    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, stage: newStage } : l));
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...patch } : l));
     await auditLogsService.log(
       'update',
       'leads',
-      `Lead stage updated to "${newStage.replace(/_/g, ' ')}" by agent ${agentProfile?.agent_code || ''}`,
+      `Lead stage updated to "${newStage.replace(/_/g, ' ')}"`
+        + (patch.lost_reason ? ` — lost: ${patch.lost_reason}` : '')
+        + ` by agent ${agentProfile?.agent_code || ''}`,
       leadId,
       null,
-      { stage: newStage, agent_code: agentProfile?.agent_code }
+      { stage: newStage, lost_reason: patch.lost_reason || null, agent_code: agentProfile?.agent_code }
     );
   }, [user?.id, agentProfile]);
 
+  /**
+   * Record or correct why a deal was lost, after the fact.
+   *
+   * The close-time prompt is skippable on purpose, so without this there is no
+   * way back: a skipped reason stayed blank forever and a mistaken one stayed
+   * wrong. The agent owns their own leads under RLS, so no new policy is needed.
+   *
+   * Only meaningful on a lead that IS lost — trg_leads_stamp_lost wipes the
+   * whole lost_* set the moment a lead is revived or converted, so a reason
+   * written against a live lead would simply vanish. The panel only offers this
+   * on closed-not-won leads.
+   */
+  const updateLeadLostReason = useCallback(async (leadId, { reason, notes } = {}) => {
+    const patch = {
+      lost_reason: reason || null,
+      lost_notes:  notes?.trim() || null,
+      updated_at:  new Date().toISOString(),
+    };
+    const { error: err } = await supabase.from('leads').update(patch).eq('id', leadId);
+    if (err) throw err;
+    setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, ...patch } : l)));
+    await auditLogsService.log(
+      'update',
+      'leads',
+      `Lost reason ${reason ? `set to "${reason}"` : 'cleared'} by agent ${agentProfile?.agent_code || ''}`,
+      leadId,
+      null,
+      { lost_reason: patch.lost_reason, agent_code: agentProfile?.agent_code }
+    );
+  }, [user?.id, agentProfile]);
+
+  /**
+   * Price a deal: what it is worth, when it lands, and the odds it does.
+   *
+   * Separate from updateLeadStage because it is a different action with a
+   * different rhythm — a stage moves one deal at a time by dragging a card,
+   * while pricing is a batch an agent does down a list of forty. Folding the
+   * two together would mean every value edit also wrote a stage and every drag
+   * had to carry a value it does not know.
+   *
+   * Every field is nullable and null is MEANINGFUL: clearing a deal value says
+   * "I do not know what this is worth", which is a different and more honest
+   * state than zero. So `undefined` (field not supplied) and `null` (field
+   * deliberately cleared) are kept apart — only what the caller actually passed
+   * is written, and a caller that sends nothing gets no write at all rather
+   * than a row of blanks.
+   */
+  const updateLeadDeal = useCallback(async (leadId, { dealValue, expectedCloseDate, winProbability } = {}) => {
+    const patch = { updated_at: new Date().toISOString() };
+
+    if (dealValue !== undefined) {
+      const n = dealValue === null || dealValue === '' ? null : Number(dealValue);
+      if (n !== null && (!Number.isFinite(n) || n < 0)) {
+        throw new Error('Deal value must be zero or more.');
+      }
+      patch.deal_value = n;
+    }
+
+    if (expectedCloseDate !== undefined) {
+      patch.expected_close_date = expectedCloseDate || null;
+    }
+
+    if (winProbability !== undefined) {
+      const p = winProbability === null || winProbability === '' ? null : Number(winProbability);
+      if (p !== null && (!Number.isFinite(p) || p < 0 || p > 100)) {
+        throw new Error('Chance of winning must be between 0 and 100.');
+      }
+      patch.win_probability = p === null ? null : Math.round(p);
+    }
+
+    // Nothing but the timestamp — the caller opened the editor and saved
+    // without touching anything. Writing would only churn updated_at.
+    if (Object.keys(patch).length === 1) return;
+
+    const { error: err } = await supabase.from('leads').update(patch).eq('id', leadId);
+    if (err) throw err;
+    setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, ...patch } : l)));
+
+    // Money on a lead is commission-adjacent, so the change is logged like any
+    // other figure that feeds a payout conversation.
+    // Only describe the fields that were actually written — an entry reading
+    // "value set to KES NaN" on an edit that only moved a date is worse than
+    // no entry, because somebody will one day read it as evidence.
+    const changed = [];
+    if ('deal_value' in patch) {
+      changed.push(patch.deal_value === null
+        ? 'deal value cleared'
+        : `deal value KES ${Number(patch.deal_value).toLocaleString()}`);
+    }
+    if ('expected_close_date' in patch) {
+      changed.push(patch.expected_close_date
+        ? `expected close ${patch.expected_close_date}`
+        : 'expected close cleared');
+    }
+    if ('win_probability' in patch) {
+      changed.push(patch.win_probability === null
+        ? 'win chance back to the stage default'
+        : `win chance ${patch.win_probability}%`);
+    }
+
+    await auditLogsService.log(
+      'update',
+      'leads',
+      `Lead deal updated — ${changed.join(', ')} — by agent ${agentProfile?.agent_code || ''}`,
+      leadId,
+      null,
+      {
+        deal_value:          patch.deal_value ?? null,
+        expected_close_date: patch.expected_close_date ?? null,
+        win_probability:     patch.win_probability ?? null,
+        agent_code:          agentProfile?.agent_code,
+      },
+    );
+  }, [user?.id, agentProfile]);
+
+  /**
+   * Ask FinHub for the money. NOT a wallet write.
+   *
+   * This used to INSERT straight into `agent_wallets`, which is what made
+   * releasing commission single-signature: the row existed the moment the agent
+   * clicked, and approval was a super admin flipping a column on it. Since
+   * migration 20260908120000 that insert is refused by
+   * agent_wallet_withdrawal_gate() unless it references a payment request
+   * already walked to 'processing' — so the wallet entry is now an OUTPUT of
+   * the approval pipeline, written by finhub_execute_payment_request, and this
+   * function raises the request instead.
+   *
+   * The RPC writes its own audit trail (payment_request_events), so there is no
+   * auditLogsService.log call here: a second, free-text copy of the same fact
+   * is one that can disagree with the immutable one.
+   */
   const requestWithdrawal = useCallback(async (amount, description) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready.');
-    const { data, error: err } = await supabase
-      .from('agent_wallets')
-      .insert({
-        agent_id: agentProfile.id,
-        total_earned: 0,
-        total_withdrawn: parseFloat(amount),
-        available_balance: -parseFloat(amount),
-        tx_type: 'withdrawal',
-        description: description || 'Withdrawal request',
-      })
-      .select()
-      .maybeSingle();
-    if (err) throw err;
-    await auditLogsService.log(
-      'create',
-      'agent_wallets',
-      `Commission withdrawal request: KES ${amount} by agent ${agentProfile?.agent_code || ''} — ${description || ''}`,
-      data.id,
-      null,
-      { amount, agent_code: agentProfile?.agent_code, description }
-    );
+
+    const { data, error: err } = await supabase.rpc('finhub_submit_payment_request', {
+      p_amount:       parseFloat(amount),
+      p_request_type: 'agent_commission',
+      p_narrative:    description || 'Commission withdrawal request',
+      p_payee_name:   agentProfile?.full_name || null,
+      p_payee_phone:  agentProfile?.phone || null,
+      p_submit_now:   true,
+    });
+    if (err) throw new Error(err.message || 'Could not submit the withdrawal request.');
     return data;
-  }, [agentProfile?.id, user?.id]);
+  }, [agentProfile?.id, agentProfile?.full_name, agentProfile?.phone]);
 
   const logExpense = useCallback(async (expenseData) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready.');
@@ -626,10 +810,17 @@ export const useSalesAgentPortal = () => {
   // badge and the reminder email sent by the agent-followup-reminders worker;
   // the DB trigger defaults it to an hour before the appointment when omitted.
   const scheduleFollowUp = useCallback(async ({
-    leadId, leadName, appointmentType, scheduledAt, remindAt, location, notes,
+    leadId, leadName, appointmentType, channel, scheduledAt, remindAt, location, notes,
+    sourceInteractionId,
   }) => {
     if (!agentProfile?.id) throw new Error('Agent profile not ready. Please refresh the page.');
     if (!scheduledAt) throw new Error('Pick a date and time for the appointment.');
+
+    // follow_ups.appointment_type is CHECK-constrained to the shared channel
+    // set (20260829140000). The database normalises too, but doing it here
+    // means the row we insert is the row we get back — no silent difference
+    // between what the optimistic UI shows and what was stored.
+    const followUpChannel = toFollowUpChannel(channel ?? appointmentType);
 
     const { data, error: err } = await supabase
       .from('follow_ups')
@@ -637,12 +828,15 @@ export const useSalesAgentPortal = () => {
         agent_id:         agentProfile.id,
         lead_id:          leadId   || null,
         lead_name:        leadName || null,
-        appointment_type: appointmentType || 'follow_up',
+        appointment_type: followUpChannel,
         scheduled_at:     new Date(scheduledAt).toISOString(),
         remind_at:        remindAt ? new Date(remindAt).toISOString() : null,
         location:         location || null,
         notes:            notes    || null,
         is_completed:     false,
+        // Set when the follow-up was booked from a logged contact, so the
+        // appointment can be traced back to the conversation that caused it.
+        source_interaction_id: sourceInteractionId || null,
       })
       .select()
       .maybeSingle();
@@ -653,16 +847,19 @@ export const useSalesAgentPortal = () => {
     await auditLogsService.log(
       'create',
       'follow_ups',
-      `Follow-up scheduled with ${leadName || 'a lead'} on ${new Date(scheduledAt).toLocaleString('en-GB')}${location ? ` at ${location}` : ''}`,
+      `${channelMeta(followUpChannel).label} follow-up scheduled with ${leadName || 'a lead'} on ${new Date(scheduledAt).toLocaleString('en-GB')}${location ? ` at ${location}` : ''}`,
       data?.id,
       null,
       {
         lead_id: leadId, lead_name: leadName, scheduled_at: scheduledAt,
-        appointment_type: appointmentType, agent_code: agentProfile?.agent_code,
+        appointment_type: followUpChannel, agent_code: agentProfile?.agent_code,
+        source_interaction_id: sourceInteractionId || null,
       }
     );
+
+    await fetchFollowUps(agentProfile.id);
     return data;
-  }, [agentProfile?.id, agentProfile?.agent_code]);
+  }, [agentProfile?.id, agentProfile?.agent_code, fetchFollowUps]);
 
   const rescheduleFollowUp = useCallback(async (followUpId, newScheduledAt, newRemindAt) => {
     // The DB trigger clears reminder_sent_at when scheduled_at moves, so a
@@ -993,6 +1190,8 @@ export const useSalesAgentPortal = () => {
     error,
     registerLead,
     updateLeadStage,
+    updateLeadLostReason,
+    updateLeadDeal,
     markLeadConverted,
     scheduleFollowUp,
     rescheduleFollowUp,

@@ -36,6 +36,9 @@ const chipsOf = (asset) => {
         m.vehicleGearbox,
         m.vehicleEngine && `${m.vehicleEngine}cc`,
         m.vehicleFuel,
+        // Only the positive case earns a chip: "No Warranty" on every used car
+        // in the list is noise, and the details panel still states it either way.
+        m.vehicleWarrantyStatus === 'Under Warranty' && 'Under Warranty',
       ];
     case 'property':
       return [asset.propertyDetails?.type, asset.propertyDetails?.size, m.propertyBedsath];
@@ -46,7 +49,10 @@ const chipsOf = (asset) => {
     case 'construction_dealers':
       return [m.constCategory, m.constQty && `${m.constQty} ${m.constUnit || ''}`.trim(), m.constGrade];
     case 'heavy_equipment':
-      return [m.heavyBrand, m.heavyModel, m.heavyHours && `${m.heavyHours} hrs`];
+      return [
+        m.heavyBrand, m.heavyModel, m.heavyHours && `${m.heavyHours} hrs`,
+        m.heavyWarrantyStatus === 'Under Warranty' && 'Under Warranty',
+      ];
     default:
       return [asset?.specifications];
   }

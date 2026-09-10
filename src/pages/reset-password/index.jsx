@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { getPasswordError } from '../../utils/validation';
 import Icon from '../../components/AppIcon';
+import BrandLogo from '../../components/BrandLogo';
 
 const ResetPasswordPage = () => {
   const navigate = useNavigate();
@@ -127,16 +128,15 @@ const ResetPasswordPage = () => {
       <div className="absolute top-0 left-0 right-0 h-1" style={{ background: 'linear-gradient(90deg, #C9A84C, #D4AF37, #C9A84C)' }} />
 
       <div className="flex-1 flex flex-col items-center justify-center p-6">
-        {/* Logo */}
-        <div className="flex items-center gap-3 mb-10">
-          <div className="flex items-center justify-center w-11 h-11 rounded-lg" style={{ background: 'linear-gradient(135deg, #C9A84C, #D4AF37)' }}>
-            <Icon name="Building2" size={22} color="#0A1628" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-white">Ararat</h1>
-            <p className="text-xs" style={{ color: '#C9A84C' }}>Financial Management Platform</p>
-          </div>
-        </div>
+        {/* Logo. Bare mark — the panel behind it is already the navy the mark
+            is drawn for. */}
+        <BrandLogo
+          size={46}
+          wordmark
+          tagline="Financial Management Platform"
+          taglineColor="#C9A84C"
+          className="mb-10"
+        />
 
         {/* Card */}
         <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8">

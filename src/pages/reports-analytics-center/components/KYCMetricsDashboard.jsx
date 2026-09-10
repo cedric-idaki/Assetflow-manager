@@ -4,6 +4,8 @@ import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 import ExportModal from './ExportModal';
 import ScheduleReportModal from './ScheduleReportModal';
+import { buildDocumentModel, exportReport } from '../../../utils/reportExport';
+import { kycExportSections, reportTitleOf } from '../../../utils/kycReportSections';
 
 // ── Mock KYC data ──────────────────────────────────────────────────────────────
 const verificationTrendData = [
@@ -103,6 +105,9 @@ const CustomTooltip = ({ active, payload, label }) => {
 const KYCMetricsDashboard = () => {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportTarget, setExportTarget] = useState('');
+  const [exportFormat, setExportFormat] = useState('pdf');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [scheduleTarget, setScheduleTarget] = useState('');
   const [scheduledReports, setScheduledReports] = useState([]);
@@ -117,47 +122,69 @@ const KYCMetricsDashboard = () => {
   const avgVerifyDays = 2.4;
   const overallCompliance = 89;
 
-  const handleExport = (config) => {
-    const rows = [
-      ['Report', 'KYC Metrics Dashboard'],
-      ['Exported At', new Date().toLocaleString('en-GB')],
-      [''],
-      ['== KPI Summary =='],
-      ['Total Clients', totalClients],
-      ['Verified Clients', verifiedCount],
-      ['Verification Rate', `${verificationRate}%`],
-      ['Renewal Pending', renewalPending],
-      [''],
-      ['== Verification Trend =='],
-      ['Month', 'Verified', 'Pending', 'Rejected'],
-      ...verificationTrendData.map(r => [r.month, r.verified, r.pending, r.rejected]),
-      [''],
-      ['== Document Expiry Buckets =='],
-      ['Bucket', 'Count'],
-      ...expiryBucketData.map(r => [r.bucket, r.count]),
-      [''],
-      ['== Document Type Verification Rates =='],
-      ['Document Type', 'Rate (%)', 'Count'],
-      ...docTypeRatesData.map(r => [r.type, r.rate, r.count]),
-      [''],
-      ['== Compliance by Segment =='],
-      ['Segment', 'Score (%)'],
-      ...complianceBySegmentData.map(r => [r.segment, r.score]),
-    ];
+  /**
+   * Write the report that was actually asked for, in the format that was
+   * actually picked.
+   *
+   * Both used to be ignored: every button on this screen produced the whole
+   * dashboard as a CSV, so "Document Expiry Report - PDF" handed back the
+   * compliance scores as a spreadsheet. The sections come from
+   * kycReportSections, which is where "which report means which tables" lives.
+   */
+  const handleExport = async ({ format, options }) => {
+    const report = reportTitleOf(exportTarget);
+    const sections = kycExportSections(
+      {
+        kpis: {
+          totalClients, verifiedCount, verificationRate,
+          renewalPending, renewalRate, avgVerifyDays, overallCompliance,
+        },
+        trend:      verificationTrendData,
+        expiry:     expiryBucketData,
+        aging:      agingBySegmentData,
+        renewals:   renewalTimelineData,
+        docTypes:   docTypeRatesData,
+        compliance: complianceBySegmentData,
+      },
+      { report, options },
+    );
 
-    const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `KYC_Metrics_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (sections.length === 0) {
+      setExportError('Nothing was selected to include. Tick at least one of the sections above.');
+      return;
+    }
+
     setExportModalOpen(false);
+    setExportError(null);
+    setExporting(true);
+    try {
+      await exportReport(buildDocumentModel({
+        title: report,
+        sheetName: 'KYC Metrics',
+        sections,
+        // The dashboard is a snapshot, so the file says when it was taken and
+        // what it covers. Without it a printed page is undateable.
+        summary: ['KYC compliance snapshot across all client segments'],
+        notes: [
+          `Report: ${report}`,
+          `${sections.length} section${sections.length === 1 ? '' : 's'}`
+            + ` · generated ${new Date().toLocaleString('en-GB')}`,
+        ],
+      }), format);
+    } catch (err) {
+      setExportError(err?.message || 'The file could not be written.');
+    } finally {
+      setExporting(false);
+    }
   };
 
-  const openExport = (reportName) => {
+  // The buttons used to bake the format into the report NAME ("... - PDF"),
+  // which is why the name could never be used to choose the tables. The format
+  // is a separate argument now, and it preselects the modal.
+  const openExport = (reportName, format = 'pdf') => {
     setExportTarget(reportName);
+    setExportFormat(format);
+    setExportError(null);
     setExportModalOpen(true);
   };
 
@@ -191,6 +218,16 @@ const KYCMetricsDashboard = () => {
 
   return (
     <div className="space-y-6">
+      {exportError && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900 text-red-700 dark:text-red-200">
+          <Icon name="XCircle" size={14} color="currentColor" className="mt-px shrink-0" />
+          <div>
+            <p className="font-semibold">The file could not be written.</p>
+            <p>{exportError}</p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -198,10 +235,10 @@ const KYCMetricsDashboard = () => {
           <p className="text-sm text-muted-foreground mt-0.5">Compliance verification, renewal tracking, and client segment analysis</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" icon="FileText" onClick={() => openExport('KYC Full Report – PDF')}>
+          <Button variant="outline" size="sm" icon="FileText" onClick={() => openExport('KYC Full Report', 'pdf')}>
             Export PDF
           </Button>
-          <Button variant="outline" size="sm" icon="Table" onClick={() => openExport('KYC Full Report – Excel')}>
+          <Button variant="outline" size="sm" icon="Table" onClick={() => openExport('KYC Full Report', 'xlsx')}>
             Export Excel
           </Button>
           <Button variant="outline" size="sm" icon="Calendar" onClick={() => openSchedule('KYC Full Report')}>
@@ -223,7 +260,7 @@ const KYCMetricsDashboard = () => {
         <div className="bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-1">
             <SectionHeader title="Verification Rate Trend" subtitle="Monthly verified / pending / rejected breakdown" />
-            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Verification Trend')} />
+            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Verification Trend', 'xlsx')} />
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={verificationTrendData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
@@ -242,7 +279,7 @@ const KYCMetricsDashboard = () => {
         <div className="bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-1">
             <SectionHeader title="Document Expiry Timeline" subtitle="Documents expiring in 30 / 60 / 90 day buckets" />
-            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Expiry Timeline')} />
+            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Expiry Timeline', 'xlsx')} />
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={expiryBucketData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
@@ -273,7 +310,7 @@ const KYCMetricsDashboard = () => {
         <div className="bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-1">
             <SectionHeader title="Aging Analysis by Client Segment" subtitle="Business / Individual / Corporate breakdown" />
-            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Aging Analysis')} />
+            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Aging Analysis', 'xlsx')} />
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={agingBySegmentData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
@@ -302,7 +339,7 @@ const KYCMetricsDashboard = () => {
         <div className="bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-1">
             <SectionHeader title="Renewal Completion Tracking" subtitle="Weekly renewal progress this month" />
-            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Renewal Tracking')} />
+            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Renewal Tracking', 'xlsx')} />
           </div>
           <div className="mb-4 p-4 bg-muted rounded-xl">
             <div className="flex items-center justify-between mb-1.5">
@@ -336,7 +373,7 @@ const KYCMetricsDashboard = () => {
         <div className="bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
             <SectionHeader title="Document Type Verification Rates" subtitle="Acceptance rate per document category" />
-            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Document Type Rates')} />
+            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Document Type Rates', 'xlsx')} />
           </div>
           <div className="space-y-3">
             {docTypeRatesData?.map(doc => (
@@ -362,7 +399,7 @@ const KYCMetricsDashboard = () => {
         <div className="bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
             <SectionHeader title="Compliance Score by Segment" subtitle="KYC compliance health per client category" />
-            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Compliance Scores')} />
+            <Button variant="ghost" size="sm" icon="Download" onClick={() => openExport('Compliance Scores', 'xlsx')} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             {complianceBySegmentData?.map(seg => (
@@ -422,10 +459,10 @@ const KYCMetricsDashboard = () => {
                 <p className="text-xs font-semibold text-foreground truncate">{report?.title}</p>
                 <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{report?.desc}</p>
                 <div className="flex gap-2 mt-2">
-                  <button onClick={() => openExport(`${report?.title} – PDF`)} className="text-xs text-primary hover:underline flex items-center gap-1">
+                  <button onClick={() => openExport(report?.title, 'pdf')} className="text-xs text-primary hover:underline flex items-center gap-1">
                     <Icon name="FileText" size={11} color="currentColor" /> PDF
                   </button>
-                  <button onClick={() => openExport(`${report?.title} – Excel`)} className="text-xs text-primary hover:underline flex items-center gap-1">
+                  <button onClick={() => openExport(report?.title, 'xlsx')} className="text-xs text-primary hover:underline flex items-center gap-1">
                     <Icon name="Table" size={11} color="currentColor" /> Excel
                   </button>
                   <button onClick={() => openSchedule(report?.title)} className="text-xs text-primary hover:underline flex items-center gap-1">
@@ -480,6 +517,8 @@ const KYCMetricsDashboard = () => {
         isOpen={exportModalOpen}
         onClose={() => setExportModalOpen(false)}
         reportTitle={exportTarget}
+        defaultFormat={exportFormat}
+        busy={exporting}
         onExport={handleExport}
       />
 

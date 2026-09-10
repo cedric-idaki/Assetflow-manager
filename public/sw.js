@@ -19,8 +19,13 @@
  *
  * Only /assets/* is cache-first, and only because Vite content-hashes those
  * filenames — a changed file is a different URL, so a cached one can't go stale.
+ *
+ * /icons/* is cache-first too, but its filenames are STABLE: redrawing the app
+ * icon reuses icon-192.png, so an install that has one cached keeps serving the
+ * old artwork until this VERSION changes and the activate handler drops the old
+ * caches. Bump VERSION whenever anything under /icons/ is regenerated.
  */
-const VERSION = 'v1';
+const VERSION = 'v2'; // v2: the Ararat mark replaced the old letterform icon.
 const SHELL_CACHE = `ararat-shell-${VERSION}`;
 const ASSET_CACHE = `ararat-assets-${VERSION}`;
 const OFFLINE_URL = '/offline.html';

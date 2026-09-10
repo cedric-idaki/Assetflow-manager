@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useToast } from '../../../components/Toast';
+import Icon from '../../../components/AppIcon';
 import { generateSchedule } from '../../../utils/saccoAmortization';
+import { buildLoanRepaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 import {
   Card, StatCard, Badge, Table, EmptyState, PrimaryButton, GhostButton,
   Modal, Field, TextInput, NumberInput, Select, KES, fmtDate,
@@ -14,18 +16,191 @@ const METHOD_LABELS = {
   balloon:          'Balloon payment',
 };
 
+/**
+ * The society's borrowing multiple, as it applies to me
+ * (20260905180000_sacco_borrowing_multiple).
+ *
+ * Every figure here is the server's — sacco_member_borrowing_capacity() is the
+ * same function the insert trigger judges an application by, so what this
+ * panel promises and what the sacco will accept cannot drift apart. Nothing on
+ * this screen recomputes a ceiling of its own.
+ *
+ * `limit_enforced` off is the interesting case: the society has set a multiple
+ * but has not switched enforcement on, so this is guidance and an application
+ * above it still reaches the loans officer. Saying otherwise would be a lie
+ * the server would not back up.
+ */
+const num = (v) => parseFloat(v || 0) || 0;
+
+// 3.00 -> "3", 2.50 -> "2.5". A whole multiple should not read as a decimal.
+const fmtMultiple = (v) => String(num(v)).replace(/\.0+$/, '');
+
+const Figure = ({ label, value, strong }) => (
+  <div>
+    <p className="text-xs text-muted-foreground">{label}</p>
+    <p className={`${strong ? 'font-bold text-foreground' : 'font-medium text-foreground'} text-sm`}>{value}</p>
+  </div>
+);
+
+const BorrowingLimitPanel = ({ capacity, principal }) => {
+  if (!capacity) return null;
+
+  const security  = num(capacity.security);
+  const available = num(capacity.available);
+  const ceiling   = num(capacity.ceiling);
+  const committed = num(capacity.existing_exposure);
+  const enforced  = !!capacity.limit_enforced;
+  const basis     = capacity.counts_deposits ? 'shares and savings' : 'shares';
+  const asked     = num(principal);
+  const over      = asked > 0 && asked > available;
+
+  // Nothing on the register: there is no entitlement to quote, and "you may
+  // borrow KES 0" reads as a refusal rather than as "we have no record of your
+  // shares yet".
+  if (security <= 0) {
+    return (
+      <div className="p-4 rounded-xl border border-amber-200 bg-amber-50">
+        <div className="flex items-start gap-2">
+          <Icon name="AlertTriangle" size={15} color="#ca8a04" />
+          <p className="text-xs text-amber-800 leading-relaxed">
+            Your sacco lends up to <strong>{fmtMultiple(capacity.multiple)}x</strong> a member&apos;s {basis},
+            but none are recorded against your membership yet, so no limit can be worked out.
+            {enforced
+              ? ' Applications are held to this rule, so speak to your sacco before applying.'
+              : ' Your application will still be reviewed in the usual way.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const tone = over
+    ? (enforced ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50')
+    : 'border-border bg-muted/50';
+
+  return (
+    <div className={`p-4 rounded-xl border ${tone}`}>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          What you may borrow
+        </p>
+        <span className="text-xs text-muted-foreground">
+          {fmtMultiple(capacity.multiple)}x your {basis}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Figure label={capacity.counts_deposits ? 'Shares and savings' : 'Your shares'} value={KES(security)} />
+        <Figure label="Entitles you to" value={KES(ceiling)} />
+        <Figure
+          label={capacity.nets_off_loans ? 'Already borrowed' : 'Currently owed'}
+          value={KES(committed)}
+        />
+        <Figure label="Maximum eligible" value={KES(available)} strong />
+      </div>
+
+      {capacity.nets_off_loans && committed > 0 && (
+        <p className="text-xs text-muted-foreground mt-3">
+          {KES(committed)} of your {KES(ceiling)} entitlement is committed to loans you already hold.
+        </p>
+      )}
+
+      {over && (
+        <div className="flex items-start gap-2 mt-3 pt-3 border-t border-border/60">
+          <Icon name={enforced ? 'XCircle' : 'AlertTriangle'} size={14} color={enforced ? '#dc2626' : '#ca8a04'} />
+          <p className={`text-xs leading-relaxed ${enforced ? 'text-red-700' : 'text-amber-700'}`}>
+            {enforced
+              ? `You have asked for ${KES(asked)}, which is ${KES(asked - available)} above your limit. Reduce the amount to apply.`
+              : `You have asked for ${KES(asked)}, which is ${KES(asked - available)} above the usual limit. You can still apply — your sacco will decide.`}
+          </p>
+        </div>
+      )}
+
+      {!enforced && !over && (
+        <p className="text-xs text-muted-foreground mt-3">
+          This is your sacco&apos;s guide, not a hard limit — every application is reviewed.
+        </p>
+      )}
+    </div>
+  );
+};
+
 const emptyForm = { product_id: '', principal: '', term_months: '12', purpose: '' };
 
+// What a member can put up. Deliberately a list rather than free text: a
+// register the society can filter is worth more at recovery time than one
+// where the same kind of asset is spelled four ways.
+const COLLATERAL_TYPES = [
+  { value: 'vehicle',    label: 'Motor vehicle / motorcycle', ref: 'Logbook number' },
+  { value: 'land',       label: 'Land',                       ref: 'Title deed number' },
+  { value: 'building',   label: 'Building / property',        ref: 'Title deed number' },
+  { value: 'machinery',  label: 'Machinery',                  ref: 'Serial number' },
+  { value: 'equipment',  label: 'Equipment',                  ref: 'Serial number' },
+  { value: 'livestock',  label: 'Livestock',                  ref: 'Tag / brand' },
+  { value: 'stock',      label: 'Business stock',             ref: 'Reference' },
+  { value: 'receivable', label: 'Receivable / contract',      ref: 'Contract number' },
+  { value: 'deposit',    label: 'Fixed deposit',              ref: 'Certificate number' },
+  { value: 'other',      label: 'Other',                      ref: 'Reference' },
+];
+
+const emptyPledge = {
+  assetType: '', reference: '', description: '', value: '',
+  valuationDate: '', valuer: '', notes: '',
+};
+
 const LoansTab = ({ ctx }) => {
-  const { loans, schedules, loanProducts, applyLoan, exportCSV } = ctx;
+  const {
+    me, sacco, loans, schedules, loanProducts, borrowingCapacity,
+    applyLoan, pledgeCollateral, exportCSV,
+  } = ctx;
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  // Security offered with THIS application. Held beside the form rather than
+  // inside it because it is pledged after the loan row exists — there is
+  // nothing to attach it to until the application is accepted.
+  const [pledge, setPledge] = useState(emptyPledge);
+  const [pledgeFile, setPledgeFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(null); // loan id whose schedule is shown
+  const [receipting, setReceipting] = useState(null);
+
+  /**
+   * The borrower's own copy of an installment, with the interest/principal
+   * split that explains why a payment moved the balance as little as it did.
+   * A paid row downloads as a receipt, an unpaid one as an installment notice —
+   * the builder decides, so this can never hand out proof of a payment that
+   * has not happened.
+   *
+   * The loan row carries no member join here (every loan on this page is mine),
+   * so `me` is attached for the borrower block.
+   */
+  const downloadReceipt = async (loan, row) => {
+    setReceipting(row.id);
+    try {
+      const filename = await downloadAccountingDocument(buildLoanRepaymentReceipt({
+        installment: row,
+        loan: { ...loan, member: loan.member || me },
+        sacco,
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the receipt');
+    } finally {
+      setReceipting(null);
+    }
+  };
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
   const product = loanProducts.find((p) => p.id === form.product_id);
+
+  // The society's ceiling as the server computes it. `overLimit` only bites
+  // when the society actually enforces it — otherwise the panel advises and
+  // the application still goes through, which is what the trigger does too.
+  const maxEligible = borrowingCapacity ? parseFloat(borrowingCapacity.available || 0) || 0 : null;
+  const limitEnforced = !!borrowingCapacity?.limit_enforced;
+  const overLimit = limitEnforced && maxEligible !== null
+    && (parseFloat(form.principal) || 0) > maxEligible;
 
   // Live repayment preview (BRS FR3.1) driven by the real amortization engine.
   const preview = useMemo(() => {
@@ -49,14 +224,28 @@ const LoansTab = ({ ctx }) => {
   const submit = async () => {
     if (!product) { toast.error('Select a loan product.'); return; }
     if (!(parseFloat(form.principal) > 0)) { toast.error('Enter the loan amount.'); return; }
+    if (overLimit) {
+      toast.error(`Your sacco lends you up to ${KES(maxEligible)}. Reduce the amount to apply.`);
+      return;
+    }
     const term = parseInt(form.term_months, 10) || 0;
     if (term <= 0) { toast.error('Enter the term in months.'); return; }
     if (product.max_term_months && term > product.max_term_months) {
       toast.error(`Maximum term for ${product.name} is ${product.max_term_months} months.`); return;
     }
+    // A half-filled pledge is worse than none: a reference with no value, or a
+    // value with nothing it belongs to, is a charge nobody can enforce. Ask for
+    // both or neither, before the loan row is created.
+    const pledging = !!(pledge.assetType || pledge.reference || pledge.value);
+    if (pledging) {
+      if (!pledge.assetType)              { toast.error('Choose what kind of asset you are pledging.'); return; }
+      if (!pledge.reference.trim())       { toast.error('Enter the reference for the asset you are pledging.'); return; }
+      if (!(parseFloat(pledge.value) > 0)) { toast.error('Enter what the pledged asset is worth.'); return; }
+    }
+
     setSaving(true);
     try {
-      await applyLoan({
+      const loan = await applyLoan({
         product_id: product.id,
         principal: form.principal,
         annual_interest_rate: product.annual_interest_rate,
@@ -64,9 +253,25 @@ const LoansTab = ({ ctx }) => {
         method: product.amortization_method,
         purpose: form.purpose,
       });
-      toast.success('Loan application submitted for review.');
+
+      if (pledging && loan?.id) {
+        try {
+          await pledgeCollateral(loan.id, pledge, pledgeFile);
+          toast.success('Loan application and security submitted for review.');
+        } catch (pe) {
+          // The application IS in. Say so, and say exactly what did not
+          // attach — a member told only "failed" would resubmit and end up
+          // with two applications against their ceiling.
+          toast.error(`Application submitted, but the security was not attached: ${pe.message} You can add it from the loan once it is open.`);
+        }
+      } else {
+        toast.success('Loan application submitted for review.');
+      }
+
       setOpen(false);
       setForm(emptyForm);
+      setPledge(emptyPledge);
+      setPledgeFile(null);
     } catch (e) {
       toast.error(e.message || 'Could not submit the application.');
     } finally {
@@ -88,11 +293,17 @@ const LoansTab = ({ ctx }) => {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${maxEligible === null ? 'lg:grid-cols-4' : 'lg:grid-cols-5'}`}>
         <StatCard label="Active Loans" value={activeLoans.length} icon="Banknote" tone="primary" />
         <StatCard label="Outstanding" value={KES(outstanding)} icon="TrendingDown" tone="warning" />
         <StatCard label="Applications" value={loans.filter((l) => l.status === 'pending').length} icon="Clock" tone="muted" />
         <StatCard label="Closed" value={loans.filter((l) => l.status === 'closed').length} icon="CheckCircle2" tone="success" />
+        {maxEligible !== null && (
+          <StatCard
+            label="Maximum eligible" value={KES(maxEligible)} icon="Gauge" tone="success"
+            hint={`${fmtMultiple(borrowingCapacity.multiple)}x your ${borrowingCapacity.counts_deposits ? 'shares and savings' : 'shares'}${limitEnforced ? '' : ' (guide)'}`}
+          />
+        )}
       </div>
 
       <Card
@@ -137,7 +348,7 @@ const LoansTab = ({ ctx }) => {
                           <div className="flex justify-end mb-2">
                             <GhostButton icon="Download" onClick={() => exportCSV(rows, `loan_schedule_${l.id.slice(0, 8)}`)}>Export schedule</GhostButton>
                           </div>
-                          <Table columns={['#', 'Due', 'Opening', 'Interest', 'Principal', 'Payment', 'Closing', 'Status']}>
+                          <Table columns={['#', 'Due', 'Opening', 'Interest', 'Principal', 'Payment', 'Closing', 'Status', '']}>
                             {rows.map((r) => (
                               <tr key={r.id} className={`border-b border-border/60 ${rowTone(r, nextDueId)}`}>
                                 <td className="py-2 pr-4 text-muted-foreground">{r.period_no}</td>
@@ -149,6 +360,19 @@ const LoansTab = ({ ctx }) => {
                                 <td className="py-2 pr-4 text-foreground">{KES(r.closing_balance)}</td>
                                 <td className="py-2 pr-4">
                                   <Badge status={r.paid ? 'paid' : (r.due_date && r.due_date < today ? 'overdue' : 'pending')} />
+                                </td>
+                                <td className="py-2 pr-0 text-right">
+                                  <button
+                                    onClick={() => downloadReceipt(l, r)}
+                                    disabled={receipting === r.id}
+                                    title={r.paid
+                                      ? `Download the receipt for installment ${r.period_no}`
+                                      : `Download the notice for installment ${r.period_no}`}
+                                    className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                                  >
+                                    <Icon name={receipting === r.id ? 'Loader' : 'Download'} size={13} color="currentColor"
+                                      className={receipting === r.id ? 'animate-spin' : ''} />
+                                  </button>
                                 </td>
                               </tr>
                             ))}
@@ -170,7 +394,9 @@ const LoansTab = ({ ctx }) => {
         title="Apply for a loan"
         footer={<>
           <GhostButton onClick={() => setOpen(false)}>Cancel</GhostButton>
-          <PrimaryButton icon="Send" onClick={submit} disabled={saving}>{saving ? 'Submitting…' : 'Submit application'}</PrimaryButton>
+          <PrimaryButton icon="Send" onClick={submit} disabled={saving || overLimit}>
+            {saving ? 'Submitting…' : 'Submit application'}
+          </PrimaryButton>
         </>}
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -191,8 +417,74 @@ const LoansTab = ({ ctx }) => {
           <Field label="Purpose"><TextInput value={form.purpose} onChange={(e) => set('purpose', e.target.value)} placeholder="School fees, business stock…" /></Field>
         </div>
 
+        {/* What the society will lend this member, before they fill the rest in */}
+        <div className="mt-5">
+          <BorrowingLimitPanel capacity={borrowingCapacity} principal={form.principal} />
+        </div>
+
+        {/* SECURITY. Optional on every product — a share-backed loan needs
+            none — so it is a section the member opens, not a wall of empty
+            fields between them and Submit. */}
+        <div className="mt-5 border border-border rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-muted/40 border-b border-border">
+            <p className="text-xs font-semibold text-foreground uppercase tracking-wide">
+              Security (optional)
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Pledge an asset against this loan. The society may ask for it on larger amounts.
+            </p>
+          </div>
+          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Asset type">
+              <Select value={pledge.assetType} onChange={(e) => setPledge(p => ({ ...p, assetType: e.target.value }))}>
+                <option value="">Nothing pledged</option>
+                {COLLATERAL_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </Select>
+            </Field>
+            <Field label={`${COLLATERAL_TYPES.find(t => t.value === pledge.assetType)?.ref || 'Reference'}${pledge.assetType ? ' *' : ''}`}>
+              <TextInput value={pledge.reference}
+                onChange={(e) => setPledge(p => ({ ...p, reference: e.target.value }))}
+                placeholder="e.g. KAA 123B / IR 12345" />
+            </Field>
+            <Field label={`Estimated value (KES)${pledge.assetType ? ' *' : ''}`}>
+              <NumberInput value={pledge.value}
+                onChange={(e) => setPledge(p => ({ ...p, value: e.target.value }))}
+                placeholder="750000" />
+            </Field>
+            <Field label="Valuation date">
+              <TextInput type="date" value={pledge.valuationDate}
+                onChange={(e) => setPledge(p => ({ ...p, valuationDate: e.target.value }))} />
+            </Field>
+            <Field label="Description">
+              <TextInput value={pledge.description}
+                onChange={(e) => setPledge(p => ({ ...p, description: e.target.value }))}
+                placeholder="2018 Toyota Hilux, white" />
+            </Field>
+            <Field label="Valued by">
+              <TextInput value={pledge.valuer}
+                onChange={(e) => setPledge(p => ({ ...p, valuer: e.target.value }))}
+                placeholder="Name of the valuer" />
+            </Field>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-muted-foreground mb-1" htmlFor="collateral-doc">
+                Ownership or valuation document (PDF)
+              </label>
+              <input
+                id="collateral-doc"
+                type="file"
+                accept=".pdf,image/*"
+                onChange={(e) => setPledgeFile(e.target.files?.[0] || null)}
+                className="w-full text-xs text-muted-foreground file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border file:border-border file:bg-muted file:text-xs file:font-medium file:text-foreground"
+              />
+              {pledgeFile && (
+                <p className="text-xs text-muted-foreground mt-1">{pledgeFile.name}</p>
+              )}
+            </div>
+          </div>
+        </div>
+
         {preview && (
-          <div className="mt-5 p-4 rounded-xl border border-border bg-muted/50">
+          <div className="mt-4 p-4 rounded-xl border border-border bg-muted/50">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Repayment preview</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
               <div><p className="text-muted-foreground text-xs">First payment</p><p className="font-bold text-foreground">{KES(preview.firstPayment)}</p></div>

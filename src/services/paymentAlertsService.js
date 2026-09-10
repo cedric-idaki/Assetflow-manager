@@ -9,7 +9,7 @@ import { supabase } from '../lib/supabase';
  * @param {object} data - Event-specific payload
  */
 export const sendPaymentAlert = async (eventType, recipientEmail, recipientPhone, recipientName, data) => {
-  const { data: result, error } = await supabase?.functions?.invoke('payment-alerts', {
+  const { data: result, error } = await supabase.functions.invoke('payment-alerts', {
     body: {
       event_type: eventType,
       recipient_email: recipientEmail || null,

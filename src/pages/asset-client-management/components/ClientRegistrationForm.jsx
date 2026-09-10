@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
 import { NOK_RELATIONSHIPS, normalizeNokRelationship } from '../../../utils/nokRelationship';
+import { formatKEPhone } from '../../../utils/phoneUtils';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const ic = (err) =>

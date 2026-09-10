@@ -3,6 +3,7 @@ import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { supabase } from '../../lib/supabase';
 import ReportsHub from '../admin-dashboard/components/ReportsHub';
+import DocumentArchivePanel from '../../components/documents/DocumentArchivePanel';
 
 const ReportsAnalyticsCenter = () => {
   const [adminId,        setAdminId]        = useState(null);
@@ -13,6 +14,10 @@ const ReportsAnalyticsCenter = () => {
   const [employees,      setEmployees]      = useState([]);
   const [payrollRecords, setPayrollRecords] = useState([]);
   const [loading,        setLoading]        = useState(true);
+  // Reports and the archive answer two different questions — "what do the
+  // numbers say" and "where is the document behind this one" — so they are
+  // two views rather than one long page.
+  const [view,           setView]           = useState('reports');
 
   const resolveAdminId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -75,7 +80,26 @@ const ReportsAnalyticsCenter = () => {
           </div>
           <ClosePageButton label="Close Reports" />
         </div>
-        {loading ? (
+
+        <div className="inline-flex items-center gap-1 p-1 bg-muted rounded-xl mb-4">
+          {[
+            { id: 'reports',   label: 'Reports & Charts', icon: 'BarChart3' },
+            { id: 'documents', label: 'Document Archive', icon: 'FolderArchive' },
+          ].map(t => (
+            <button key={t.id} role="tab" aria-selected={view === t.id}
+              onClick={() => setView(t.id)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                view === t.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {/* The archive owns its own fetching and paging, so it is rendered
+            directly — swapping it for this page's skeleton on a background
+            refetch would drop a half-built filter. */}
+        {view === 'documents' && <DocumentArchivePanel clients={clients} />}
+
+        {view === 'reports' && (loading ? (
           <div className="space-y-4">
             {[1, 2, 3].map(i => (
               <div key={i} className="h-24 bg-muted rounded-xl animate-pulse" />
@@ -90,7 +114,7 @@ const ReportsAnalyticsCenter = () => {
             employees={employees}
             payrollRecords={payrollRecords}
           />
-        )}
+        ))}
       </div>
     </MainLayout>
   );

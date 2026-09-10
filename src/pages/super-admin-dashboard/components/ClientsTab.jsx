@@ -2,6 +2,35 @@ import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
+import { channelMeta, sourceMeta } from '../../../config/clientAcquisition';
+
+const TONE = {
+  blue:    'bg-blue-100 text-blue-700',
+  violet:  'bg-violet-100 text-violet-700',
+  emerald: 'bg-emerald-100 text-emerald-700',
+  slate:   'bg-slate-100 text-slate-600',
+};
+
+/** How this client came to their company: directly, or through a sales agent. */
+const AcquisitionCell = ({ client }) => {
+  const channel = channelMeta(client.acquisition_channel);
+  const source  = sourceMeta(client.registration_source);
+
+  return (
+    <div className="flex flex-col gap-1 items-start">
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${TONE[channel.tone] || TONE.slate}`}>
+        <Icon name={channel.icon} size={10} color="currentColor" />
+        {channel.label}
+      </span>
+      {client.registration_source === 'self_service' && (
+        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+          <Icon name={source.icon} size={9} color="currentColor" />
+          {source.label}
+        </span>
+      )}
+    </div>
+  );
+};
 
 const InviteClientModal = ({ onClose, onInvite, agents }) => {
   const [form, setForm] = useState({ fullName: '', email: '', phone: '', agentId: '' });
@@ -162,6 +191,8 @@ const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
               name: c.full_name, email: c.email, phone: c.phone,
               account: c.account_number, status: c.client_status,
               kyc: c.kyc_status, balance: c.outstanding_balance,
+              acquired_via: channelMeta(c.acquisition_channel).label,
+              registered_by: sourceMeta(c.registration_source).label,
             })), 'clients')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
           >
@@ -227,7 +258,7 @@ const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-muted/50">
-                  {['Client', 'Account', 'Contact', 'KYC Status', 'Balance', 'Status'].map(h => (
+                  {['Client', 'Account', 'Contact', 'Acquired', 'KYC Status', 'Balance', 'Status'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
                       {h}
                     </th>
@@ -253,6 +284,9 @@ const ClientsTab = ({ clients, agents, onInvite, onExport }) => {
                     <td className="px-4 py-3">
                       <p className="text-xs text-foreground">{client.email || '—'}</p>
                       <p className="text-xs text-muted-foreground">{client.phone || '—'}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <AcquisitionCell client={client} />
                     </td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${

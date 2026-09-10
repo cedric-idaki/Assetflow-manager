@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Icon from '../../../components/AppIcon';
 import LeadPipelineCard from './LeadPipelineCard';
+import { leadValue, formatCompactMoney } from '../../../utils/pipelineValue';
 
 const STAGE_CONFIG = {
   new_lead: { label: 'New Lead', color: 'bg-blue-500/10 border-blue-200 text-blue-700', headerBg: 'bg-blue-500/10' },
@@ -13,6 +14,14 @@ const STAGE_CONFIG = {
 const PipelineStage = ({ stageKey, leads, onDrop, onLeadClick }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const config = STAGE_CONFIG?.[stageKey] || { label: stageKey, color: 'bg-muted', headerBg: 'bg-muted' };
+
+  // What this column is worth. A count alone is the blind spot the whole
+  // opportunity layer exists to close: five deals in "proposal sent" could be
+  // KES 500k or KES 50M, and the board looked identical either way.
+  const columnValue = useMemo(
+    () => (leads || []).reduce((sum, l) => sum + leadValue(l).value, 0),
+    [leads],
+  );
 
   const handleDragOver = (e) => {
     e?.preventDefault();
@@ -34,10 +43,13 @@ const PipelineStage = ({ stageKey, leads, onDrop, onLeadClick }) => {
       <div className={`rounded-xl px-3 py-2.5 mb-3 border ${config?.color}`}>
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold">{config?.label}</span>
-          <span className="flex items-center justify-center w-5 h-5 rounded-full bg-card text-xs font-bold text-foreground shadow-sm">
+          <span className="flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-card text-xs font-bold text-foreground shadow-sm">
             {leads?.length || 0}
           </span>
         </div>
+        {columnValue > 0 && (
+          <p className="text-xs font-semibold mt-1 opacity-80">{formatCompactMoney(columnValue)}</p>
+        )}
       </div>
       {/* Drop zone */}
       <div

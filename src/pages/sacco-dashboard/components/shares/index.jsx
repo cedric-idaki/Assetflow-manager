@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Icon from '../../../../components/AppIcon';
-import { marketOverview } from './_util';
+import { marketOverview, withholdingOverview } from './_util';
 
 import DashboardPanel from './DashboardPanel';
 import TreasuryPanel from './TreasuryPanel';
 import HoldingsPanel from './HoldingsPanel';
 import MarketplacePanel from './MarketplacePanel';
+import WithholdingPanel from './WithholdingPanel';
 import DividendsPanel from './DividendsPanel';
 import CertificatesPanel from './CertificatesPanel';
 import AnalyticsPanel from './AnalyticsPanel';
@@ -18,6 +19,7 @@ const SUB_TABS = [
   { id: 'treasury',     label: 'Treasury',     icon: 'Landmark' },
   { id: 'holdings',     label: 'Holdings',     icon: 'PieChart' },
   { id: 'marketplace',  label: 'Marketplace',  icon: 'Store' },
+  { id: 'withholding',  label: 'Withholding',  icon: 'Lock' },
   { id: 'dividends',    label: 'Dividends',    icon: 'Coins' },
   { id: 'certificates', label: 'Certificates', icon: 'Award' },
   { id: 'analytics',    label: 'Analytics',    icon: 'BarChart3' },
@@ -65,9 +67,17 @@ const SharesTab = ({ ctx }) => {
   // the escrow behind it is released.
   useEffect(() => { expireOrders?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // How many members currently have shares held back. A standing restriction
+  // on the register, so it stays on the tab rather than waiting to be found.
+  const wo = useMemo(
+    () => withholdingOverview(ctx.withholdings || [], ov.effective, ov.totalIssued),
+    [ctx.withholdings, ov.effective, ov.totalIssued]
+  );
+
   const badges = {
     marketplace: ov.pendingTransfers.length,
     dividends: ov.liveDividend?.status === 'declared' ? 1 : 0,
+    withholding: wo.count,
   };
 
   return (
@@ -83,6 +93,7 @@ const SharesTab = ({ ctx }) => {
       {tab === 'treasury'     && <TreasuryPanel ctx={ctx} ov={ov} />}
       {tab === 'holdings'     && <HoldingsPanel ctx={ctx} ov={ov} />}
       {tab === 'marketplace'  && <MarketplacePanel ctx={ctx} ov={ov} />}
+      {tab === 'withholding'  && <WithholdingPanel ctx={ctx} ov={ov} />}
       {tab === 'dividends'    && <DividendsPanel ctx={ctx} ov={ov} />}
       {tab === 'certificates' && <CertificatesPanel ctx={ctx} ov={ov} />}
       {tab === 'analytics'    && <AnalyticsPanel ctx={ctx} ov={ov} />}

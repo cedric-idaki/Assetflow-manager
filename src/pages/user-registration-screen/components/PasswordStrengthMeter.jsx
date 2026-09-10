@@ -27,16 +27,16 @@ const PasswordStrengthMeter = ({ password }) => {
             <div
               key={bar}
               className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
-                bar <= strength?.bars ? strength?.color : 'bg-slate-600'
+                bar <= strength?.bars ? strength?.color : 'bg-slate-200'
               }`}
             />
           ))}
         </div>
         {strength?.label && (
           <span className={`text-xs font-medium ${
-            strength?.bars === 1 ? 'text-red-400' :
-            strength?.bars === 2 ? 'text-yellow-400' :
-            strength?.bars === 3 ? 'text-blue-400' : 'text-emerald-400'
+            strength?.bars === 1 ? 'text-red-600' :
+            strength?.bars === 2 ? 'text-yellow-600' :
+            strength?.bars === 3 ? 'text-blue-600' : 'text-emerald-600'
           }`}>{strength?.label}</span>
         )}
       </div>
@@ -47,7 +47,7 @@ const PasswordStrengthMeter = ({ password }) => {
           return (
             <div key={i} className="flex items-center gap-1.5">
               <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 transition-colors ${
-                ok ? 'bg-emerald-500' : 'bg-slate-600'
+                ok ? 'bg-emerald-500' : 'bg-slate-300'
               }`}>
                 {ok && (
                   <svg className="w-2 h-2 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -55,7 +55,7 @@ const PasswordStrengthMeter = ({ password }) => {
                   </svg>
                 )}
               </div>
-              <span className={`text-xs transition-colors ${ok ? 'text-emerald-400' : 'text-slate-500'}`}>
+              <span className={`text-xs transition-colors ${ok ? 'text-emerald-600' : 'text-slate-500'}`}>
                 {check?.label}
               </span>
             </div>

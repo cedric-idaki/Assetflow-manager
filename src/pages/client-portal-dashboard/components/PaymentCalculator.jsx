@@ -130,10 +130,10 @@ const PaymentCalculator = ({ assets, payments, clientInfo }) => {
     setLoadingSchedules(true);
     try {
       const { data, error } = await supabase
-        ?.from('payment_schedules')
-        ?.select('*, asset:assets(description, asset_code), payment_reminders(*)')
-        ?.eq('client_id', clientInfo?.id)
-        ?.order('scheduled_date', { ascending: true });
+        .from('payment_schedules')
+        .select('*, asset:assets(description, asset_code), payment_reminders(*)')
+        .eq('client_id', clientInfo?.id)
+        .order('scheduled_date', { ascending: true });
       if (!error) setSavedSchedules(data || []);
     } catch (e) {
       console.error('Failed to load schedules:', e);
@@ -152,8 +152,8 @@ const PaymentCalculator = ({ assets, payments, clientInfo }) => {
     try {
       const finalAmt = discountInfo ? discountInfo?.finalAmount : parseFloat(paymentAmount);
       const { data: scheduleData, error: schedErr } = await supabase
-        ?.from('payment_schedules')
-        ?.insert({
+        .from('payment_schedules')
+        .insert({
           client_id: clientInfo?.id || null,
           asset_id: selectedAssetId,
           schedule_name: scheduleName,
@@ -166,14 +166,14 @@ const PaymentCalculator = ({ assets, payments, clientInfo }) => {
           notes: `Projected balance after payment: ${formatCurrency(projectedBalance?.afterPayment || 0)}`,
           status: 'pending',
         })
-        ?.select()
-        ?.single();
+        .select()
+        .single();
 
       if (schedErr) throw schedErr;
 
       // Save reminder if enabled
       if (scheduleData && (reminderConfig?.emailEnabled || reminderConfig?.smsEnabled)) {
-        await supabase?.from('payment_reminders')?.insert({
+        await supabase.from('payment_reminders').insert({
           schedule_id: scheduleData?.id,
           client_id: clientInfo?.id || null,
           reminder_type: reminderConfig?.emailEnabled && reminderConfig?.smsEnabled ? 'both' : reminderConfig?.emailEnabled ? 'email' : 'sms',
@@ -199,7 +199,7 @@ const PaymentCalculator = ({ assets, payments, clientInfo }) => {
 
   const handleDeleteSchedule = async (scheduleId) => {
     try {
-      await supabase?.from('payment_schedules')?.delete()?.eq('id', scheduleId);
+      await supabase.from('payment_schedules').delete().eq('id', scheduleId);
       setSavedSchedules(prev => prev?.filter(s => s?.id !== scheduleId));
     } catch (e) {
       console.error('Failed to delete schedule:', e);

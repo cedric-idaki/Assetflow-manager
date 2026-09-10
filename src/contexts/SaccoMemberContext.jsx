@@ -12,7 +12,9 @@
 import React, {
   createContext, useContext, useState, useEffect, useCallback, useRef,
 } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, invokeSupabaseFunction } from '../lib/supabase';
+import { sendGuaranteeRequest } from '../services/emailService';
+import { guaranteeSigningStates, openSignedCertificate } from '../utils/signnowClient';
 import { useAuth } from './AuthContext';
 
 const SaccoMemberContext = createContext(null);
@@ -43,6 +45,10 @@ export const SaccoMemberProvider = ({ children }) => {
   const [loans,         setLoans]         = useState([]);
   const [schedules,     setSchedules]     = useState([]);
   const [shares,        setShares]        = useState([]);
+  // What this member may borrow, straight from the server
+  // (20260905180000_sacco_borrowing_multiple). Null until that migration is
+  // applied, or for a login with no linked member row.
+  const [borrowingCapacity, setBorrowingCapacity] = useState(null);
   const [listings,      setListings]      = useState([]);
   const [transfers,     setTransfers]     = useState([]);
   const [sharePrices,   setSharePrices]   = useState([]);
@@ -51,6 +57,9 @@ export const SaccoMemberProvider = ({ children }) => {
   const [shareSettings, setShareSettings] = useState(null);
   const [shareTxns,     setShareTxns]     = useState([]);
   const [certificates,  setCertificates]  = useState([]);
+  // Shares the society is holding back from me (20260901120000_sacco_share_withholding)
+  const [myWithholdings, setMyWithholdings] = useState([]);
+  const [myWithholdingEvents, setMyWithholdingEvents] = useState([]);
   const [dividends,     setDividends]     = useState([]);
   const [dividendAllocations, setDividendAllocations] = useState([]);
   const [treasury,      setTreasury]      = useState(null);
@@ -62,15 +71,27 @@ export const SaccoMemberProvider = ({ children }) => {
   const [myVoterRows,        setMyVoterRows]        = useState([]); // RLS: own register rows only
   const [documents,     setDocuments]     = useState([]);
   const [contracts,     setContracts]     = useState([]);
+  // Guarantee agreements I am a party to — as guarantor or as borrower
+  // (20260904160000_sacco_loan_guarantees).
+  const [guarantees,    setGuarantees]    = useState([]);
+  // Where each confirmed agreement has got to on its way to being executed
+  // (20260905160000_guarantee_agreement_signing). Empty for a society that
+  // does not route guarantees through SignNow, which is the default.
+  const [guaranteeSigning, setGuaranteeSigning] = useState({});
   const [loading,       setLoading]       = useState(true);
 
   const channelsRef = useRef([]);
+  // The member row, readable from a callback that was created before it
+  // arrived. The realtime effect below subscribes once, so its callbacks close
+  // over the fetchers as they were at mount — when `me` was still null.
+  const meRef = useRef(null);
 
   // ── Fetchers ──────────────────────────────────────────────────────────────
   const fetchMe = useCallback(async () => {
     if (!user?.id) return null;
     const { data } = await supabase.from('sacco_members').select('*')
       .eq('user_id', user.id).maybeSingle();
+    meRef.current = data || null;
     setMe(data);
     return data;
   }, [user?.id]);
@@ -135,6 +156,33 @@ export const SaccoMemberProvider = ({ children }) => {
     setShares(data || []);
   }, []);
 
+  /**
+   * What this member may borrow (20260905180000_sacco_borrowing_multiple).
+   *
+   * Read from the server rather than worked out here, because the same
+   * function is what the insert trigger judges an application by. Deriving a
+   * second copy from `shares` and `contributions` in the browser would give
+   * the member a figure the server does not agree with — and the server's is
+   * the one that decides.
+   *
+   * Takes the member row so fetchAll can call it before `me` has settled,
+   * and falls back to meRef rather than the `me` state so the identity stays
+   * stable for the realtime subscriptions.
+   *
+   * Stays null for a society whose migration is not applied yet; every
+   * consumer treats null as "no ceiling to show", which is what was true
+   * before this feature existed.
+   */
+  const fetchBorrowingCapacity = useCallback(async (meRow) => {
+    const member = meRow || meRef.current;
+    if (!member?.id || !member?.sacco_id) { setBorrowingCapacity(null); return; }
+    const { data, error } = await supabase.rpc('sacco_member_borrowing_capacity', {
+      p_sacco_id: member.sacco_id, p_member_id: member.id,
+    });
+    if (error) { setBorrowingCapacity(null); return; }
+    setBorrowingCapacity((Array.isArray(data) ? data[0] : data) || null);
+  }, []);
+
   const fetchListings = useCallback(async () => {
     const { data } = await supabase.from('sacco_share_listings')
       .select('*, seller:sacco_members!seller_member_id(id, full_name, member_no)')
@@ -174,6 +222,18 @@ export const SaccoMemberProvider = ({ children }) => {
     const { data } = await supabase.from('sacco_share_certificates').select('*')
       .order('created_at', { ascending: false });
     setCertificates(data || []);
+  }, []);
+
+  // Shares the society is holding back from me, and why. RLS narrows both
+  // tables to my own member_id, so no filter is needed here — and a member is
+  // entitled to see a restriction placed on their own stake.
+  const fetchMyWithholdings = useCallback(async () => {
+    const [{ data: rows }, { data: events }] = await Promise.all([
+      supabase.from('sacco_share_withholdings').select('*').order('created_at', { ascending: false }),
+      supabase.from('sacco_share_withholding_events').select('*').order('created_at', { ascending: false }),
+    ]);
+    setMyWithholdings(rows || []);
+    setMyWithholdingEvents(events || []);
   }, []);
 
   // Declarations are sacco-wide news; allocations are strictly mine.
@@ -254,6 +314,32 @@ export const SaccoMemberProvider = ({ children }) => {
     setContracts(data || []);
   }, []);
 
+  // Guarantees on both sides of the relationship. RLS returns exactly the rows
+  // this member is a party to, so no filter is needed here — the guarantor
+  // because they are bound by the agreement, the borrower because they need to
+  // know who has answered.
+  const fetchGuarantees = useCallback(async () => {
+    const { data } = await supabase.from('sacco_loan_guarantees')
+      .select(`*,
+        borrower:sacco_members!borrower_member_id(id, full_name, member_no),
+        guarantor:sacco_members!guarantor_member_id(id, full_name, member_no),
+        loan:sacco_loans(id, principal, annual_interest_rate, term_months, status, purpose)`)
+      .order('created_at', { ascending: false });
+    setGuarantees(data || []);
+
+    // Only a confirmed guarantee can have an agreement out for signature, so
+    // this asks about those alone. The RPC answers for the parties to each
+    // agreement — a member is not staff and cannot read signing_requests.
+    const confirmed = (data || []).filter((g) => g.status === 'accepted').map((g) => g.id);
+    try {
+      setGuaranteeSigning(await guaranteeSigningStates(confirmed));
+    } catch (_) {
+      // A society whose signing migration is not applied, or that has never
+      // connected SignNow, simply has nothing to report here.
+      setGuaranteeSigning({});
+    }
+  }, []);
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const meRow = await fetchMe();
@@ -264,6 +350,7 @@ export const SaccoMemberProvider = ({ children }) => {
       fetchMotions(), fetchVotes(), fetchDocuments(), fetchContracts(meRow?.id),
       fetchElections(), fetchElectionPositions(), fetchElectionCandidates(), fetchMyVoterRows(),
       fetchShareSettings(), fetchShareTxns(), fetchMyCertificates(), fetchMyDividends(), fetchTreasury(),
+      fetchMyWithholdings(), fetchGuarantees(), fetchBorrowingCapacity(meRow),
     ]);
     setLoading(false);
   }, [
@@ -272,6 +359,7 @@ export const SaccoMemberProvider = ({ children }) => {
     fetchMotions, fetchVotes, fetchDocuments, fetchContracts,
     fetchElections, fetchElectionPositions, fetchElectionCandidates, fetchMyVoterRows,
     fetchShareSettings, fetchShareTxns, fetchMyCertificates, fetchMyDividends, fetchTreasury,
+    fetchMyWithholdings, fetchGuarantees, fetchBorrowingCapacity,
   ]);
 
   // ── Derived stats (portal home mini-cards, BRS 5.1) ───────────────────────
@@ -292,6 +380,18 @@ export const SaccoMemberProvider = ({ children }) => {
   const currentMarketValue = parseFloat(sharePrices[0]?.market_value || 0);
   const shareValue = (parseInt(myShares?.shares_held, 10) || 0) * (currentMarketValue || parseFloat(myShares?.par_value || 0));
   const openMotions = motions.filter((m) => m.status === 'open').length;
+  // Guarantee requests waiting on me — a request I have not answered, or one I
+  // have read but not yet confirmed. Both are unfinished business.
+  //
+  // A request I have answered with "not yet" is excluded: I have already told
+  // the borrower where I stand, and a badge that will not clear however many
+  // times you attend to it stops meaning anything. The request is still listed
+  // in the tab, under my own deferral note.
+  const pendingGuarantees = guarantees.filter((g) => (
+    g.guarantor_member_id === me?.id
+    && ['requested', 'under_review'].includes(g.status)
+    && !g.waited_at
+  )).length;
   // Elections needing my attention: open nominations, or an open ballot I'm
   // registered for and haven't cast yet.
   const openElections = elections.filter((e) => {
@@ -311,7 +411,7 @@ export const SaccoMemberProvider = ({ children }) => {
     nextDueDate:   contributionStats?.next_due_date || null,
     monthlyTarget: parseFloat(contributionStats?.monthly_contribution || me?.monthly_contribution || 0),
     thisMonth:     parseFloat(contributionStats?.this_month || 0),
-    loanBalance, nextDue, shareValue, openMotions, openElections,
+    loanBalance, nextDue, shareValue, openMotions, openElections, pendingGuarantees,
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -383,7 +483,9 @@ export const SaccoMemberProvider = ({ children }) => {
   }, []);
 
   const applyLoan = useCallback(async (form) => {
-    const { error } = await supabase.from('sacco_loans').insert({
+    // `.select()` because the caller needs the id: security is pledged against
+    // the loan, and the loan does not exist until this returns.
+    const { data, error } = await supabase.from('sacco_loans').insert({
       admin_id: me?.admin_id, sacco_id: me?.sacco_id, member_id: me?.id,
       product_id: form.product_id || null,
       principal: parseFloat(form.principal) || 0,
@@ -392,10 +494,69 @@ export const SaccoMemberProvider = ({ children }) => {
       method: form.method || 'reducing_balance',
       balloon_amount: parseFloat(form.balloon_amount) || 0,
       purpose: form.purpose || '', status: 'pending',
-    });
+    }).select().maybeSingle();
     if (error) throw error;
-    await fetchLoans();
-  }, [me, fetchLoans]);
+    // The new application is committed against the ceiling from this moment,
+    // so the figure on the screen has to move with it.
+    await Promise.all([fetchLoans(), fetchBorrowingCapacity()]);
+    return data;
+  }, [me, fetchLoans, fetchBorrowingCapacity]);
+
+  /**
+   * Pledge an asset as security for a loan.
+   *
+   * The document goes to the private bucket FIRST and the row is written
+   * second, for the same reason the payment pipeline does it that way: an
+   * orphan file is recoverable, a register entry pointing at a document that
+   * was never uploaded is a charge with no proof behind it.
+   *
+   * Failure here does NOT undo the application. A loan submitted without its
+   * security attached is a loan the committee can ask about; a loan silently
+   * discarded because an upload failed is one the member has to notice is
+   * missing.
+   */
+  const pledgeCollateral = useCallback(async (loanId, pledge, file) => {
+    let path = null;
+    let name = null;
+
+    if (file) {
+      const safe = file.name.replace(/[^\w.-]+/g, '_');
+      path = `${me?.admin_id}/${loanId}/${Date.now()}_${safe}`;
+      name = file.name;
+      const { error: upErr } = await supabase.storage
+        .from('sacco-loan-collateral')
+        .upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' });
+      if (upErr) throw new Error(upErr.message || 'The ownership document could not be uploaded.');
+    }
+
+    const { data, error } = await supabase.rpc('sacco_loan_pledge_collateral', {
+      p_loan_id:           loanId,
+      p_asset_reference:   pledge.reference,
+      p_estimated_value:   Number(pledge.value),
+      p_asset_type:        pledge.assetType || 'other',
+      p_asset_description: pledge.description || null,
+      p_valuation_date:    pledge.valuationDate || null,
+      p_valuer:            pledge.valuer || null,
+      p_document_path:     path,
+      p_document_name:     name,
+      p_notes:             pledge.notes || null,
+    });
+    if (error) {
+      if (path) await supabase.storage.from('sacco-loan-collateral').remove([path]).catch(() => {});
+      throw new Error(error.message || 'The security could not be recorded.');
+    }
+    return data;
+  }, [me?.admin_id]);
+
+  const listCollateral = useCallback(async (loanId) => {
+    const { data, error } = await supabase
+      .from('sacco_loan_collateral')
+      .select('id, asset_type, asset_reference, asset_description, estimated_value, valuation_date, valuer, document_path, document_name, status, created_at')
+      .eq('loan_id', loanId)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }, []);
 
   // ── Share market ──────────────────────────────────────────────────────────
   // Members no longer write the order book directly: every action goes through
@@ -411,9 +572,23 @@ export const SaccoMemberProvider = ({ children }) => {
     await Promise.all([
       fetchShares(), fetchListings(), fetchTransfers(), fetchSharePrices(),
       fetchSaccoTotals(), fetchShareTxns(), fetchMyCertificates(), fetchMyDividends(),
+      fetchMyWithholdings(),
     ]);
   }, [fetchShares, fetchListings, fetchTransfers, fetchSharePrices,
-      fetchSaccoTotals, fetchShareTxns, fetchMyCertificates, fetchMyDividends]);
+      fetchSaccoTotals, fetchShareTxns, fetchMyCertificates, fetchMyDividends,
+      fetchMyWithholdings]);
+
+  /**
+   * The platform-wide serial for one of my certificates, minting one if it has
+   * none. A certificate must not print without the serial that makes it
+   * checkable, and a member may serialise their own. Idempotent.
+   */
+  const ensureCertificateSerial = useCallback(async (certificateId) => {
+    if (!certificateId) return null;
+    const serial = await shareRpc('sacco_share_certificate_serial', { p_certificate_id: certificateId });
+    if (serial) await fetchMyCertificates();
+    return serial;
+  }, [shareRpc, fetchMyCertificates]);
 
   // Post a sell (or buy) order onto the book.
   const createListing = useCallback(async (form) => {
@@ -571,6 +746,141 @@ export const SaccoMemberProvider = ({ children }) => {
     return data || [];
   }, []);
 
+  // ── Loan guarantees (20260904160000_sacco_loan_guarantees) ────────────────
+  // A guarantee binds the guarantor's own deposits and shares to somebody
+  // else's debt, so accepting one is deliberately two acts, not one: review
+  // the terms, then confirm them. Both steps go through SECURITY DEFINER RPCs
+  // that re-hash the agreement server-side — there is no members' UPDATE
+  // policy on the table, so this flow cannot be short-circuited from here.
+
+  const guaranteeRpc = useCallback(async (fn, args = {}) => {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) throw new Error(error.message || 'The sacco rejected that action.');
+    return data;
+  }, []);
+
+  // The agreement as the server renders it, with the hash that identifies it.
+  // The portal displays THIS and echoes the hash back on both steps; it never
+  // composes terms of its own, so the two copies can never drift.
+  const getGuaranteeTerms = useCallback(async (guaranteeId) => (
+    guaranteeRpc('sacco_loan_guarantee_terms', { p_guarantee_id: guaranteeId })
+  ), [guaranteeRpc]);
+
+  /**
+   * Borrower: ask a fellow member to stand behind part of my loan.
+   *
+   * The in-app bell is written server-side by the register's own trigger, so
+   * it cannot be forgotten. The email is the second channel and belongs here,
+   * because it is the only one that reaches a member who is not in the portal
+   * today. A failed send is reported rather than swallowed — `emailed` says
+   * which channels actually landed, and the caller tells the borrower.
+   */
+  const requestGuarantee = useCallback(async ({ loan_id, guarantor_member_id, amount, notes }) => {
+    const data = await guaranteeRpc('sacco_loan_guarantee_request', {
+      p_loan_id: loan_id,
+      p_guarantor_member_id: guarantor_member_id,
+      p_amount: parseFloat(amount) || 0,
+      p_notes: notes || null,
+    });
+    await fetchGuarantees();
+
+    const row = Array.isArray(data) ? data[0] : data;
+    const loan = loans.find((l) => l.id === loan_id);
+    let emailed = false;
+    try {
+      // member_read_members already exposes fellow members of my own sacco.
+      // This reads one row of it rather than widening the roster fetch, which
+      // deliberately carries names only.
+      const { data: g } = await supabase.from('sacco_members')
+        .select('full_name, email').eq('id', guarantor_member_id).maybeSingle();
+      if (g?.email) {
+        await sendGuaranteeRequest(g.email, {
+          guarantorName: g.full_name,
+          borrowerName:  me?.full_name,
+          borrowerNo:    me?.member_no,
+          saccoName:     sacco?.name,
+          refNo:         row?.ref_no,
+          amount:        row?.amount_guaranteed ?? amount,
+          principal:     loan?.principal,
+          termMonths:    loan?.term_months,
+          purpose:       loan?.purpose,
+          note:          notes || null,
+          portalUrl:     `${window.location.origin}/sacco-member-portal?tab=guarantees`,
+        });
+        emailed = true;
+      }
+    } catch {
+      // The request is committed and the bell has already fired; a mail
+      // failure must not undo either, so it is reported, not thrown.
+      emailed = false;
+    }
+    return { guarantee: row, emailed };
+  }, [guaranteeRpc, fetchGuarantees, loans, me, sacco]);
+
+  /**
+   * The third answer: "not yet". It leaves the request open and every rule
+   * about it intact — the member can still review, confirm or decline later —
+   * and records what they said so the borrower knows what they are waiting on.
+   */
+  const waitOnGuarantee = useCallback(async (guaranteeId, note) => {
+    const data = await guaranteeRpc('sacco_loan_guarantee_wait', {
+      p_guarantee_id: guaranteeId, p_note: note || null,
+    });
+    await fetchGuarantees();
+    return data;
+  }, [guaranteeRpc, fetchGuarantees]);
+
+  // Step 1 — I have read the agreement. The hash proves it was the current one.
+  const reviewGuarantee = useCallback(async (guaranteeId, termsHash) => {
+    const data = await guaranteeRpc('sacco_loan_guarantee_review', {
+      p_guarantee_id: guaranteeId, p_terms_hash: termsHash,
+    });
+    await fetchGuarantees();
+    return data;
+  }, [guaranteeRpc, fetchGuarantees]);
+
+  // Step 2 — and only now is the guarantor bound. The server refuses this
+  // unless step 1 happened, is still fresh, and covered these exact terms.
+  const confirmGuarantee = useCallback(async (guaranteeId, termsHash, signature) => {
+    const data = await guaranteeRpc('sacco_loan_guarantee_confirm', {
+      p_guarantee_id: guaranteeId, p_terms_hash: termsHash, p_signature: signature,
+    });
+    await fetchGuarantees();
+    return data;
+  }, [guaranteeRpc, fetchGuarantees]);
+
+  const declineGuarantee = useCallback(async (guaranteeId, reason) => {
+    const data = await guaranteeRpc('sacco_loan_guarantee_decline', {
+      p_guarantee_id: guaranteeId, p_reason: reason || null,
+    });
+    await fetchGuarantees();
+    return data;
+  }, [guaranteeRpc, fetchGuarantees]);
+
+  const cancelGuarantee = useCallback(async (guaranteeId) => {
+    const data = await guaranteeRpc('sacco_loan_guarantee_cancel', { p_guarantee_id: guaranteeId });
+    await fetchGuarantees();
+    return data;
+  }, [guaranteeRpc, fetchGuarantees]);
+
+  /**
+   * Open the executed agreement — the copy both parties actually signed.
+   *
+   * signed-certificates is a private bucket and a member is not staff, so this
+   * reaches the file through the one storage policy written for the parties to
+   * a guarantee, and only once the request has been released. A draft is
+   * deliberately unreachable: an unexecuted agreement is not theirs to hold.
+   */
+  const openExecutedGuarantee = useCallback(async (guaranteeId) => {
+    const state = guaranteeSigning[guaranteeId];
+    if (!state?.signedPath || state.status !== 'released') {
+      throw new Error('There is no executed agreement for this guarantee yet.');
+    }
+    const opened = await openSignedCertificate(state.signedPath);
+    if (!opened) throw new Error('Allow pop-ups for this site to open the agreement.');
+    return true;
+  }, [guaranteeSigning]);
+
   // ── CSV export (same helper as the sacco dashboard) ───────────────────────
   const exportCSV = useCallback((data, filename) => {
     if (!data || data.length === 0) return;
@@ -609,6 +919,8 @@ export const SaccoMemberProvider = ({ children }) => {
     setShareSettings(null);
     setShareTxns([]);
     setCertificates([]);
+    setMyWithholdings([]);
+    setMyWithholdingEvents([]);
     setDividends([]);
     setDividendAllocations([]);
     setTreasury(null);
@@ -620,6 +932,8 @@ export const SaccoMemberProvider = ({ children }) => {
     setMyVoterRows([]);
     setDocuments([]);
     setContracts([]);
+    setGuarantees([]);
+    setGuaranteeSigning({});
     setLoading(true);
   }, []);
 
@@ -649,10 +963,11 @@ export const SaccoMemberProvider = ({ children }) => {
       .subscribe();
 
     const chs = [
-      mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionStats(); }),
-      mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); }),
-      mk('shares', 'sacco_shares', fetchShares),
-      mk('share_prices', 'sacco_share_prices', fetchSharePrices),
+      mk('contribs', 'sacco_contributions', () => { fetchContributions(); fetchContributionStats(); fetchBorrowingCapacity(); }),
+      // A decision on a loan changes what is left of the ceiling.
+      mk('loans', 'sacco_loans', () => { fetchLoans(); fetchSchedules(); fetchBorrowingCapacity(); }),
+      mk('shares', 'sacco_shares', () => { fetchShares(); fetchBorrowingCapacity(); }),
+      mk('share_prices', 'sacco_share_prices', () => { fetchSharePrices(); fetchBorrowingCapacity(); }),
       mk('listings', 'sacco_share_listings', fetchListings),
       // A live market: an order taken by someone else must vanish immediately.
       mk('share_transfers', 'sacco_share_transfers', () => { fetchTransfers(); fetchShareTxns(); }),
@@ -664,6 +979,9 @@ export const SaccoMemberProvider = ({ children }) => {
       mk('elections', 'sacco_elections', fetchElections),
       mk('elect_cands', 'sacco_election_candidates', fetchElectionCandidates),
       mk('elect_voters', 'sacco_election_voters', fetchMyVoterRows),
+      // A guarantor answering, or a borrower withdrawing, has to show up on the
+      // other party's screen without a refresh.
+      mk('guarantees', 'sacco_loan_guarantees', fetchGuarantees),
     ];
     channelsRef.current = chs;
     return () => {
@@ -674,17 +992,22 @@ export const SaccoMemberProvider = ({ children }) => {
 
   const value = {
     me, sacco, members, contributions, contributionStats, contributionTypes, loanProducts, loans, schedules,
-    shares: myShares, sharePrices, currentMarketValue, saccoTotals, listings, transfers, motions, votes, documents, contracts,
+    shares: myShares, borrowingCapacity, sharePrices, currentMarketValue, saccoTotals, listings, transfers, motions, votes, documents, contracts,
     elections, electionPositions, electionCandidates, myVoterRows,
     shareSettings, shareTxns, certificates, dividends, dividendAllocations, treasury,
+    myWithholdings, myWithholdingEvents,
+    guarantees, guaranteeSigning, openExecutedGuarantee,
     stats, loading,
     refetch: fetchAll,
-    updateProfile, applyLoan,
+    updateProfile, applyLoan, pledgeCollateral, listCollateral,
     submitContribution, cancelContribution, payContributionByMpesa, checkMpesaContribution,
     createListing, cancelListing, updateListing, buyListing, transferShares, refreshMarket,
+    ensureCertificateSerial,
     proposeMotion, secondMotion, castVote, getMotionResults,
     nominateCandidate, withdrawCandidacy, castBallot,
     getElectionTally, getElectionTurnout, verifyReceipt,
+    getGuaranteeTerms, requestGuarantee, reviewGuarantee, confirmGuarantee,
+    declineGuarantee, waitOnGuarantee, cancelGuarantee,
     exportCSV,
   };
 

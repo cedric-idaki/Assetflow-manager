@@ -37,9 +37,20 @@ const ClientCard = ({ client, onEdit, onView, onLink }) => {
               </h3>
               <p className="text-sm text-muted-foreground">Account: {client?.accountNumber}</p>
             </div>
-            <span className={`px-3 py-1 rounded-full text-xs font-medium capitalize whitespace-nowrap ${getKycStatusColor(client?.kycStatus)}`}>
-              {client?.kycStatus}
-            </span>
+            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+              {/* The type decides what this customer may be sold — a cash
+                  customer cannot take hire-purchase — so it belongs beside the
+                  name, not buried in a details panel. */}
+              <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
+                (client?.customerType || client?.customer_type) === 'cash'
+                  ? 'text-sky-700 bg-sky-100'
+                  : 'text-primary bg-primary/10'}`}>
+                {(client?.customerType || client?.customer_type) === 'cash' ? 'Cash customer' : 'Account customer'}
+              </span>
+              <span className={`px-3 py-1 rounded-full text-xs font-medium capitalize whitespace-nowrap ${getKycStatusColor(client?.kycStatus)}`}>
+                {client?.kycStatus}
+              </span>
+            </div>
           </div>
         </div>
       </div>

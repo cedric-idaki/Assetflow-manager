@@ -26,8 +26,18 @@ import CrmPanel from './components/CrmPanel';
 import LogInteractionModal from './components/LogInteractionModal';
 import InteractionTimeline from './components/InteractionTimeline';
 import CustomerRecord from '../../components/crm/CustomerRecord';
+import LostReasonModal from './components/LostReasonModal';
+import LostDealsPanel from './components/LostDealsPanel';
+import OpportunitiesPanel from './components/OpportunitiesPanel';
+import TeamPanel from './components/TeamPanel';
 import { useSalesAgentContext } from '../../contexts/SalesAgentContext';
 import { deriveStaleLeads } from '../../hooks/useCrmInteractions';
+import { channelMeta, PIPELINE_STAGE_VALUES } from '../../config/crmVocabulary';
+import { isManager } from '../../config/salesHierarchy';
+import { downloadCSV } from '../../utils/exportUtils';
+import {
+  leadValue, leadProbability, weightedValue, formatMoney, formatCompactMoney,
+} from '../../utils/pipelineValue';
 
 // ── Export Modal ─────────────────────────────────────────────────────────────
 const EXPORT_PRESETS = [
@@ -110,6 +120,12 @@ const ExportModal = ({ leads, expenses, walletTransactions, agentProfile, onClos
         ['Priority',       r => r.priority || ''],
         ['Asset Interest', r => r.asset_interest || ''],
         ['Budget Range',   r => (r.budget_range || '').replace(/_/g, ' ')],
+        // Blank, not 0, when nobody has priced the deal: a spreadsheet that
+        // sums this column must not count unpriced leads as free ones.
+        ['Deal Value',     r => (r.deal_value === null || r.deal_value === undefined ? '' : r.deal_value)],
+        ['Win Chance %',   r => leadProbability(r)],
+        ['Weighted Value', r => Math.round(weightedValue(r)) || ''],
+        ['Expected Close', r => r.expected_close_date || ''],
         ['Source',         r => r.source || ''],
         ['Notes',          r => (r.notes || '').replace(/,/g, ';')],
         ['Created',        r => r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB') : ''],
@@ -120,6 +136,7 @@ const ExportModal = ({ leads, expenses, walletTransactions, agentProfile, onClos
         ['Phone',          r => r.phone || ''],
         ['Asset Interest', r => r.asset_interest || ''],
         ['Budget Range',   r => (r.budget_range || '').replace(/_/g, ' ')],
+        ['Deal Value',     r => (r.deal_value === null || r.deal_value === undefined ? '' : r.deal_value)],
         ['Converted',      r => r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB') : ''],
       ],
       expenses: [
@@ -287,7 +304,10 @@ const ExportModal = ({ leads, expenses, walletTransactions, agentProfile, onClos
   );
 };
 
-const PIPELINE_STAGES = ['new_lead', 'contacted', 'qualified', 'proposal_sent', 'closed'];
+// The board's columns, from the shared vocabulary rather than a fourth copy of
+// the same five strings — the stage list now carries forecast weights, and a
+// local copy is how the board and the forecast start disagreeing.
+const PIPELINE_STAGES = PIPELINE_STAGE_VALUES;
 
 // ── Tier badge ────────────────────────────────────────────────────────────────
 // An agent's tier decides what they earn per registration, whether they can ask
@@ -349,6 +369,7 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onSc
   const [newStage, setNewStage] = useState(lead?.stage || 'new_lead');
   const [saving, setSaving]     = useState(false);
   const isConverted = Boolean(lead?.converted_at);
+  const { value: dealAmount, source: dealSource } = leadValue(lead);
 
   const stages = [
     { value: 'new_lead',      label: 'New Lead' },
@@ -392,6 +413,19 @@ const LeadDetailModal = ({ lead, onClose, onStageChange, onConvertToClient, onSc
             {[
               { label: 'Email',     value: lead?.email },
               { label: 'Phone',     value: lead?.phone },
+              // The deal, then the buyer's own words about what they can spend.
+              // Both shown, never merged: one is a figure the agent committed
+              // to and the other is a note somebody typed at registration.
+              {
+                label: 'Deal value',
+                value: dealSource === 'stated'
+                  ? formatMoney(dealAmount)
+                  : dealSource === 'estimated'
+                  ? `~${formatMoney(dealAmount)} (from budget)`
+                  : null,
+              },
+              { label: 'Chance of winning', value: `${leadProbability(lead)}%` },
+              { label: 'Expected close', value: lead?.expected_close_date ? fmt(`${lead.expected_close_date}T00:00:00`) : null },
               { label: 'Budget',    value: lead?.budget_range },
               { label: 'Interest',  value: lead?.asset_interest },
               { label: 'Source',    value: lead?.source },
@@ -654,8 +688,8 @@ const SalesAgentPortal = () => {
   const {
     agentProfile, agentMode, goldAgents, leads, walletTransactions, expenses,
     completedFollowUps, followUpBuckets, assistBuckets, assistsError, refetchAssists,
-    activityFeed, kpis, loading, connected,
-    registerLead, updateLeadStage, markLeadConverted, requestWithdrawal, logExpense, assignAssist, refetch,
+    activityFeed, kpis, loading, connected, error: portalError,
+    registerLead, updateLeadStage, updateLeadLostReason, updateLeadDeal, markLeadConverted, requestWithdrawal, logExpense, assignAssist, refetch,
     respondToAssist, completeAssist, cancelAssist,
     scheduleFollowUp, rescheduleFollowUp, completeFollowUp, cancelFollowUp,
     tickets, ticketBuckets, ticketMessages, ticketDirectory, ticketsLoading,
@@ -679,6 +713,18 @@ const SalesAgentPortal = () => {
   // points. Admin-created (client) agents stay on their own tenant's clients,
   // and sacco-side agents already register saccos as their default.
   const canRegisterSacco = agentMode === 'company';
+  // A sales manager is an ordinary agents row with agent_role = 'manager' --
+  // they keep their own book, code, target and wallet, and gain a team. The
+  // same column is what the managers_read_team_* policies key on, so this flag
+  // and the data the team view can actually read come from one fact.
+  const isTeamLead = isManager(agentProfile);
+
+  /** The team roster as a file. Same CSV path the rest of the portal uses. */
+  const exportTeamCSV = (rows, filename) => {
+    if (!rows?.length) return;
+    downloadCSV(rows, `${filename}_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
   // Only super-admin BRONZE agents can ask a gold agent to onboard an admin.
   const isBronzeCompanyAgent = agentMode === 'company' && (agentProfile?.agent_plan || 'bronze') === 'bronze';
   // Gold agents are on the receiving end — they get the request inbox.
@@ -719,8 +765,34 @@ const SalesAgentPortal = () => {
     showToast('Lead registered successfully!');
   };
 
+  // Closing a lead without converting it is the ONE moment the reason is
+  // actually known, so both close paths (drag-to-closed and the detail modal)
+  // are intercepted here rather than each growing its own copy of the prompt.
+  // A lead that already converted is a win being tidied up, not a loss — it is
+  // never asked.
+  const [pendingClose, setPendingClose] = useState(null);
+
+  const requestStageChange = async (leadId, newStage) => {
+    const lead = leads.find(l => l.id === leadId);
+    if (newStage === 'closed' && lead && !lead.converted_at) {
+      setPendingClose(lead);
+      return;
+    }
+    await updateLeadStage(leadId, newStage);
+  };
+
+  const confirmClose = async (lost) => {
+    const lead = pendingClose;
+    if (!lead) return;
+    await updateLeadStage(lead.id, 'closed', lost);
+    setPendingClose(null);
+    showToast(lost?.reason ? 'Lead closed — reason recorded' : 'Lead closed');
+  };
+
   const handleDrop = async (leadId, newStage) => {
-    try { await updateLeadStage(leadId, newStage); } catch (err) {}
+    // Swallowed on purpose: a failed drag should not throw out of a drop
+    // handler. requestStageChange surfaces real failures through the modal.
+    try { await requestStageChange(leadId, newStage); } catch (err) {}
   };
 
   // What this agent registers by default — the sacco path is the explicit
@@ -820,9 +892,14 @@ const SalesAgentPortal = () => {
     showToast(said);
   };
 
-  const handleScheduleFollowUp = (lead) => {
+  // `channel` carries over from the log-contact form: an agent who has just
+  // written up an email and wants the long appointment form should not have to
+  // re-pick "email" on the other side.
+  const handleScheduleFollowUp = (lead, channel = null) => {
     closeModal('leadDetail');
     openModal('prefillFollowUpLead', lead);
+    if (channel) openModal('prefillFollowUpChannel', channel);
+    else         closeModal('prefillFollowUpChannel');
     openModal('scheduleFollowUp');
   };
 
@@ -856,11 +933,63 @@ const SalesAgentPortal = () => {
     const result = await logInteraction(payload);
     if (result?.error) return result;
     closeModal('prefillInteractionLead');
+
+    // The other half: the contact just recorded usually ends with a promise to
+    // come back, and a promise with no date is one nobody is reminded about.
+    // Booked here rather than in the hook because the follow-up needs the id of
+    // the interaction that produced it, which only exists once the insert lands.
+    let booked = null;
+    let bookingFailed = false;
+    if (payload?.followUp) {
+      try {
+        booked = await scheduleFollowUp({
+          leadId:      payload.leadId || null,
+          // A contact against a client, or a walk-in with no lead row, has no
+          // lead_id — the name is the only handle the reminder will have.
+          leadName:    payload.contactName || null,
+          channel:     payload.followUp.channel,
+          scheduledAt: payload.followUp.scheduledAt,
+          remindAt:    payload.followUp.remindAt,
+          notes:       payload.followUp.notes,
+          sourceInteractionId: result?.data?.id || null,
+        });
+      } catch (err) {
+        // The contact IS saved. Reporting this as a failed submit would leave
+        // the modal open and invite a second Save, duplicating the log — so the
+        // modal closes and the toast says exactly what did and did not happen.
+        bookingFailed = true;
+        showToast(
+          `Contact logged, but the follow-up could not be scheduled${err?.message ? ` — ${err.message}` : ''}. Schedule it from the follow-ups panel.`,
+          'error',
+        );
+      }
+    }
+
     // The trigger moves leads.last_contact_at and interaction_count; the board
     // above still holds the pre-log copy, so pull the leads back in.
     refetch();
-    showToast('Contact logged.');
+
+    if (!bookingFailed) {
+      const when = booked?.scheduled_at || payload?.followUp?.scheduledAt;
+      showToast(
+        when
+          ? `Contact logged. ${channelMeta(booked?.appointment_type || payload.followUp.channel).label} follow-up set for ${new Date(when).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.`
+          : 'Contact logged.',
+      );
+    }
     return result;
+  };
+
+  /**
+   * Price a deal from the opportunities panel.
+   *
+   * Rethrows rather than swallowing: the row edits in place and keeps its form
+   * open on failure so the agent can retry without retyping. A toast alone
+   * would close the editor and lose what they typed.
+   */
+  const handleSaveDeal = async (leadId, patch) => {
+    await updateLeadDeal(leadId, patch);
+    showToast('Deal updated.');
   };
 
   const handleDeleteInteraction = async (id) => {
@@ -880,7 +1009,9 @@ const SalesAgentPortal = () => {
   const handleFollowUpSubmit = async (payload) => {
     await scheduleFollowUp(payload);
     closeModal('prefillFollowUpLead');
-    showToast(`Follow-up set for ${new Date(payload.scheduledAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} — you'll get an email reminder.`);
+    closeModal('prefillFollowUpChannel');
+    const how = channelMeta(payload.appointmentType).label;
+    showToast(`${how} follow-up set for ${new Date(payload.scheduledAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} — you'll get an email reminder.`);
   };
 
   const handleCompleteFollowUp = async (id, outcome) => {
@@ -1028,6 +1159,18 @@ const SalesAgentPortal = () => {
       badgeColor: '#f59e0b',
       onClick: () => handleOpenLogInteraction(null),
     },
+    // Opportunities -- the pipeline in money. The badge counts open deals with
+    // no value on them, because those are the ones making the forecast wrong,
+    // and an agent who never opens this panel is exactly the agent who has
+    // forty unpriced deals.
+    {
+      id: 'opportunities',
+      label: 'Opportunities',
+      icon: 'TrendingUp',
+      href: '#opportunities',
+      badge: kpis?.pipeline?.unvalued?.count,
+      badgeColor: '#d97706',
+    },
     // Schedule a follow-up -- badge shows what is due or overdue
     {
       id: 'follow-ups',
@@ -1097,7 +1240,10 @@ const SalesAgentPortal = () => {
               </span>
             </div>
 
-            {/* View toggle */}
+            {/* View toggle. "My Team" appears only for a sales manager --
+                agents.agent_role says so, and the same fact is what the RLS
+                policies key on, so a button that showed for anyone else would
+                lead to an empty screen rather than to somebody's data. */}
             <div className="flex rounded-xl border border-border overflow-hidden">
               <button
                 onClick={() => setActiveView('portal')}
@@ -1109,6 +1255,19 @@ const SalesAgentPortal = () => {
               >
                 Portal
               </button>
+              {isTeamLead && (
+                <button
+                  onClick={() => setActiveView('team')}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold transition-colors ${
+                    activeView === 'team'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-card text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  <Icon name="Users" size={13} color="currentColor" />
+                  My Team
+                </button>
+              )}
               <button
                 onClick={() => setActiveView('activity')}
                 className={`px-3 py-2 text-xs font-semibold transition-colors ${
@@ -1160,6 +1319,9 @@ const SalesAgentPortal = () => {
 
         {/* ── Activity Trail View ── */}
         {activeView === 'activity' && <AgentActivityTrail />}
+
+        {/* ── Team View (sales managers only) ── */}
+        {activeView === 'team' && isTeamLead && <TeamPanel onExport={exportTeamCSV} />}
 
         {/* ── Portal View ── */}
         {activeView === 'portal' && (
@@ -1252,7 +1414,7 @@ const SalesAgentPortal = () => {
             {/* KPI Row */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <KPICard
-                label="Wallet Balance"
+                label="Income Balance"
                 value={fmt(kpis?.walletBalance)}
                 icon="Wallet"
                 colorClass="text-emerald-600"
@@ -1281,13 +1443,16 @@ const SalesAgentPortal = () => {
                       : 'All up to date')
                   : 'Converted from leads'}
               />
+              {/* Pipeline measured in money, not headcount. The count is the
+                  subtext now: one KES 12M deal and forty KES 200k deals used to
+                  produce the same card, and only one of them is a good month. */}
               <KPICard
-                label="Leads in Pipeline"
-                value={kpis?.leadsInPipeline || 0}
+                label="Pipeline Value"
+                value={formatCompactMoney(kpis?.pipeline?.open?.value)}
                 icon="Target"
                 colorClass="text-amber-600"
                 loading={loading}
-                subtext={`${(leads || []).length} total leads`}
+                subtext={`${kpis?.leadsInPipeline || 0} open · ${formatCompactMoney(kpis?.pipeline?.open?.weighted)} weighted`}
               />
             </div>
 
@@ -1323,6 +1488,21 @@ const SalesAgentPortal = () => {
               )}
             </div>
 
+            {/* Opportunities — the same board, measured in money. The stages
+                above say where each deal sits; this says what the pipeline is
+                worth, what is due this month, and which deals still have no
+                price on them at all. */}
+            <div id="opportunities" className="scroll-mt-24">
+              <OpportunitiesPanel
+                leads={leads}
+                loading={loading}
+                error={portalError}
+                onSaveDeal={handleSaveDeal}
+                onOpenLead={lead => openModal('leadDetail', lead)}
+                onRefresh={refetch}
+              />
+            </div>
+
             {/* Customer relationships — the contact history behind the board
                 above. The pipeline says where a deal is; this says what was
                 actually said, and who has gone quiet. */}
@@ -1338,6 +1518,16 @@ const SalesAgentPortal = () => {
                 onOpenRecord={setRecordLead}
                 onRefresh={refetchInteractions}
                 onDelete={handleDeleteInteraction}
+              />
+            </div>
+
+            {/* Lost deals — the only place a reason can be added after the
+                close-time prompt was skipped, or corrected if it was wrong. */}
+            <div id="lost-deals" className="scroll-mt-24">
+              <LostDealsPanel
+                leads={leads}
+                loading={loading}
+                onSaveReason={updateLeadLostReason}
               />
             </div>
 
@@ -1499,12 +1689,20 @@ const SalesAgentPortal = () => {
         />
       )}
 
+      {/* ── Why was this lead lost? ── */}
+      <LostReasonModal
+        open={Boolean(pendingClose)}
+        lead={pendingClose}
+        onCancel={() => setPendingClose(null)}
+        onConfirm={confirmClose}
+      />
+
       {/* ── Lead Detail Modal ── */}
       {modals.leadDetail && (
         <LeadDetailModal
           lead={modals.leadDetail}
           onClose={() => closeModal('leadDetail')}
-          onStageChange={updateLeadStage}
+          onStageChange={requestStageChange}
           onConvertToClient={handleConvertToClient}
           onScheduleFollowUp={handleScheduleFollowUp}
           onLogInteraction={handleOpenLogInteraction}
@@ -1546,8 +1744,13 @@ const SalesAgentPortal = () => {
           isOpen={modals.scheduleFollowUp}
           leads={leads}
           prefillLead={typeof modals.prefillFollowUpLead === 'object' ? modals.prefillFollowUpLead : null}
+          prefillChannel={typeof modals.prefillFollowUpChannel === 'string' ? modals.prefillFollowUpChannel : null}
           onSubmit={handleFollowUpSubmit}
-          onClose={() => { closeModal('scheduleFollowUp'); closeModal('prefillFollowUpLead'); }}
+          onClose={() => {
+            closeModal('scheduleFollowUp');
+            closeModal('prefillFollowUpLead');
+            closeModal('prefillFollowUpChannel');
+          }}
         />
       )}
 

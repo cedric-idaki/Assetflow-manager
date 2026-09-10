@@ -12,6 +12,8 @@ import CompanyAnalytics from './components/CompanyAnalytics';
 import AuditTrail from './components/AuditTrail';
 import SalesAgentsList from './components/SalesAgentsList';
 import WithdrawalRequestsTab from './components/WithdrawalRequestsTab';
+import PaymentApprovalTab from './components/PaymentApprovalTab';
+import LegalDocumentsTab from './components/LegalDocumentsTab';
 import CreateAgentModal from './components/CreateAgentModal';
 
 // Admin portal tabs for super admin
@@ -23,7 +25,9 @@ import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 import KYCReviewTab from './components/KYCReviewTab';
 import MpesaSettingsTab from './components/MpesaSettingsTab';
-import CrmOversightTab from '../../components/crm/CrmOversightTab';
+import OnboardingTab from './components/OnboardingTab';
+import SuperAdminCrmTab from '../../components/crm/SuperAdminCrmTab';
+import SalesTeamPanel from '../../components/sales/SalesTeamPanel';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -81,6 +85,9 @@ const SuperAdminDashboard = () => {
 
   const [activeTab, setActiveTab] = useState('overview');
   const [showCreateAgent, setShowCreateAgent] = useState(false);
+  // Which half of the Sales Agents tab is showing: the flat roster, or the
+  // org chart of who reports to whom.
+  const [agentView, setAgentView] = useState('roster');
 
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -164,14 +171,17 @@ const SuperAdminDashboard = () => {
     { id: 'overview',     label: 'Overview',                icon: 'LayoutDashboard' },
     { id: 'agents',       label: 'Sales Agents',            icon: 'UserCheck' },
     { id: 'crm',          label: 'CRM',                     icon: 'Contact' },
-    { id: 'withdrawals',  label: 'Withdrawals',             icon: 'Wallet', badge: withdrawalRequests.length || 0 },
+    { id: 'approvals',    label: 'Payment Approvals',       icon: 'Gavel' },
+    { id: 'withdrawals',  label: 'Legacy Withdrawals',      icon: 'Wallet', badge: withdrawalRequests.length || 0 },
     { id: 'contracts',    label: 'Contracts',               icon: 'FileText' },
     { id: 'kyc',          label: 'KYC Review',              icon: 'Shield', badge: stats?.pendingKYC || 0 },
     { id: 'reports',      label: 'Sales Reports',           icon: 'BarChart3' },
     { id: 'settlements',  label: 'Settlements',             icon: 'Award' },
     { id: 'reminders',    label: 'Reminders',               icon: 'Bell' },
     { id: 'companies',    label: 'Companies',               icon: 'Building2' },
+    { id: 'onboarding',   label: 'Installations',           icon: 'Wrench' },
     { id: 'mpesa',        label: 'M-Pesa',                  icon: 'Smartphone' },
+    { id: 'legal',        label: 'Terms & Policies',        icon: 'Scale' },
     { id: 'audit',        label: 'Audit Trail',             icon: 'Shield', badge: auditTrail?.filter(a => a.action === 'delete').length || 0 },
   ];
 
@@ -297,6 +307,11 @@ const SuperAdminDashboard = () => {
           </div>
         )}
 
+        {/* INSTALLATIONS TAB — what the one-time installation & onboarding fee
+            actually bought each client. Reads through its own hook and RPCs and
+            carries its own loading state, so it is not gated on `loading`. */}
+        {activeTab === 'onboarding' && <OnboardingTab onExport={exportCSV} />}
+
         {/* AUDIT TRAIL TAB */}
         {activeTab === 'audit' && (
           <div className="space-y-4">
@@ -309,25 +324,63 @@ const SuperAdminDashboard = () => {
         {/* SALES AGENTS TAB */}
         {activeTab === 'agents' && (
           <div className="space-y-4">
-            {loading ? <Sk className="h-64" /> : (
-              <SalesAgentsList
-                agents={salesAgents}
-                rejections={assistRejections}
-                onCreateNew={() => setShowCreateAgent(true)}
-                onExport={exportCSV}
-                onUpgradeAgent={upgradeSalesAgentToGold}
-                onDowngradeAgent={downgradeSalesAgentToBronze}
-              />
-            )}
+            {/* Roster and org chart are two views of the same people, so they
+                share a tab. The roster stays the default: it is what this tab
+                has always shown. */}
+            <div className="flex rounded-xl border border-border overflow-hidden w-fit">
+              {[
+                { id: 'roster', label: 'Agents',         icon: 'Users' },
+                { id: 'teams',  label: 'Team structure', icon: 'Network' },
+              ].map(v => (
+                <button
+                  key={v.id}
+                  onClick={() => setAgentView(v.id)}
+                  className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold transition-colors ${
+                    agentView === v.id
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-card text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  <Icon name={v.icon} size={13} color="currentColor" />
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            {agentView === 'teams'
+              // SalesTeamPanel loads through its own hook and carries its own
+              // loading state, so it is not gated on `loading` here.
+              ? <SalesTeamPanel onExport={exportCSV} />
+              : loading ? <Sk className="h-64" /> : (
+                <SalesAgentsList
+                  agents={salesAgents}
+                  rejections={assistRejections}
+                  onCreateNew={() => setShowCreateAgent(true)}
+                  onExport={exportCSV}
+                  onUpgradeAgent={upgradeSalesAgentToGold}
+                  onDowngradeAgent={downgradeSalesAgentToBronze}
+                />
+              )}
           </div>
         )}
 
         {/* CRM TAB — every agent on the platform. Reads its own data through
             the supervisor policies rather than useSuperAdminDashboard, and has
             its own loading state, so it is not gated on `loading` here. */}
-        {activeTab === 'crm' && <CrmOversightTab onExport={exportCSV} />}
+        {activeTab === 'crm' && <SuperAdminCrmTab onExport={exportCSV} />}
 
-        {/* WITHDRAWAL REQUESTS TAB */}
+        {/* PAYMENT APPROVAL TAB — the pipeline. Rendered directly rather than
+            behind `loading`: it owns its own fetch and its own realtime
+            subscription, and swapping it for a skeleton on every background
+            refetch of the DASHBOARD would tear down a half-finished decision. */}
+        {activeTab === 'approvals' && (
+          <PaymentApprovalTab agents={salesAgents} onExport={exportCSV} />
+        )}
+
+        {/* LEGACY WITHDRAWAL REQUESTS — the rows raised before the pipeline
+            existed. Migration 20260908120000 lifted the pending ones into
+            payment_requests; this tab stays so the settled history is still
+            readable, and is expected to empty out rather than be used. */}
         {activeTab === 'withdrawals' && (
           <div className="space-y-4">
             {loading ? <Sk className="h-64" /> : (
@@ -392,6 +445,10 @@ const SuperAdminDashboard = () => {
 
         {/* M-PESA TAB */}
         {activeTab === 'mpesa' && <MpesaSettingsTab />}
+
+        {/* Owns its own fetching; not swapped for the page skeleton on a
+            background refetch, which would drop a half-filled upload form. */}
+        {activeTab === 'legal' && <LegalDocumentsTab />}
 
         {/* PAYMENT REMINDERS TAB */}
         {activeTab === 'reminders' && (

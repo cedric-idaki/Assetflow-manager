@@ -4,7 +4,7 @@ import { formatKEPhone } from '../../../utils/phoneUtils';
 import { useAuth } from '../../../contexts/AuthContext';
 import Icon from '../../../components/AppIcon';
 import { KENYA_COUNTIES, LOCATIONS_BY_COUNTY } from '../../../config/kenyaCounties';
-import { tierForMembers, calculateMonthlyBill } from '../../../config/saccoTiers';
+import { tierForMembers, calculateMonthlyBill, billableMembers, MIN_BILLABLE_MEMBERS } from '../../../config/saccoTiers';
 
 // Commission the acting agent earns for registering a sacco, keyed by their
 // (super-admin-assigned) plan. Same amounts as the company-side agent plans;
@@ -198,7 +198,7 @@ const CreateSaccoModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucces
 
   // Tier is derived from the expected member count (same as self-registration).
   const memberCount = parseInt(form.member_count, 10) || 0;
-  const tier        = memberCount > 0 ? tierForMembers(memberCount) : null;
+  const tier        = memberCount > 0 ? tierForMembers(billableMembers(memberCount)) : null;
   const bill        = memberCount > 0 ? calculateMonthlyBill({ members: memberCount }) : null;
 
   const set = (k, v) => {
@@ -543,7 +543,10 @@ const CreateSaccoModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucces
                   </div>
                   <div className="text-[11px] text-gray-500 space-y-0.5">
                     <div className="flex justify-between"><span>Base fee</span><span>KES {bill.baseFee.toLocaleString()}</span></div>
-                    <div className="flex justify-between"><span>{memberCount} member{memberCount !== 1 ? 's' : ''} × KES {tier.perMemberFee}</span><span>KES {bill.perMemberFeeTotal.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span>{bill.billedMembers} member{bill.billedMembers !== 1 ? 's' : ''} × KES {tier.perMemberFee}</span><span>KES {bill.perMemberFeeTotal.toLocaleString()}</span></div>
+                    {bill.minimumApplied && (
+                      <div className="text-cyan-700">Billed on the {MIN_BILLABLE_MEMBERS}-member minimum ({memberCount} registered).</div>
+                    )}
                   </div>
                 </div>
               )}

@@ -1,6 +1,7 @@
 import React from 'react';
 import Icon from '../../../components/AppIcon';
 import AgentRejectionsModal from './AgentRejectionsModal';
+import { isManager } from '../../../config/salesHierarchy';
 
 const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport, onUpgradeAgent, onDowngradeAgent }) => {
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -23,6 +24,14 @@ const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport, onUpg
   }, [rejections]);
 
   const openAgent = agents.find(a => a.id === rejectionsFor) || null;
+
+  // A manager IS an agents row, so this list already holds every name the
+  // "Reports to" column needs. No join, and nothing that can disagree with the
+  // rows rendered beside it.
+  const nameOfManager = React.useMemo(() => {
+    const byId = new Map((agents || []).map(a => [a.id, a.full_name]));
+    return (id) => (id ? byId.get(id) || 'Former manager' : null);
+  }, [agents]);
 
   const handleExport = () => {
     const now = new Date();
@@ -52,6 +61,8 @@ const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport, onUpg
     onExport(filtered.map(a => ({
       name: a.full_name, email: a.email, phone: a.phone,
       region: a.region, code: a.agent_code, tier: a.agent_plan || 'bronze',
+      role: isManager(a) ? 'Sales Manager' : 'Sales Agent',
+      reports_to: nameOfManager(a.manager_id) || '',
       commission_rate: a.commission_rate, total_sales: a.total_sales,
       total_commission: a.total_commission, target: a.target_amount,
       assists_declined: (rejectionsByAgent[a.id] || []).length,
@@ -135,7 +146,7 @@ const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport, onUpg
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-muted/50">
-                {['Agent', 'Code', 'Tier', 'Region', 'Commission', 'Total Sales', 'Commission Earned', 'Rejections', 'Target', 'Status'].map(h => (
+                {['Agent', 'Code', 'Tier', 'Region', 'Reports to', 'Commission', 'Total Sales', 'Commission Earned', 'Rejections', 'Target', 'Status'].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
                     {h}
                   </th>
@@ -157,7 +168,15 @@ const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport, onUpg
                           {(agent.full_name || 'A')[0].toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-medium text-foreground">{agent.full_name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-medium text-foreground">{agent.full_name}</p>
+                            {isManager(agent) && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700">
+                                <Icon name="UserCog" size={10} color="currentColor" />
+                                Manager
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-muted-foreground">{agent.email}</p>
                         </div>
                       </div>
@@ -194,6 +213,18 @@ const SalesAgentsList = ({ agents, rejections = [], onCreateNew, onExport, onUpg
                       </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{agent.region || '—'}</td>
+                    <td className="px-4 py-3">
+                      {isManager(agent) ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : nameOfManager(agent.manager_id) ? (
+                        <span className="text-xs text-foreground">{nameOfManager(agent.manager_id)}</span>
+                      ) : (
+                        // Not a dash: an agent whose work rolls up to nobody is
+                        // the state the team panel exists to fix, and a dash
+                        // reads as "not applicable".
+                        <span className="text-xs font-medium text-amber-700">Unassigned</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 font-medium text-foreground">{agent.commission_rate}%</td>
                     <td className="px-4 py-3 font-semibold text-emerald-600">{fmt(agent.total_sales)}</td>
                     <td className="px-4 py-3 font-medium text-blue-600">{fmt(agent.total_commission)}</td>

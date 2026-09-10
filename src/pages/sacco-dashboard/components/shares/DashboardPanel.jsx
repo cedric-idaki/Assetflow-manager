@@ -6,7 +6,10 @@ import {
   Card, StatCard, PrimaryButton, GhostButton, Modal, Field, TextInput, NumberInput,
   EmptyState, KES, fmtDate,
 } from '../_shared';
-import { KESshort, pct, gainTone, gainSign, marketIsOpen, withDefaults, today, num } from './_util';
+import {
+  KESshort, pct, gainTone, gainSign, marketIsOpen, withDefaults, today, num,
+  withholdingOverview,
+} from './_util';
 
 /**
  * The ten-second read: what the whole share market looks like right now.
@@ -14,7 +17,7 @@ import { KESshort, pct, gainTone, gainSign, marketIsOpen, withDefaults, today, n
  * (pending approvals, an uncalculated dividend).
  */
 const DashboardPanel = ({ ctx, ov, onNavigate }) => {
-  const { sharePrices = [], shareSettings, setMarketValue, sacco } = ctx;
+  const { sharePrices = [], shareSettings, setMarketValue, sacco, withholdings = [] } = ctx;
   const toast = useToast();
   const s = withDefaults(shareSettings);
 
@@ -22,6 +25,13 @@ const DashboardPanel = ({ ctx, ov, onNavigate }) => {
   const [saving, setSaving] = useState(false);
   const [priceForm, setPriceForm] = useState({ market_value: '', effective_date: today(), note: '' });
   const setPF = (k, v) => setPriceForm((p) => ({ ...p, [k]: v }));
+
+  // Shares out of circulation are part of the ten-second read: they are stock
+  // the society controls but nobody can trade.
+  const wo = useMemo(
+    () => withholdingOverview(withholdings, ov.effective, ov.totalIssued),
+    [withholdings, ov.effective, ov.totalIssued],
+  );
 
   const series = useMemo(
     () => [...sharePrices].reverse().map((p) => ({
@@ -95,6 +105,13 @@ const DashboardPanel = ({ ctx, ov, onNavigate }) => {
           hint={ov.dividendPayable > 0 ? KES(ov.dividendPayable) : 'Nothing outstanding'} />
         <StatCard label="Open orders" value={ov.openOrders.length.toLocaleString()} icon="Store" tone="muted"
           hint={`${ov.buyOrders.length} bid · ${ov.sellOrders.length} ask`} />
+        <button onClick={() => onNavigate('withholding')} className="text-left">
+          <StatCard label="Shares withheld" value={wo.outstanding.toLocaleString()} icon="Lock"
+            tone={wo.outstanding > 0 ? 'warning' : 'muted'}
+            hint={wo.outstanding > 0
+              ? `${KESshort(wo.value)} · ${wo.members} member${wo.members === 1 ? '' : 's'}`
+              : 'Nothing held back'} />
+        </button>
       </div>
 
       {/* Anything that needs a human */}

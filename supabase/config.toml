@@ -56,6 +56,21 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/esign-reminders/index.ts"
 
+# Statutory return deadlines (PAYE, NSSF, SHIF, the housing levy and VAT).
+# Invoked by the scheduler with the service-role key (no user JWT), so
+# verify_jwt must be false — same shape as agent-followup-reminders.
+#
+# RUN IT ONCE A DAY, and early: the lead days are whole days (7, 3, 1, 0), so a
+# run is either on a reminder day or it is not, and a second run the same day
+# sends nothing — uq_statutory_reminder_once refuses the duplicate claim. Two
+# runs a day is therefore harmless but pointless; ZERO runs on the 9th means a
+# tenant hears nothing on the day PAYE is due. A morning slot (say 06:00 EAT)
+# leaves the whole working day to act on what it says.
+[functions.statutory-return-reminders]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/statutory-return-reminders/index.ts"
+
 # Website → Ararat vehicle sync. Authenticated by a per-dealer API key in the
 # x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the caller
 # is the dealer's website, not a logged-in user. The function resolves the tenant
@@ -146,3 +161,66 @@ entrypoint = "./functions/esign-api/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/listing-public/index.ts"
+
+# Direct client registration (/user-registration-screen) — the public signup a
+# client uses to join a company without going through a sales agent. The
+# registrant has no account yet, so verify_jwt MUST be false; the company's
+# signup code is what gates it. The function is the whole boundary: it refuses
+# to mint a login until the code resolves, and every attribution decision —
+# which tenant, which agent, direct or agent-acquired — is made inside
+# register_direct_client(), which is granted to service_role alone.
+[functions.register-client]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/register-client/index.ts"
+
+# Tenant SignNow connection. The caller's JWT is what decides whose credentials
+# these are, so verify_jwt MUST stay true; admin_id is never read from the
+# request body. This is the only write path to signnow_connections, which has
+# RLS on with zero policies. Requires the SIGNNOW_CRED_ENC_KEY function secret.
+[functions.signnow-credentials]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/signnow-credentials/index.ts"
+
+# Send a generated certificate for signature, and track it. Called from the app
+# by a signed-in staff member, so verify_jwt stays true — the JWT is what scopes
+# the signing request to their tenant.
+[functions.signnow-documents]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/signnow-documents/index.ts"
+
+# SignNow event callbacks. SignNow POSTs here with no Supabase JWT of any kind,
+# so verify_jwt MUST be false — otherwise every callback is rejected with 401
+# and no signed certificate is ever released. The function trusts nothing from
+# the body: it verifies the per-tenant HMAC in X-SignNow-Signature, looks the
+# document id up in signing_requests (which we created), and re-reads the
+# document from SignNow's API before applying anything.
+[functions.signnow-webhook]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/signnow-webhook/index.ts"
+
+# Tenant KRA eTIMS device registration. The caller's JWT decides whose device
+# this is, so verify_jwt MUST stay true; admin_id is never read from the request
+# body. This is the only write path to etims_credentials, which has RLS on with
+# zero policies. Requires the ETIMS_CRED_ENC_KEY function secret — without it
+# the function refuses to save rather than storing a device key in plaintext.
+[functions.etims-credentials]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/etims-credentials/index.ts"
+
+# The eTIMS queue drain — the only thing on this platform that files a tax
+# document with KRA. Run it on a schedule (every 5 minutes), the same way
+# agent-followup-reminders and kyc-renewal-reminders are run.
+#
+# verify_jwt = false so the scheduler can invoke it with the service-role key,
+# which also means the platform performs no auth here: the function accepts the
+# service-role key or CRON_SECRET for a whole-platform drain, and otherwise
+# authenticates the caller itself and drains only THEIR tenant's queue.
+[functions.etims-transmit]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/etims-transmit/index.ts"

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { formatKEPhone } from '../../../utils/phoneUtils';
+import { buildPaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 
 const MpesaPaymentModal = ({ onClose, onPay, clientProfile }) => {
   const [phone, setPhone] = useState(clientProfile?.phone || '');
@@ -144,10 +145,45 @@ const MpesaPaymentModal = ({ onClose, onPay, clientProfile }) => {
   );
 };
 
-const PaymentsTab = ({ payments, installmentPlans, clientProfile, onPay, onExport }) => {
+const PaymentsTab = ({ payments, installmentPlans, clientProfile, companyProfile, onPay, onExport }) => {
   const [showMpesa, setShowMpesa] = useState(false);
   const [activeView, setActiveView] = useState('history');
+  const [receipting, setReceipting] = useState(null);
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+  /**
+   * The client's own copy of a payment. Until now the only way for a client to
+   * get one was to ask the office to print it — the portal offered a CSV of the
+   * whole history and nothing per payment.
+   */
+  const downloadReceipt = async (p) => {
+    setReceipting(p.id);
+    try {
+      await downloadAccountingDocument(buildPaymentReceipt({
+        txn: {
+          id: p.id,
+          transactionId: p.transaction_id,
+          clientName:    clientProfile?.full_name,
+          accountNumber: clientProfile?.account_number,
+          clientEmail:   clientProfile?.email,
+          clientPhone:   clientProfile?.phone,
+          date:          p.payment_date,
+          paymentMethod: p.payment_method,
+          reference:     p.reference_number,
+          amount:        p.amount,
+          status:        p.payment_status,
+          assetName:     p.asset?.description,
+          assetCode:     p.asset?.asset_code,
+          notes:         p.notes,
+        },
+        company: companyProfile,
+      }));
+    } catch (e) {
+      window.alert(e?.message || 'Could not generate the receipt.');
+    } finally {
+      setReceipting(null);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -240,11 +276,25 @@ const PaymentsTab = ({ payments, installmentPlans, clientProfile, onPay, onExpor
                       </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-bold text-foreground">{fmt(p.amount)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {p.payment_date ? new Date(p.payment_date).toLocaleDateString() : '—'}
-                    </p>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-foreground">{fmt(p.amount)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {p.payment_date ? new Date(p.payment_date).toLocaleDateString() : '—'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => downloadReceipt(p)}
+                      disabled={receipting === p.id}
+                      title={p.payment_status === 'completed'
+                        ? `Download the receipt for ${p.transaction_id}`
+                        : `Download the record of ${p.transaction_id}`}
+                      aria-label={`Download the receipt for ${p.transaction_id}`}
+                      className="p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-60 transition-all"
+                    >
+                      <Icon name={receipting === p.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                        className={receipting === p.id ? 'animate-spin' : ''} />
+                    </button>
                   </div>
                 </div>
               ))}

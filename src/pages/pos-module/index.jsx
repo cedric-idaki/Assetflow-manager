@@ -2,8 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import Icon from '../../components/AppIcon';
-import { usePOS, buildInstallmentSchedule, VAT_RATE } from '../../hooks/usePOS';
+import { usePOS, buildInstallmentSchedule, vatFractionOn, vatPercentOn } from '../../hooks/usePOS';
 import { generateReceiptPDF } from '../../utils/generateReceiptPDF';
+import { useReceiptPrinter, PaperPicker } from './components/ReceiptPrinter';
+import ReceiptShare from './components/ReceiptShare';
+import SalesHistory from './components/SalesHistory';
 import { supabase } from '../../lib/supabase';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -64,11 +67,31 @@ const StepBar = ({ step }) => (
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-lg ${className}`} />;
 
 // ── Receipt popup ─────────────────────────────────────────────────────────────
-const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose, onNewSale, schedule }) => {
-  const [downloading, setDownloading] = React.useState(false);
+const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier, buyerKraPin, onClose, onNewSale, schedule }) => {
+  const [downloading, setDownloading]     = React.useState(false);
+  const [downloadError, setDownloadError] = React.useState('');
+
+  // The moment the money was taken, not the moment Print was pressed — a
+  // reprint has to show the customer the time of their transaction.
+  const issuedAt = result.payment?.payment_date || new Date().toISOString();
+
+  // `printed` defaults to 0: this is the till, so the first sheet is the
+  // original and only a second press is stamped DUPLICATE.
+  const printer = useReceiptPrinter({
+    buildArgs: () => ({
+      saleData, client, asset, companyProfile, schedule,
+      invoiceNo: result.invoiceNo,
+      receiptNo: result.receiptNo,
+      cashier, issuedAt, buyerKraPin,
+    }),
+  });
+
+  const actionError = printer.error || downloadError;
 
   const handleDownload = async () => {
     setDownloading(true);
+    setDownloadError('');
+    printer.setError('');
     try {
       await generateReceiptPDF({
         saleData,
@@ -78,9 +101,10 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
         schedule,
         invoiceNo: result.invoiceNo,
         receiptNo: result.receiptNo,
+        buyerKraPin,
       });
     } catch (err) {
-      alert('PDF generation failed: ' + err.message);
+      setDownloadError('PDF generation failed: ' + err.message);
     } finally {
       setDownloading(false);
     }
@@ -123,7 +147,7 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
             <>
               <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(saleData.sellingPrice - (saleData.discountAmount || 0))}</span></div>
               {saleData.discountAmount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="text-red-500">-{fmt(saleData.discountAmount)}</span></div>}
-              {saleData.vatAmount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">VAT (16%)</span><span>{fmt(saleData.vatAmount)}</span></div>}
+              {saleData.vatAmount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({saleData.vatPercent ?? vatPercentOn()}%)</span><span>{fmt(saleData.vatAmount)}</span></div>}
               <div className="flex justify-between font-bold text-base pt-1 border-t border-border">
                 <span className="text-foreground">Total Paid</span>
                 <span className="text-emerald-600">{fmt(saleData.totalAmount)}</span>
@@ -155,27 +179,48 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
         </div>
       </div>
 
-      <div className="flex gap-2 px-6 pb-6">
-        <button onClick={onNewSale}
-          className="flex-1 py-2.5 border border-border text-sm font-medium text-muted-foreground rounded-xl hover:bg-muted transition-colors">
-          New Sale
-        </button>
-        <button onClick={() => window.print()}
-          className="py-2.5 px-4 text-sm font-medium border border-border text-foreground rounded-xl hover:bg-muted transition-colors">
-          Print
-        </button>
-        <button onClick={handleDownload} disabled={downloading}
-          className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold text-white rounded-xl disabled:opacity-60 transition-all"
-          style={{ background: 'linear-gradient(135deg,#1A56DB,#1E429F)' }}>
-          {downloading ? (
-            <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-            </svg> Generating...</>
-          ) : (
-            <><Icon name="Download" size={14} color="white" /> Download PDF</>
-          )}
-        </button>
+      <div className="px-6 pb-6 space-y-3">
+        {actionError && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{actionError}</div>
+        )}
+
+        <ReceiptShare
+          client={client} asset={asset} saleData={saleData}
+          companyProfile={companyProfile}
+          receiptNo={result.receiptNo} invoiceNo={result.invoiceNo}
+          issuedAt={issuedAt} cashier={cashier} buyerKraPin={buyerKraPin}
+        />
+
+        <PaperPicker
+          paper={printer.paper}
+          onChange={printer.setPaper}
+          printedHere={printer.printedHere}
+          nextIsDuplicate={printer.nextIsDuplicate}
+        />
+
+        <div className="flex gap-2">
+          <button onClick={onNewSale}
+            className="flex-1 py-2.5 border border-border text-sm font-medium text-muted-foreground rounded-xl hover:bg-muted transition-colors">
+            New Sale
+          </button>
+          <button onClick={printer.print}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 text-sm font-semibold border border-border text-foreground rounded-xl hover:bg-muted transition-colors">
+            <Icon name="Printer" size={14} color="currentColor" />
+            {printer.printedHere > 0 ? 'Print Again' : 'Print Receipt'}
+          </button>
+          <button onClick={handleDownload} disabled={downloading}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold text-white rounded-xl disabled:opacity-60 transition-all"
+            style={{ background: 'linear-gradient(135deg,#1A56DB,#1E429F)' }}>
+            {downloading ? (
+              <><svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+              </svg> Generating...</>
+            ) : (
+              <><Icon name="Download" size={14} color="white" /> Download PDF</>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -187,14 +232,34 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, onClose
 // ══════════════════════════════════════════════════════════════════════════════
 const POSModule = () => {
   const {
-    clients, assets, companyProfile, loading, submitting, error: hookError,
-    submitSale,
+    adminId, clients, assets, companyProfile, loading, submitting, error: hookError,
+    submitSale, createCashCustomer,
   } = usePOS();
 
+  // The till does two things: take a sale, and reissue a receipt for one
+  // already taken. Both belong to whoever is standing at the counter.
+  const [view, setView]               = useState('sale');
   const [step, setStep]               = useState(1);
   const [errors, setErrors]           = useState({});
   const [globalError, setGlobalError] = useState('');
   const [receipt, setReceipt]         = useState(null);
+  // Who served the customer. A receipt names the operator so a till dispute has
+  // someone to ask; the submit path already loads the profile for the approval
+  // checks, so it costs nothing to keep.
+  const [cashier, setCashier]         = useState('');
+  // The buyer's KRA PIN for THIS sale. Prefilled from the client record when
+  // one is selected, but editable: a company buying in a director's name, or a
+  // client whose PIN was never captured, both happen at the counter and neither
+  // should stop the sale.
+  const [buyerKraPin, setBuyerKraPin] = useState('');
+  // Registering a walk-in without leaving the till.
+  const [quickOpen, setQuickOpen]     = useState(false);
+  const [quick, setQuick]             = useState({ fullName: '', phone: '', email: '', kraPin: '' });
+  const [quickSaving, setQuickSaving] = useState(false);
+
+  // A cash customer is never lent to. The screen reflects that; the sales
+  // trigger in 20260908180000 is what enforces it.
+  const isCashCustomer = selectedClient?.customer_type === 'cash';
 
   const [clientSearch, setClientSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
@@ -247,8 +312,12 @@ const POSModule = () => {
     (parseFloat(sellingPrice) || 0) - discountAmount,
     [sellingPrice, discountAmount]);
 
+  // The rate in force on the day of supply, and the percentage the receipt
+  // prints, come from the same resolution — a till cannot state one rate and
+  // charge another.
+  const vatPercent = useMemo(() => vatPercentOn(), []);
   const vatAmount = useMemo(() =>
-    vatApplicable ? Math.round(priceAfterDiscount * VAT_RATE) : 0,
+    vatApplicable ? Math.round(priceAfterDiscount * vatFractionOn()) : 0,
     [priceAfterDiscount, vatApplicable]);
 
   const totalAmount = useMemo(() =>
@@ -338,28 +407,47 @@ const POSModule = () => {
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       const { data: currentProfile } = await supabase.from('user_profiles').select('full_name, role, admin_id').eq('id', currentUser.id).single();
       const isManagerRole = ['admin', 'manager', 'director'].includes(currentProfile?.role);
+      setCashier(currentProfile?.full_name || currentUser.email || '');
 
       if (totalAmount > LARGE_TXN_THRESHOLD && !isManagerRole) {
         const ref = `TXN-${Date.now().toString(36).toUpperCase()}`;
-        await supabase.from('maker_checker_queue').insert({
-          action_type:     'large_transaction',
+        // `high_value_transaction`, not `large_transaction` — the latter is not
+        // a value of mc_action_type and every insert using it was rejected with
+        // 22P02. See migration 20260909120000.
+        const { error: qErr } = await supabase.from('maker_checker_queue').insert({
+          action_type:     'high_value_transaction',
           title:           `Large Transaction — ${fmt(totalAmount)} for ${selectedClient?.full_name}`,
-          description:     `Sales agent requesting approval for ${pricingModel === 'cash' ? 'cash sale' : 'hire purchase'} of ${selectedAsset?.description} valued at ${fmt(totalAmount)}. Exceeds KES 50,000 threshold.`,
+          description:     `Sales agent requesting approval for ${pricingModel === 'cash' ? 'cash sale' : 'hire purchase'} of ${selectedAsset?.description} valued at ${fmt(totalAmount)}. Exceeds ${fmt(LARGE_TXN_THRESHOLD)} threshold.`,
+          initiator_id:    currentUser.id,
           initiator_name:  currentProfile?.full_name || currentUser.email,
-          initiator_email: currentUser.email,
+          initiator_role:  currentProfile?.role || 'sales_agent',
           status:          'pending',
           priority:        totalAmount > 200000 ? 'high' : 'medium',
-          affected_entity: selectedAsset?.id,
+          affected_entity: 'assets',
+          affected_entity_id: selectedAsset?.id,
           admin_id:        currentProfile?.admin_id || currentUser.id,
-          metadata: {
+          change_details: {
             ref,
-            client_id:     selectedClient?.id,
-            asset_id:      selectedAsset?.id,
-            total_amount:  totalAmount,
-            pricing_model: pricingModel,
+            client_id:      selectedClient?.id,
+            client_name:    selectedClient?.full_name,
+            asset_id:       selectedAsset?.id,
+            total_amount:   totalAmount,
+            pricing_model:  pricingModel,
             deposit_amount: parseFloat(depositAmount) || 0,
+            requested_by_email: currentUser.email,
           },
         });
+        // THE ERROR MUST NOT BE SWALLOWED. This used to be a bare `await` with
+        // no error check, so a rejected insert still set the reference and told
+        // the agent their sale was awaiting approval. Nothing was queued, no
+        // approver ever saw it, and the sale silently never happened.
+        if (qErr) {
+          setGlobalError(
+            `This sale needs approval, but the request could not be queued: ${qErr.message}. ` +
+            'Nothing has been submitted — tell a manager before trying again.',
+          );
+          return;
+        }
         setTxnApprovalRef(ref);
         setPendingTxnApproval(true);
         return;
@@ -375,28 +463,41 @@ const POSModule = () => {
 
         if (!isManager) {
           const ref = `DISC-${Date.now().toString(36).toUpperCase()}`;
+          // `discount_approval` was not a value of mc_action_type until
+          // 20260909120000 added it, so every one of these was rejected too.
           const { error: qErr } = await supabase.from('maker_checker_queue').insert({
             action_type:      'discount_approval',
             title:            `Discount Approval — ${discPct}% on ${selectedAsset?.description}`,
             description:      `Sales agent requesting ${discPct}% discount (${fmt(discountAmount)}) on ${selectedAsset?.description} for client ${selectedClient?.full_name}. Reason: ${discountReason || 'Not provided'}`,
+            initiator_id:     user.id,
             initiator_name:   profile?.full_name || user.email,
-            initiator_email:  user.email,
+            initiator_role:   profile?.role || 'sales_agent',
             status:           'pending',
             priority:         discPct > 15 ? 'high' : 'medium',
-            affected_entity:  selectedAsset?.id,
+            affected_entity:  'assets',
+            affected_entity_id: selectedAsset?.id,
             admin_id:         profile?.admin_id || user.id,
-            metadata: {
+            is_bulk_eligible: true,
+            change_details: {
               ref,
-              client_id:      selectedClient?.id,
-              asset_id:       selectedAsset?.id,
-              selling_price:  parseFloat(sellingPrice),
-              discount_pct:   discPct,
+              client_id:       selectedClient?.id,
+              client_name:     selectedClient?.full_name,
+              asset_id:        selectedAsset?.id,
+              selling_price:   parseFloat(sellingPrice),
+              discount_pct:    discPct,
               discount_amount: discountAmount,
               discount_reason: discountReason,
-              pricing_model:  pricingModel,
+              pricing_model:   pricingModel,
+              requested_by_email: user.email,
             },
           });
-          if (qErr) throw qErr;
+          if (qErr) {
+            setGlobalError(
+              `This discount needs approval, but the request could not be queued: ${qErr.message}. ` +
+              'Nothing has been submitted — reduce the discount or ask a manager to ring it up.',
+            );
+            return;
+          }
           setApprovalRef(ref);
           setPendingApproval(true);
           return;
@@ -411,6 +512,9 @@ const POSModule = () => {
         discountAmount,
         discountReason,
         vatAmount,
+        // Stored on the sale so a reprint states the rate these figures were
+        // actually charged at, rather than whatever is in force when it prints.
+        vatPercent,
         totalAmount,
         depositAmount:   parseFloat(depositAmount) || 0,
         financeBalance,
@@ -423,6 +527,7 @@ const POSModule = () => {
         notes,
         schedule:        schedule?.schedule,
         scheduleSummary: schedule?.summary,
+        buyerKraPin,
       });
       setReceipt(result);
     } catch (err) {
@@ -432,7 +537,7 @@ const POSModule = () => {
 
   const resetForm = () => {
     setStep(1); setReceipt(null);
-    setSelectedClient(null); setClientSearch('');
+    setSelectedClient(null); setClientSearch(''); setBuyerKraPin('');
     setSelectedAsset(null); setAssetSearch('');
     setQuantity(1); setPricingModel('installment');
     setSellingPrice(''); setDiscountPct(''); setDiscountReason('');
@@ -463,7 +568,7 @@ const POSModule = () => {
           saleData={{
             pricingModel, sellingPrice: parseFloat(sellingPrice),
             discountAmount, discountPct, discountReason,
-            vatAmount, totalAmount,
+            vatAmount, vatPercent, totalAmount,
             depositAmount:      parseFloat(depositAmount) || 0,
             financeBalance,
             interestRate:       parseFloat(interestRate) || 0,
@@ -477,6 +582,8 @@ const POSModule = () => {
           }}
           schedule={schedule?.schedule}
           companyProfile={companyProfile}
+          cashier={cashier}
+          buyerKraPin={buyerKraPin}
           onClose={() => setReceipt(null)}
           onNewSale={resetForm}
         />
@@ -491,30 +598,105 @@ const POSModule = () => {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-foreground">Point of Sale</h1>
-              <p className="text-xs text-muted-foreground">New asset sale transaction</p>
+              <p className="text-xs text-muted-foreground">
+                {view === 'sale' ? 'New asset sale transaction' : 'Reprint a receipt for a past sale'}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {step > 1 && (
+            {view === 'sale' && step > 1 && (
               <button onClick={resetForm} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 px-3 py-1.5 border border-border rounded-lg hover:bg-muted transition-colors">
                 <Icon name="RotateCcw" size={13} color="currentColor" /> Reset
               </button>
             )}
+            <div className="flex items-center gap-1 p-1 bg-muted/40 border border-border rounded-xl" role="tablist" aria-label="Point of Sale view">
+              {[
+                { value: 'sale',    label: 'New Sale', icon: 'ShoppingCart' },
+                { value: 'history', label: 'Receipts', icon: 'ReceiptText' },
+              ].map(t => (
+                <button key={t.value} role="tab" aria-selected={view === t.value}
+                  onClick={() => setView(t.value)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                    view === t.value ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                  <Icon name={t.icon} size={13} color="currentColor" /> {t.label}
+                </button>
+              ))}
+            </div>
             <ClosePageButton label="Close Point of Sale" />
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-2xl overflow-hidden">
+        {view === 'history' && (
+          <SalesHistory adminId={adminId} clients={clients} companyProfile={companyProfile} />
+        )}
+
+        <div className={`bg-card border border-border rounded-2xl overflow-hidden ${view === 'sale' ? '' : 'hidden'}`}>
           <StepBar step={step} />
 
           <div className="p-5 min-h-[400px]">
 
             {step === 1 && (
               <div className="space-y-4 max-w-2xl mx-auto">
-                <div>
-                  <h2 className="text-base font-semibold text-foreground mb-1">Select Client</h2>
-                  <p className="text-xs text-muted-foreground">Only KYC-verified clients can proceed to a sale</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-foreground mb-1">Select Customer</h2>
+                    <p className="text-xs text-muted-foreground">
+                      Account customers need KYC for credit terms. A cash customer can buy outright straight away.
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setQuickOpen(o => !o)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-semibold text-foreground hover:bg-muted flex-shrink-0">
+                    <Icon name="UserPlus" size={13} color="currentColor" />
+                    {quickOpen ? 'Cancel' : 'New walk-in'}
+                  </button>
                 </div>
+
+                {/* Quick creation. A name and nothing else is required: the
+                    point of this customer type is that it takes seconds, and a
+                    required field is one somebody types a single letter into. */}
+                {quickOpen && (
+                  <div className="border border-border rounded-xl p-4 space-y-3 bg-muted/30">
+                    <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Register a walk-in</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input value={quick.fullName} onChange={e => setQuick(q => ({ ...q, fullName: e.target.value }))}
+                        placeholder="Customer name *" className={ic(false)} />
+                      <input value={quick.phone} onChange={e => setQuick(q => ({ ...q, phone: e.target.value }))}
+                        placeholder="Phone" className={ic(false)} />
+                      <input value={quick.email} onChange={e => setQuick(q => ({ ...q, email: e.target.value }))}
+                        placeholder="Email" className={ic(false)} />
+                      <input value={quick.kraPin}
+                        onChange={e => setQuick(q => ({ ...q, kraPin: e.target.value.toUpperCase().replace(/\s+/g, '') }))}
+                        placeholder="KRA PIN (for a tax invoice)" maxLength={11} className={`${ic(false)} font-mono`} />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      A cash customer can be invoiced, pay and take a receipt. They cannot be put on
+                      hire-purchase — promote them to an account customer for that.
+                    </p>
+                    <button type="button" disabled={quickSaving || !quick.fullName.trim()}
+                      onClick={async () => {
+                        setQuickSaving(true);
+                        setGlobalError('');
+                        try {
+                          const created = await createCashCustomer(quick);
+                          setSelectedClient(created);
+                          setBuyerKraPin(created?.kra_pin || '');
+                          // A walk-in pays cash by definition; pre-selecting it
+                          // saves a step and matches what the sales gate will
+                          // allow anyway.
+                          setPricingModel('cash');
+                          setQuick({ fullName: '', phone: '', email: '', kraPin: '' });
+                          setQuickOpen(false);
+                        } catch (err) {
+                          setGlobalError(err.message || 'Could not register the customer.');
+                        } finally {
+                          setQuickSaving(false);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-primary-foreground disabled:opacity-50">
+                      {quickSaving ? 'Registering…' : 'Register and continue'}
+                    </button>
+                  </div>
+                )}
                 <div className="relative">
                   <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
                     <Icon name="Search" size={15} color="var(--color-muted-foreground)" />
@@ -535,13 +717,32 @@ const POSModule = () => {
                       <p className="text-sm mt-2">No clients found</p>
                     </div>
                   ) : filteredClients.map(c => {
+                    // KYC gates CREDIT, not trade. A cash customer is never
+                    // lent to — the sales trigger refuses it — so requiring
+                    // verification of them buys nothing and costs the sale.
+                    const isCash     = c.customer_type === 'cash';
                     const isVerified = c.kyc_status === 'verified';
+                    const canSell    = isCash || isVerified;
                     const isSelected = selectedClient?.id === c.id;
                     return (
-                      <button key={c.id} onClick={() => isVerified && setSelectedClient(c)} disabled={!isVerified}
+                      <button key={c.id}
+                        onClick={() => {
+                          if (!canSell) return;
+                          setSelectedClient(c);
+                          // A cash customer cannot take terms, so do not leave
+                          // an installment model selected from a previous
+                          // customer for the gate to reject at submit time.
+                          if (isCash) setPricingModel('cash');
+                          // Prefill from the record. Clearing on a different
+                          // client matters more than filling: carrying one
+                          // buyer's PIN onto the next sale would print somebody
+                          // else's tax number on a stranger's receipt.
+                          setBuyerKraPin(c.kra_pin || '');
+                        }}
+                        disabled={!canSell}
                         className={`w-full flex items-center gap-3 p-3.5 rounded-xl border-2 text-left transition-all ${
                           isSelected ? 'border-primary bg-primary/5' :
-                          isVerified ? 'border-border hover:border-primary/40 hover:bg-muted/50' :
+                          canSell ? 'border-border hover:border-primary/40 hover:bg-muted/50' :
                           'border-border opacity-50 cursor-not-allowed'
                         }`}>
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 font-bold text-sm ${isSelected ? 'bg-primary text-white' : 'bg-muted text-muted-foreground'}`}>
@@ -551,21 +752,52 @@ const POSModule = () => {
                           <p className="font-semibold text-sm text-foreground">{c.full_name}</p>
                           <p className="text-xs text-muted-foreground">{c.account_number} · {c.phone}</p>
                         </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${isVerified ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                          {isVerified ? '✓ KYC Verified' : c.kyc_status}
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${
+                          isCash ? 'bg-sky-100 text-sky-700'
+                          : isVerified ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-amber-100 text-amber-700'}`}>
+                          {isCash ? 'Cash customer' : isVerified ? '✓ KYC Verified' : c.kyc_status}
                         </span>
                       </button>
                     );
                   })}
                 </div>
                 {selectedClient && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3">
-                    <Icon name="CheckCircle" size={18} color="#059669" />
-                    <div>
-                      <p className="text-sm font-semibold text-emerald-800">Selected: {selectedClient.full_name}</p>
-                      <p className="text-xs text-emerald-600">{selectedClient.account_number}</p>
+                  <>
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3">
+                      <Icon name="CheckCircle" size={18} color="#059669" />
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-800">Selected: {selectedClient.full_name}</p>
+                        <p className="text-xs text-emerald-600">{selectedClient.account_number}</p>
+                      </div>
                     </div>
-                  </div>
+
+                    {/* A VAT-registered buyer cannot claim input tax on a
+                        receipt that does not name them, so the PIN is asked for
+                        here rather than after the money is taken. Optional: a
+                        walk-in without one still gets served. */}
+                    <div>
+                      <label htmlFor="pos-buyer-kra" className="block text-xs font-semibold text-muted-foreground mb-1">
+                        Customer KRA PIN <span className="font-normal">(optional — required for a tax invoice)</span>
+                      </label>
+                      <input
+                        id="pos-buyer-kra"
+                        type="text"
+                        value={buyerKraPin}
+                        onChange={e => setBuyerKraPin(e.target.value.toUpperCase().replace(/\s+/g, ''))}
+                        placeholder="e.g. A001234567X"
+                        maxLength={11}
+                        className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground placeholder:text-muted-foreground font-mono"
+                      />
+                      {buyerKraPin && !/^[A-Z]\d{9}[A-Z]$/.test(buyerKraPin) && (
+                        <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                          <Icon name="AlertTriangle" size={11} color="#d97706" />
+                          A Kenyan PIN is a letter, nine digits and a letter — e.g. A001234567X. This will be
+                          printed as entered.
+                        </p>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -623,19 +855,37 @@ const POSModule = () => {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pricing Model *</label>
+                  {isCashCustomer && (
+                    <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                      <Icon name="Info" size={12} color="currentColor" />
+                      {selectedClient?.full_name} is a cash customer — only an outright sale is available.
+                      Promote them to an account customer for terms.
+                    </p>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {PRICING_MODELS.map(m => (
-                      <button key={m.value} onClick={() => setPricingModel(m.value)}
-                        className={`flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${pricingModel === m.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/30 hover:bg-muted/30'}`}>
-                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${pricingModel === m.value ? 'bg-primary' : 'bg-muted'}`}>
-                          <Icon name={m.icon} size={15} color={pricingModel === m.value ? 'white' : 'var(--color-muted-foreground)'} />
-                        </div>
-                        <div>
-                          <p className={`text-xs font-semibold ${pricingModel === m.value ? 'text-primary' : 'text-foreground'}`}>{m.label}</p>
-                          <p className="text-xs text-muted-foreground">{m.desc}</p>
-                        </div>
-                      </button>
-                    ))}
+                    {PRICING_MODELS.map(m => {
+                      // Credit models are shown greyed rather than removed: the
+                      // operator needs to see WHY the option they expected is
+                      // not there, or they will assume the till is broken.
+                      const blocked = isCashCustomer && m.value !== 'cash';
+                      return (
+                        <button key={m.value} disabled={blocked}
+                          title={blocked ? 'Not available to a cash customer' : undefined}
+                          onClick={() => !blocked && setPricingModel(m.value)}
+                          className={`flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${
+                            blocked ? 'border-border opacity-40 cursor-not-allowed'
+                            : pricingModel === m.value ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/30 hover:bg-muted/30'}`}>
+                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${pricingModel === m.value && !blocked ? 'bg-primary' : 'bg-muted'}`}>
+                            <Icon name={m.icon} size={15} color={pricingModel === m.value && !blocked ? 'white' : 'var(--color-muted-foreground)'} />
+                          </div>
+                          <div>
+                            <p className={`text-xs font-semibold ${pricingModel === m.value && !blocked ? 'text-primary' : 'text-foreground'}`}>{m.label}</p>
+                            <p className="text-xs text-muted-foreground">{m.desc}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -662,7 +912,7 @@ const POSModule = () => {
                       className={`w-10 h-6 rounded-full transition-colors flex items-center ${vatApplicable ? 'bg-primary justify-end' : 'bg-muted justify-start'}`}>
                       <span className="w-5 h-5 bg-white rounded-full shadow mx-0.5" />
                     </button>
-                    <label className="text-sm text-foreground">VAT (16%) applicable</label>
+                    <label className="text-sm text-foreground">VAT ({vatPercent}%) applicable</label>
                   </div>
                 </div>
                 {pricingModel !== 'cash' && (
@@ -696,7 +946,7 @@ const POSModule = () => {
                   {[
                     { label: 'Selling Price', value: fmt(sellingPrice || 0) },
                     discountAmount > 0 && { label: 'Discount', value: `-${fmt(discountAmount)}` },
-                    vatApplicable && { label: 'VAT (16%)', value: fmt(vatAmount) },
+                    vatApplicable && { label: `VAT (${vatPercent}%)`, value: fmt(vatAmount) },
                     { label: 'Total Amount', value: fmt(totalAmount), bold: true },
                     pricingModel !== 'cash' && { label: 'Deposit', value: fmt(depositAmount || 0) },
                     pricingModel !== 'cash' && { label: 'Finance Balance', value: fmt(financeBalance) },
@@ -828,7 +1078,7 @@ const POSModule = () => {
                     { label: 'Pricing Model', value: PRICING_MODELS.find(m => m.value === pricingModel)?.label },
                     { label: 'Selling Price', value: fmt(sellingPrice || 0) },
                     discountAmount > 0 && { label: 'Discount Applied', value: `${discountPct}% = -${fmt(discountAmount)}` },
-                    vatApplicable && { label: 'VAT (16%)', value: fmt(vatAmount) },
+                    vatApplicable && { label: `VAT (${vatPercent}%)`, value: fmt(vatAmount) },
                     { label: 'Total Amount', value: fmt(totalAmount), bold: true },
                     pricingModel !== 'cash' && { label: 'Deposit (Now)', value: fmt(depositAmount || 0), bold: true },
                     pricingModel !== 'cash' && { label: 'Finance Balance', value: fmt(financeBalance) },

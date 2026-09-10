@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useToast } from '../../../../components/Toast';
+import { buildDividendStatement, downloadAccountingDocument } from '../../../../utils/accountingDocument';
 import Icon from '../../../../components/AppIcon';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
@@ -22,7 +23,7 @@ const EMPTY = {
  */
 const DividendsPanel = ({ ctx, ov }) => {
   const {
-    dividends = [], dividendAllocations = [], members = [], shareSettings,
+    dividends = [], dividendAllocations = [], members = [], shareSettings, sacco,
     declareDividend, calculateDividend, payDividend, cancelDividend, exportCSV,
   } = ctx;
   const toast = useToast();
@@ -38,6 +39,28 @@ const DividendsPanel = ({ ctx, ov }) => {
   const [payRef, setPayRef] = useState('');
 
   const memberName = (id) => members.find((m) => m.id === id)?.full_name || '—';
+  const memberOf = (a) => a.member || members.find((m) => m.id === a.member_id) || {};
+
+  /**
+   * A member's dividend slip, issued from the office. The withholding tax is
+   * deducted here and remitted on the member's behalf, so the member cannot
+   * account for it from a net figure alone — the statement prints gross, tax
+   * and net, and says plainly when an allocation has not actually been paid.
+   */
+  const [docBusy, setDocBusy] = useState(null);
+  const downloadAllocation = async (a, declaration) => {
+    setDocBusy(a.id);
+    try {
+      const filename = await downloadAccountingDocument(buildDividendStatement({
+        allocation: a, declaration, member: memberOf(a), sacco,
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the statement');
+    } finally {
+      setDocBusy(null);
+    }
+  };
   const allocationsFor = (id) => dividendAllocations.filter((a) => a.declaration_id === id);
 
   const paid = dividends.filter((d) => d.status === 'paid');
@@ -242,7 +265,7 @@ const DividendsPanel = ({ ctx, ov }) => {
             {allocationsFor(viewing.id).length === 0 ? (
               <EmptyState icon="Users" title="No allocations" hint="Run the calculation to allocate this dividend." />
             ) : (
-              <Table columns={['Member', 'Shares at record', 'Gross', 'Tax', 'Net', 'Status']}>
+              <Table columns={['Member', 'Shares at record', 'Gross', 'Tax', 'Net', 'Status', '']}>
                 {[...allocationsFor(viewing.id)]
                   .sort((a, b) => num(b.net_amount) - num(a.net_amount))
                   .map((a) => (
@@ -253,6 +276,19 @@ const DividendsPanel = ({ ctx, ov }) => {
                       <td className="py-2.5 pr-4 text-muted-foreground">{num(a.tax_amount) > 0 ? KES(a.tax_amount) : '—'}</td>
                       <td className="py-2.5 pr-4 font-semibold text-foreground">{KES(a.net_amount)}</td>
                       <td className="py-2.5 pr-4"><Badge status={a.status} /></td>
+                      <td className="py-2.5 pr-0 text-right">
+                        <button
+                          onClick={() => downloadAllocation(a, viewing)}
+                          disabled={docBusy === a.id}
+                          title={a.status === 'paid'
+                            ? `Download the payment advice for ${a.member?.full_name || memberName(a.member_id)}`
+                            : `Download the entitlement advice for ${a.member?.full_name || memberName(a.member_id)}`}
+                          className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                        >
+                          <Icon name={docBusy === a.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                            className={docBusy === a.id ? 'animate-spin' : ''} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
               </Table>

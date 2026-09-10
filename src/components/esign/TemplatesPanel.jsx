@@ -4,6 +4,7 @@ import Icon from "../AppIcon";
 import FieldEditor from "./FieldEditor";
 import { sendSigningInvite } from "../../services/emailService";
 import { sendSigningLinkSMS } from "../../services/smsService";
+import useDragReorder, { ReorderHandle, newRowUid } from "./useDragReorder";
 
 // ── Reusable signing templates ────────────────────────────────────────────────
 //
@@ -167,12 +168,13 @@ function TemplateBuilder({ adminId, onCancel, onSaved }) {
   const [description, setDescription] = useState("");
   const [message, setMessage] = useState("");
   const [order, setOrder] = useState("sequential");
-  const [roles, setRoles] = useState([{ label: "Signer 1" }]);
+  const [roles, setRoles] = useState([{ uid: newRowUid(), label: "Signer 1" }]);
   const [fileUrl, setFileUrl] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const setRole = (i, v) => setRoles((prev) => prev.map((r, j) => (j === i ? { label: v } : r)));
+  const setRole = (i, v) => setRoles((prev) => prev.map((r, j) => (j === i ? { ...r, label: v } : r)));
+  const drag = useDragReorder(setRoles);
 
   // Upload the source PDF, then move into placement. The object is written under
   // a templates/ prefix inside the tenant's own folder so the storage policy
@@ -331,14 +333,16 @@ function TemplateBuilder({ adminId, onCancel, onSaved }) {
       <div className="bg-card border border-border rounded-xl p-5 space-y-3">
         <div className="flex items-center justify-between">
           <label className="text-xs font-semibold text-foreground">Roles</label>
-          <button onClick={() => setRoles((p) => [...p, { label: `Signer ${p.length + 1}` }])}
+          <button onClick={() => setRoles((p) => [...p, { uid: newRowUid(), label: `Signer ${p.length + 1}` }])}
             disabled={roles.length >= 5}
             className="text-xs text-primary font-medium hover:underline disabled:opacity-40">
             + Add role
           </button>
         </div>
         {roles.map((r, i) => (
-          <div key={i} className="flex items-center gap-2">
+          <div key={r.uid} {...drag.rowProps(i)}
+            className={`flex items-center gap-2 transition-all ${drag.rowClass(i)}`}>
+            {roles.length > 1 && <ReorderHandle {...drag.handleProps(i, roles.length, "role")} />}
             <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
               style={{ background: ROLE_PALETTE[i % ROLE_PALETTE.length] }} />
             <input value={r.label} onChange={(e) => setRole(i, e.target.value)}

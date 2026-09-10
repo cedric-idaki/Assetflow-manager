@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
@@ -15,7 +15,8 @@ import PaymentRemindersTab from './components/PaymentRemindersTab';
 import SalesReportTab from './components/SalesReportTab';
 
 import KYCReviewTab   from './components/KYCReviewTab';
-import CrmOversightTab from '../../components/crm/CrmOversightTab';
+import AdminCrmTab from '../../components/crm/AdminCrmTab';
+import SalesTeamPanel from '../../components/sales/SalesTeamPanel';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -68,14 +69,18 @@ const AdminDashboard = () => {
     contracts, payments, auditLogs, subscription, companyProfile,
     salesAnalytics, loading, connectionStatus,
     refetch, inviteClient, createAgent, inviteStaff, toggleStaffActive,
-    uploadContract, exportCSV,
+    uploadContract, exportCSV, setSelfSignupEnabled, rotateSignupCode,
   } = useAdminDashboardContext();
 
   // Tab state lives in the URL so it survives navigation and page refresh
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'overview';
   const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
-  const navigate = useNavigate();
+
+  // Which half of the Sales Agents tab is showing. Local rather than in the
+  // URL: the tab itself is the thing worth linking to, and a second URL key
+  // would have to be cleared every time the tab changed.
+  const [agentView, setAgentView] = useState('roster');
 
   // Seat limit comes from the subscription's own snapshot (reflects purchased
   // extra users), falling back to the catalog plan. Only portal-staff consume
@@ -121,14 +126,6 @@ const AdminDashboard = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate('/finance-hub')}
-              className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border border-border text-muted-foreground hover:text-primary hover:border-primary/40 transition-all"
-              title="Open Finance Hub"
-            >
-              <Icon name="TrendingUp" size={15} color="currentColor" />
-              <span className="hidden sm:inline text-xs">Finance Hub</span>
-            </button>
             <ConnDot status={connectionStatus} />
             <button
               onClick={refetch}
@@ -222,16 +219,49 @@ const AdminDashboard = () => {
                 agents={agents}
                 onInvite={inviteClient}
                 onExport={exportCSV}
+                companyProfile={companyProfile}
+                onSetSelfSignup={setSelfSignupEnabled}
+                onRotateSignupCode={rotateSignupCode}
               />
             )}
 
             {activeTab === 'agents' && (
-              <AgentsTab
-                agents={agents}
-                salesAnalytics={salesAnalytics}
-                onCreateAgent={createAgent}
-                onExport={exportCSV}
-              />
+              <div className="space-y-4">
+                {/* Roster and org chart are two views of the same people, so
+                    they live under one tab rather than competing for a place
+                    in the tab bar. The roster stays the default: it is what
+                    this tab has always shown. */}
+                <div className="flex rounded-xl border border-border overflow-hidden w-fit">
+                  {[
+                    { id: 'roster', label: 'Agents',         icon: 'Users' },
+                    { id: 'teams',  label: 'Team structure', icon: 'Network' },
+                  ].map(v => (
+                    <button
+                      key={v.id}
+                      onClick={() => setAgentView(v.id)}
+                      className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold transition-colors ${
+                        agentView === v.id
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-card text-muted-foreground hover:bg-muted'
+                      }`}
+                    >
+                      <Icon name={v.icon} size={13} color="currentColor" />
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+
+                {agentView === 'roster' ? (
+                  <AgentsTab
+                    agents={agents}
+                    salesAnalytics={salesAnalytics}
+                    onCreateAgent={createAgent}
+                    onExport={exportCSV}
+                  />
+                ) : (
+                  <SalesTeamPanel onExport={exportCSV} />
+                )}
+              </div>
             )}
 
             {activeTab === 'staff' && (
@@ -267,13 +297,15 @@ const AdminDashboard = () => {
           </>
         )}
 
-        {/* CRM TAB — the pipeline and contact history behind the Sales Agents
-            tab. Rendered outside the loading swap because it fetches its own
-            rows (leads / crm_interactions arrive through the supervisor
-            policies, not through useAdminDashboard) and carries its own
-            skeleton — gating it on this page's spinner would leave it blank
-            while its data was already there. */}
-        {activeTab === 'crm' && <CrmOversightTab onExport={exportCSV} />}
+        {/* CRM TAB — the admin's own customer relationships (client book,
+            diary, communication record, reporting) with the read-only agent
+            oversight kept as one view inside it. Rendered outside the loading
+            swap because it fetches its own rows (clients / crm_interactions /
+            follow_ups arrive through the supervisor policies, not through
+            useAdminDashboard) and carries its own skeleton — gating it on this
+            page's spinner would leave it blank while its data was already
+            there. */}
+        {activeTab === 'crm' && <AdminCrmTab onExport={exportCSV} />}
 
         {/* CONTRACTS TAB — render directly (no loading swap) so the upload modal
             and its selected-file state aren't torn down by a background refetch */}

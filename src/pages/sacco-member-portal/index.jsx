@@ -8,6 +8,7 @@ import Icon from '../../components/AppIcon';
 import OverviewTab      from './components/OverviewTab';
 import ContributionsTab from './components/ContributionsTab';
 import LoansTab         from './components/LoansTab';
+import GuaranteesTab    from './components/GuaranteesTab';
 import SharesTab        from './components/SharesTab';
 import VotingTab        from './components/VotingTab';
 import ElectionsTab     from './components/ElectionsTab';
@@ -49,6 +50,7 @@ const SaccoMemberPortal = () => {
     { id: 'overview',      label: 'Overview',      icon: 'LayoutDashboard' },
     { id: 'contributions', label: 'Contributions', icon: 'PiggyBank' },
     { id: 'loans',         label: 'Loans',         icon: 'Banknote' },
+    { id: 'guarantees',    label: 'Guarantees',    icon: 'ShieldCheck', badge: stats.pendingGuarantees },
     { id: 'shares',        label: 'Shares',        icon: 'PieChart' },
     { id: 'voting',        label: 'Voting',        icon: 'Vote',      badge: stats.openMotions },
     { id: 'elections',     label: 'Elections',     icon: 'Award',     badge: stats.openElections },
@@ -115,6 +117,7 @@ const SaccoMemberPortal = () => {
             {activeTab === 'overview'      && <OverviewTab ctx={ctx} onNavigate={setActiveTab} />}
             {activeTab === 'contributions' && <ContributionsTab ctx={ctx} />}
             {activeTab === 'loans'         && <LoansTab ctx={ctx} />}
+            {activeTab === 'guarantees'    && <GuaranteesTab ctx={ctx} />}
             {activeTab === 'shares'        && <SharesTab ctx={ctx} />}
             {activeTab === 'voting'        && <VotingTab ctx={ctx} />}
             {activeTab === 'elections'     && <ElectionsTab ctx={ctx} />}

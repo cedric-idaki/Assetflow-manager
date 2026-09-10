@@ -18,7 +18,7 @@ const ApprovalThresholdConfig = () => {
   const fetchThresholds = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase?.from('approval_thresholds')?.select('*')?.order('display_name');
+      const { data, error } = await supabase.from('approval_thresholds').select('*').order('display_name');
       if (error) throw error;
       setThresholds(data || []);
     } catch (err) {
@@ -43,14 +43,14 @@ const ApprovalThresholdConfig = () => {
   const saveEdit = async (id) => {
     setSaving(id);
     try {
-      const { error } = await supabase?.from('approval_thresholds')?.update({
+      const { error } = await supabase.from('approval_thresholds').update({
           requires_approval: editValues?.requires_approval,
           auto_approve_below: editValues?.auto_approve_below !== '' ? Number(editValues?.auto_approve_below) : null,
           escalate_above: editValues?.escalate_above !== '' ? Number(editValues?.escalate_above) : null,
           sla_hours: Number(editValues?.sla_hours),
           bulk_eligible: editValues?.bulk_eligible,
           required_checker_role: editValues?.required_checker_role,
-        })?.eq('id', id);
+        }).eq('id', id);
       if (error) throw error;
       await fetchThresholds();
       setEditingId(null);

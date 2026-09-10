@@ -6,6 +6,7 @@ import MakerCheckerTab from './components/MakerCheckerTab';
 import AuditTrailTab from './components/AuditTrailTab';
 import UserDevicesTab from './components/UserDevicesTab';
 import ModulesTab from './components/ModulesTab';
+import EtimsTab from './components/EtimsTab';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { useAuth } from '../../contexts/AuthContext';
@@ -26,6 +27,11 @@ const SystemAdministration = () => {
     { id: 'devices',      label: 'Devices',             icon: 'MonitorSmartphone', count: null,            superOnly: false },
     // Never superOnly: this is where a tenant switches its own modules back on.
     { id: 'modules',      label: 'Modules',             icon: 'ToggleLeft',     count: null,               superOnly: false },
+    // Never superOnly: KRA compliance is the tenant's own legal obligation, so
+    // the tenant configures it. The tab renders its own "switched off" state
+    // when the module is frozen, rather than being hidden — a business that
+    // needs eTIMS has to be able to find it.
+    { id: 'etims',        label: 'KRA eTIMS',           icon: 'Receipt',        count: null,               superOnly: false },
     { id: 'audit',        label: 'Audit Trail',         icon: 'FileText',       count: null,               superOnly: false },
   ];
 
@@ -42,6 +48,7 @@ const SystemAdministration = () => {
       case 'maker-checker': return <MakerCheckerTab onBadgeCountChange={setMakerCheckerCount} />;
       case 'devices':       return <UserDevicesTab />;
       case 'modules':       return <ModulesTab />;
+      case 'etims':         return <EtimsTab />;
       case 'audit':         return <AuditTrailTab />;
       default:              return <UserManagementTab />;
     }

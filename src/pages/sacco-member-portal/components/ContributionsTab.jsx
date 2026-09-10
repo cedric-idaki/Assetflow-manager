@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useToast } from '../../../components/Toast';
 import Icon from '../../../components/AppIcon';
+import { buildContributionReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
 import {
   Card, StatCard, Badge, Table, EmptyState, GhostButton, PrimaryButton, Modal,
   Field, TextInput, NumberInput, Select, ProgressBar, ContributionChart,
@@ -31,10 +32,37 @@ const POLL_LIMIT = 30; // ~2 minutes
 
 const ContributionsTab = ({ ctx }) => {
   const {
-    me, contributions, contributionTypes, contributionStats, stats, exportCSV,
+    me, sacco, contributions, contributionTypes, contributionStats, stats, exportCSV,
     submitContribution, cancelContribution, payContributionByMpesa, checkMpesaContribution,
   } = ctx;
   const toast = useToast();
+
+  const [receipting, setReceipting] = useState(null);
+
+  /**
+   * The member's own copy of a contribution. The office side has issued these
+   * since the ledger was built; the member — the one person who actually needs
+   * the slip — could only export the whole history as a CSV and had to ask the
+   * treasurer for anything that looked like proof.
+   *
+   * The row carries no member join (these are all mine), so `me` is attached
+   * here; the builder decides receipt vs acknowledgement from the status, so an
+   * unsettled declaration can never be waved about as proof of payment.
+   */
+  const downloadReceipt = async (c) => {
+    setReceipting(c.id);
+    try {
+      const filename = await downloadAccountingDocument(buildContributionReceipt({
+        contribution: { ...c, member: c.member || me },
+        sacco,
+      }));
+      toast.success(filename, 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the receipt');
+    } finally {
+      setReceipting(null);
+    }
+  };
 
   const [open, setOpen]     = useState(false);
   const [form, setForm]     = useState(EMPTY);
@@ -320,7 +348,7 @@ const ContributionsTab = ({ ctx }) => {
         {contributions.length === 0 ? (
           <EmptyState icon="PiggyBank" title="No contributions recorded yet" hint="Use “Make a contribution” above to record your first payment." />
         ) : (
-          <Table columns={['Transaction no', 'Date & time', 'Type', 'Account', 'Method', 'Reference', 'Received by', 'Amount', 'Status']}>
+          <Table columns={['Transaction no', 'Date & time', 'Type', 'Account', 'Method', 'Reference', 'Received by', 'Amount', 'Status', '']}>
             {contributions.map((c) => (
               <tr key={c.id} className={`border-b border-border/60 ${c.status === 'reversed' ? 'opacity-60' : ''}`}>
                 <td className="py-2.5 pr-4 font-mono text-xs text-foreground">{c.txn_no || '—'}</td>
@@ -343,6 +371,19 @@ const ContributionsTab = ({ ctx }) => {
                   {c.status === 'failed' && c.failure_reason && (
                     <span className="block text-[11px] text-muted-foreground mt-0.5 max-w-[180px]">{c.failure_reason}</span>
                   )}
+                </td>
+                <td className="py-2.5 pr-0 text-right">
+                  <button
+                    onClick={() => downloadReceipt(c)}
+                    disabled={receipting === c.id}
+                    title={isSettled(c)
+                      ? `Download the receipt for ${c.txn_no || 'this contribution'}`
+                      : `Download an acknowledgement for ${c.txn_no || 'this contribution'}`}
+                    className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
+                  >
+                    <Icon name={receipting === c.id ? 'Loader' : 'Download'} size={14} color="currentColor"
+                      className={receipting === c.id ? 'animate-spin' : ''} />
+                  </button>
                 </td>
               </tr>
             ))}

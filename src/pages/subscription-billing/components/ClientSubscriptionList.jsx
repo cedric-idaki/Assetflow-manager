@@ -1,61 +1,77 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
-import {
-  CLIENT_TYPE, TIER,
-  CORPORATE_TIERS, SACCO_TIERS,
-  calcCorporateTotal, calcSaccoTotal,
-} from '../../../config/subscriptionPricing';
+import { CLIENT_TYPE, TIER, tiersFor, quoteSubscription } from '../../../config/subscriptionPricing';
 
-const fmt = (n) => `KES ${(n || 0).toLocaleString()}`;
+const fmt = (n) => `KES ${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, {
+  minimumFractionDigits: 2, maximumFractionDigits: 2,
+})}`;
 
 // ─── Tier badge ────────────────────────────────────────────────────────────────
 const TierBadge = ({ tierKey, type }) => {
-  const tiers = type === CLIENT_TYPE.CORPORATE ? CORPORATE_TIERS : SACCO_TIERS;
-  const tier  = tiers[tierKey];
-  const icons = { bronze: 'Award', silver: 'Shield', gold: 'Crown' };
+  const tier = tiersFor(type)[tierKey];
   if (!tier) return null;
   return (
     <span
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold"
       style={{ background: tier.bg, color: tier.accent }}
     >
-      <Icon name={icons[tierKey]} size={10} color={tier.accent} />
+      <Icon name={tier.icon} size={10} color={tier.accent} />
       {tier.label}
     </span>
   );
 };
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
+// PLACEHOLDER ROWS — this list is not yet wired to company_subscriptions. The
+// MONEY, however, is real: each row is priced by buildSystemInvoice() as a
+// renewal, so the totals and the VAT split are what these clients would
+// actually be invoiced. Replace the array with a query and nothing below
+// changes.
 const MOCK_CLIENTS = [
-  { id: 1, name: 'Acme Kenya Ltd',      type: CLIENT_TYPE.CORPORATE, tier: TIER.GOLD,   users: 35,  members: 0,  extraSignings: 5,  status: 'active'   },
-  { id: 2, name: 'Sunrise SACCO',       type: CLIENT_TYPE.SACCO,     tier: TIER.SILVER, users: 0,   members: 240, extraSignings: 0,  status: 'active'   },
-  { id: 3, name: 'TechBridge Solutions',type: CLIENT_TYPE.CORPORATE, tier: TIER.SILVER, users: 18,  members: 0,  extraSignings: 2,  status: 'active'   },
-  { id: 4, name: 'Fahari SACCO',        type: CLIENT_TYPE.SACCO,     tier: TIER.BRONZE, users: 0,   members: 120, extraSignings: 0,  status: 'active'   },
-  { id: 5, name: 'Greenfield Corp',     type: CLIENT_TYPE.CORPORATE, tier: TIER.BRONZE, users: 8,   members: 0,  extraSignings: 0,  status: 'suspended'},
-  { id: 6, name: 'Pamoja SACCO',        type: CLIENT_TYPE.SACCO,     tier: TIER.GOLD,   users: 0,   members: 600, extraSignings: 10, status: 'active'   },
+  { id: 1, name: 'Acme Kenya Ltd',       type: CLIENT_TYPE.CORPORATE, seats: 35,  storageGb: 0,  status: 'active' },
+  { id: 2, name: 'Sunrise SACCO',        type: CLIENT_TYPE.SACCO,     seats: 240, storageGb: 12, status: 'active' },
+  { id: 3, name: 'TechBridge Solutions', type: CLIENT_TYPE.CORPORATE, seats: 18,  storageGb: 0,  status: 'active' },
+  { id: 4, name: 'Fahari SACCO',         type: CLIENT_TYPE.SACCO,     seats: 120, storageGb: 0,  status: 'active' },
+  { id: 5, name: 'Greenfield Corp',      type: CLIENT_TYPE.CORPORATE, seats: 8,   storageGb: 0,  status: 'suspended' },
+  { id: 6, name: 'Pamoja SACCO',         type: CLIENT_TYPE.SACCO,     seats: 600, storageGb: 30, status: 'active' },
 ];
 
 const ClientSubscriptionList = ({ onEditClient }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
 
-  const filtered = MOCK_CLIENTS.filter(c => {
+  // Every row is a RENEWAL: an existing client is never re-charged the
+  // installation fee. The tier is derived from headcount rather than stored on
+  // the row, so the badge and the amount beside it can never disagree.
+  const priced = MOCK_CLIENTS.map((client) => {
+    const quote = quoteSubscription({
+      clientType: client.type,
+      seats: client.seats,
+      storageGb: client.storageGb,
+      chargeInstallation: false,
+    });
+    return { ...client, quote, tier: quote.tier?.id || TIER.SILVER };
+  });
+
+  const filtered = priced.filter((c) => {
     const matchSearch = c.name.toLowerCase().includes(search.toLowerCase());
     const matchFilter = filter === 'all' || c.type === filter || c.status === filter;
     return matchSearch && matchFilter;
   });
 
-  const getTotal = (client) => {
-    if (client.type === CLIENT_TYPE.CORPORATE) {
-      return calcCorporateTotal(client.tier, client.users, client.extraSignings).total;
-    }
-    return calcSaccoTotal(client.tier, client.members, client.extraSignings).total;
-  };
+  const totals = filtered.reduce(
+    (acc, c) => ({
+      net: acc.net + c.quote.subtotal,
+      vat: acc.vat + c.quote.vatAmount,
+      gross: acc.gross + c.quote.total,
+    }),
+    { net: 0, vat: 0, gross: 0 },
+  );
 
-  const getQuantityLabel = (client) =>
-    client.type === CLIENT_TYPE.CORPORATE
-      ? `${client.users} users`
-      : `${client.members} members`;
+  const quantityLabel = (c) =>
+    c.type === CLIENT_TYPE.CORPORATE
+      ? `${c.quote.billedSeats} users`
+      : `${c.quote.billedSeats} members`;
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -63,24 +79,28 @@ const ClientSubscriptionList = ({ onEditClient }) => {
       <div className="px-5 py-4 border-b border-border flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
         <div>
           <h2 className="text-base font-semibold text-foreground">Client Subscriptions</h2>
-          <p className="text-xs text-muted-foreground">{filtered.length} client{filtered.length !== 1 ? 's' : ''}</p>
+          <p className="text-xs text-muted-foreground">
+            {filtered.length} client{filtered.length !== 1 ? 's' : ''} · recurring monthly invoices
+          </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {/* Search */}
           <div className="relative">
-            <Icon name="Search" size={13} color="var(--color-muted-foreground)"
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Icon
+              name="Search"
+              size={13}
+              color="var(--color-muted-foreground)"
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+            />
             <input
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="Search clients…"
               className="pl-8 pr-3 py-1.5 rounded-lg border border-border bg-background text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
           </div>
-          {/* Filter */}
           <select
             value={filter}
-            onChange={e => setFilter(e.target.value)}
+            onChange={(e) => setFilter(e.target.value)}
             className="px-2 py-1.5 rounded-lg border border-border bg-background text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
           >
             <option value="all">All clients</option>
@@ -101,24 +121,32 @@ const ClientSubscriptionList = ({ onEditClient }) => {
               <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Type</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Tier</th>
               <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground">Quantity</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground">Monthly Total</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground whitespace-nowrap">Taxable Value</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground">VAT</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground whitespace-nowrap">Monthly Total</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground">Status</th>
               <th className="px-4 py-3" />
             </tr>
           </thead>
           <tbody>
-            {filtered.map(client => (
-              <tr key={client.id} className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
+            {filtered.map((client) => (
+              <tr
+                key={client.id}
+                className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors"
+              >
                 <td className="px-5 py-3">
                   <p className="text-xs font-semibold text-foreground">{client.name}</p>
                 </td>
                 <td className="px-4 py-3">
-                  <span className={`inline-flex items-center gap-1 text-xs font-medium ${
-                    client.type === CLIENT_TYPE.CORPORATE ? 'text-blue-600' : 'text-purple-600'
-                  }`}>
+                  <span
+                    className={`inline-flex items-center gap-1 text-xs font-medium ${
+                      client.type === CLIENT_TYPE.CORPORATE ? 'text-blue-600' : 'text-purple-600'
+                    }`}
+                  >
                     <Icon
                       name={client.type === CLIENT_TYPE.CORPORATE ? 'Building2' : 'Users'}
-                      size={11} color="currentColor"
+                      size={11}
+                      color="currentColor"
                     />
                     {client.type === CLIENT_TYPE.CORPORATE ? 'Corporate' : 'SACCO'}
                   </span>
@@ -126,19 +154,31 @@ const ClientSubscriptionList = ({ onEditClient }) => {
                 <td className="px-4 py-3">
                   <TierBadge tierKey={client.tier} type={client.type} />
                 </td>
-                <td className="px-4 py-3 text-right text-xs text-muted-foreground">
-                  {getQuantityLabel(client)}
+                <td className="px-4 py-3 text-right text-xs text-muted-foreground whitespace-nowrap">
+                  {quantityLabel(client)}
                 </td>
-                <td className="px-4 py-3 text-right text-xs font-bold text-foreground">
-                  {fmt(getTotal(client))}
+                <td className="px-4 py-3 text-right text-xs text-muted-foreground whitespace-nowrap">
+                  {fmt(client.quote.subtotal)}
+                </td>
+                <td className="px-4 py-3 text-right text-xs text-muted-foreground whitespace-nowrap">
+                  {fmt(client.quote.vatAmount)}
+                </td>
+                <td className="px-4 py-3 text-right text-xs font-bold text-foreground whitespace-nowrap">
+                  {fmt(client.quote.total)}
                 </td>
                 <td className="px-4 py-3 text-center">
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                    client.status === 'active'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-red-100 text-red-700'
-                  }`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${client.status === 'active' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+                      client.status === 'active'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        client.status === 'active' ? 'bg-emerald-500' : 'bg-red-500'
+                      }`}
+                    />
                     {client.status === 'active' ? 'Active' : 'Suspended'}
                   </span>
                 </td>
@@ -155,7 +195,7 @@ const ClientSubscriptionList = ({ onEditClient }) => {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-5 py-10 text-center text-xs text-muted-foreground">
+                <td colSpan={9} className="px-5 py-10 text-center text-xs text-muted-foreground">
                   No clients match your search.
                 </td>
               </tr>
@@ -165,11 +205,19 @@ const ClientSubscriptionList = ({ onEditClient }) => {
       </div>
 
       {/* Footer totals */}
-      <div className="px-5 py-3 bg-muted/20 border-t border-border flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">Total monthly revenue</span>
-        <span className="text-sm font-bold text-primary">
-          {fmt(filtered.reduce((sum, c) => sum + getTotal(c), 0))}
+      <div className="px-5 py-3 bg-muted/20 border-t border-border flex items-center justify-between gap-4 flex-wrap">
+        <span className="text-xs text-muted-foreground">
+          Recurring monthly revenue — excludes one-time installation fees
         </span>
+        <div className="flex items-center gap-5">
+          <span className="text-xs text-muted-foreground">
+            Taxable <strong className="text-foreground">{fmt(totals.net)}</strong>
+          </span>
+          <span className="text-xs text-muted-foreground">
+            VAT <strong className="text-foreground">{fmt(totals.vat)}</strong>
+          </span>
+          <span className="text-sm font-bold text-primary">{fmt(totals.gross)}</span>
+        </div>
       </div>
     </div>
   );

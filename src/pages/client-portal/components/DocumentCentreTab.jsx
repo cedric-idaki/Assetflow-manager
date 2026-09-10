@@ -200,6 +200,10 @@ const DocumentCentreTab = ({ clientProfile }) => {
   const [loading,      setLoading]      = useState(true);
   const [activeSection, setActiveSection] = useState('contracts');
   const [showUpload,   setShowUpload]   = useState(false);
+  // Documents waiting on THIS client's signature. Kept separate from
+  // `contracts` because they are not a status on a document the client already
+  // has — they are an action only they can take.
+  const [pendingSigs,  setPendingSigs]  = useState([]);
 
   const clientId = clientProfile?.id;
   const adminId  = clientProfile?.admin_id;
@@ -208,7 +212,7 @@ const DocumentCentreTab = ({ clientProfile }) => {
     if (!clientId) return;
     setLoading(true);
     try {
-      const [contractsRes, companyRes, kycRes] = await Promise.all([
+      const [contractsRes, companyRes, kycRes, sigRes] = await Promise.all([
         supabase
           .from('generated_contracts')
           .select('id, invoice_number, client_name, pricing_model, esign_status, signed_at, generated_at, file_url')
@@ -227,11 +231,20 @@ const DocumentCentreTab = ({ clientProfile }) => {
           .select('id, document_type, file_url, file_name, status, created_at, reviewer_notes')
           .eq('client_id', clientId)
           .order('created_at', { ascending: false }),
+
+        // esign_signers is staff-only by policy — it holds every signer's
+        // one-time token. This RPC returns only the caller's own, resolved
+        // from the session rather than from an argument. See 20260909160000.
+        supabase.rpc('my_pending_signatures'),
       ]);
 
       setContracts(contractsRes.data || []);
       setCompanyDocs(companyRes.data || []);
       setKycDocs(kycRes.data || []);
+      // A failure here must not blank the rest of the page: the documents the
+      // client already has are still theirs to read. An unavailable RPC (the
+      // migration not yet applied) simply means no signing banner.
+      setPendingSigs(sigRes?.error ? [] : (sigRes?.data || []));
     } catch (err) {
       console.error('DocumentCentre fetch error:', err);
     } finally {
@@ -252,6 +265,46 @@ const DocumentCentreTab = ({ clientProfile }) => {
     a.download = name || 'document';
     a.target = '_blank';
     a.click();
+  };
+
+  const SigningBanner = () => {
+    if (pendingSigs.length === 0) return null;
+    return (
+      <div className="mb-4 border border-amber-200 bg-amber-50 rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-amber-200 flex items-center gap-2">
+          <Icon name="PenLine" size={15} color="#b45309" />
+          <p className="text-sm font-semibold text-amber-900">
+            {pendingSigs.length === 1
+              ? 'A document is waiting for your signature'
+              : `${pendingSigs.length} documents are waiting for your signature`}
+          </p>
+        </div>
+        <ul className="divide-y divide-amber-200">
+          {pendingSigs.map(sig => (
+            <li key={sig.signer_id} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-amber-900 truncate">{sig.document_name}</p>
+                <p className="text-[11px] text-amber-700">
+                  Requested {sig.requested_at ? new Date(sig.requested_at).toLocaleDateString() : ''}
+                  {sig.expires_at ? ` · link expires ${new Date(sig.expires_at).toLocaleDateString()}` : ''}
+                </p>
+              </div>
+              {/* Same route the emailed link opens. The signing flow — identity
+                  check, OTP, consent, audit trail — is unchanged; this is a
+                  second way in for the customer who lost the email, not a
+                  second way to sign. */}
+              <a
+                href={`/sign/${sig.token}`}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0"
+                style={{ background: '#b45309' }}
+              >
+                Review and sign
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
   };
 
   const sections = [
@@ -281,6 +334,10 @@ const DocumentCentreTab = ({ clientProfile }) => {
           Upload Document
         </button>
       </div>
+
+      {/* What is waiting on the client, above what is merely on file. This is
+          the only ACTION on the screen; everything below it is an archive. */}
+      <SigningBanner />
 
       {/* Section tabs */}
       <div className="flex gap-2 flex-wrap">

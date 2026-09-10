@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
 import { tierById } from '../../config/saccoTiers';
 import SaccoAgentsTab from './components/SaccoAgentsTab';
+import CrmOversightTab from '../../components/crm/CrmOversightTab';
 import { emailLoginCredentials } from '../../services/credentialsEmailService';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
@@ -444,6 +445,7 @@ const SaccoOversight = () => {
           {[
             { id: 'overview', label: 'Overview',     icon: 'LayoutDashboard' },
             { id: 'agents',   label: 'Sales Agents', icon: 'Users' },
+            { id: 'crm',      label: 'CRM',          icon: 'Contact' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -460,6 +462,15 @@ const SaccoOversight = () => {
             </button>
           ))}
         </div>
+
+        {/* CRM TAB
+            The same oversight the business side gets — pipeline, follow-ups,
+            interactions, conversion, loss analysis, leaderboard — narrowed to
+            agents with agent_type 'sacco'. One implementation rather than a
+            parallel module: the work is identical whichever portal the agent
+            signed in through, and two copies would drift into disagreeing
+            about what a converted lead is. */}
+        {activeTab === 'crm' && <CrmOversightTab agentType="sacco" onExport={exportCSV} />}
 
         {/* SALES AGENTS TAB */}
         {activeTab === 'agents' && (

@@ -18,7 +18,10 @@ const StripePaymentForm = ({ clientSecret, amount, onSuccess, onCancel }) => {
     setErrorMessage('');
 
     try {
-      const { error, paymentIntent } = await stripe?.confirmPayment({
+      // Not `stripe?.` — the guard above already returned if it was null, and
+      // optional-chaining here would be actively harmful: it would resolve to
+      // `await undefined` and throw on the destructure instead of short-circuiting.
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
           return_url: `${window.location?.origin}/payment-collections-hub`,
@@ -34,7 +37,7 @@ const StripePaymentForm = ({ clientSecret, amount, onSuccess, onCancel }) => {
 
       if (paymentIntent?.status === 'succeeded') {
         // Confirm on backend and update DB
-        const { data, error: confirmError } = await supabase?.functions?.invoke('confirm-payment', {
+        const { data, error: confirmError } = await supabase.functions.invoke('confirm-payment', {
           body: { paymentIntentId: paymentIntent?.id },
         });
 

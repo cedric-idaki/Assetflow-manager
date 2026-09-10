@@ -149,6 +149,9 @@ const AssetClientManagement = () => {
         outstandingBalance: parseFloat(c.outstanding_balance || 0),
         notes: c.notes,
         kycStatus: c.kyc_status,
+        // account | cash. Decides whether this customer may be sold to on
+        // terms at all -- see migration 20260908180000.
+        customerType: c.customer_type || 'account',
         // All fields needed by the edit form
         account_number:     c.account_number,
         full_name:          c.full_name,
@@ -287,6 +290,51 @@ const AssetClientManagement = () => {
       setSyncing(false);
     }
   };
+
+  // ── Link an asset to a client ─────────────────────────────────────────────
+  // Both ids arrive from the modal as database UUIDs, in this order, whichever
+  // side the link was started from.
+  //
+  // `linked_client_id` is the only thing the buyer's portal filters "My Assets"
+  // on, so this write is what makes a client able to see what they are paying
+  // for. Cross-tenant pairing is impossible by construction — both candidate
+  // lists were loaded `.eq('admin_id', adminId)` — and RLS
+  // (assets_tenant_staff) refuses the update anyway.
+  const handleLinkAssetClient = useCallback(async (assetDbId, clientDbId) => {
+    if (!assetDbId || !clientDbId) {
+      throw new Error('Pick both an asset and a client to link.');
+    }
+
+    const asset  = assets.find(a => a._id === assetDbId);
+    const client = clients.find(c => c._id === clientDbId);
+
+    // Linking takes stock off the market. An asset that is already sold or
+    // financed keeps the status its sale gave it — re-linking one must never
+    // put it back up for sale.
+    const update = {
+      linked_client_id: clientDbId,
+      updated_at: new Date().toISOString(),
+    };
+    if (asset?.status === 'available') update.asset_status = 'reserved';
+
+    const { error: err } = await supabase
+      .from('assets')
+      .update(update)
+      .eq('id', assetDbId);
+    if (err) throw new Error(err.message);
+
+    await auditLogsService?.log(
+      'update',
+      'assets',
+      `Linked asset ${asset?.description || assetDbId} to client `
+        + `${client?.fullName || clientDbId}`
+        + `${client?.accountNumber ? ` (${client.accountNumber})` : ''}`
+    );
+
+    setShowLinkModal(false);
+    setLinkingData(null);
+    await loadAssets();
+  }, [assets, clients, loadAssets]);
 
   // ── Save client with admin_id ──────────────────────────────────────────────
   // ── Provision client portal login WITHOUT email (no rate limit) ───────────
@@ -757,21 +805,11 @@ const AssetClientManagement = () => {
         {showLinkModal && linkingData && (
           <LinkAssetClientModal
             type={linkingData.asset ? 'asset' : 'client'}
-            data={linkingData}
+            subject={linkingData.asset || linkingData.client}
             clients={linkingData.asset ? clients : undefined}
             assets={linkingData.client ? assets : undefined}
-            onSubmit={async (assetId, clientId) => {
-              const asset = assets.find(a => a.id === assetId);
-              if (asset?._id) {
-                await supabase
-                  .from('assets')
-                  .update({ linked_client_id: clientId })
-                  .eq('id', asset._id);
-              }
-              setShowLinkModal(false);
-              await loadAssets();
-            }}
-            onClose={() => setShowLinkModal(false)}
+            onSubmit={handleLinkAssetClient}
+            onClose={() => { setShowLinkModal(false); setLinkingData(null); }}
           />
         )}
         {showAssetDetails && selectedAsset && (

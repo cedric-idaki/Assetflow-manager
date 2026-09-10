@@ -1,8 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { fetchEmployeePiiBatch } from '../../../services/employeePiiService';
 import Icon from '../../../components/AppIcon';
 import StaffActivityReport from '../../../components/crm/StaffActivityReport';
+import ReportBuilder from '../../../pages/reports-analytics-center/components/ReportBuilder';
+import { computePayroll, payrollInputForEmployee } from '../../../utils/kenyaPayroll';
+import { computeVatReturn } from '../../../utils/vatLedger';
+import { buildCashFlow } from '../../../utils/financialStatements';
+import { fetchAllRows } from '../../../lib/fetchAllRows';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -51,64 +56,134 @@ const Table = ({ headers, rows, empty = 'No data' }) => (
   </div>
 );
 
+/**
+ * The posted ledger, for the reports that are accounting statements rather
+ * than operational summaries.
+ *
+ * Shared by the VAT and cash flow reports: both need every journal entry and
+ * the chart that types the accounts, and fetching it twice would double the
+ * work for identical data. Read through `fetchAllRows` rather than a capped
+ * query — a cash flow needs the opening position, which a newest-first limit
+ * silently drops.
+ */
+const useLedger = () => {
+  const [journals, setJournals] = useState([]);
+  const [coa, setCoa] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const [je, accounts] = await Promise.all([
+          fetchAllRows(() => supabase.from('journal_entries')
+            .select('entry_date, debit_account, credit_account, amount, status, trigger_event, description, reference')
+            .order('entry_date', { ascending: false })),
+          supabase.from('chart_of_accounts').select('account_code, account_name, account_type'),
+        ]);
+        if (cancelled) return;
+        setJournals(je || []);
+        setCoa(accounts.data || []);
+      } catch (err) { if (!cancelled) console.error('Ledger load:', err); }
+      finally { if (!cancelled) setLoading(false); }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { journals, coa, loading };
+};
+
 // ─── REPORT: VAT REPORT ───────────────────────────────────────────────────────
-const VATReport = ({ payments, assets }) => {
+const VATReport = () => {
   const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
 
-  const filtered = payments.filter(p => {
-    const d = new Date(p.payment_date || p.created_at);
-    return d.toISOString().slice(0, 7) === period && p.payment_status === 'completed';
+  // VAT is read off the ledger, not inferred from payments received.
+  //
+  // This report used to compute `outputVAT = payments * 0.16` and
+  // `inputVAT = outputVAT * 0.4`. Both were invented: the first assumes every
+  // shilling collected is a standard-rated sale with tax chargeable on top, the
+  // second assumes purchases without looking at any. The VAT accounts in the
+  // ledger already hold both figures. See src/utils/vatLedger.js.
+  const { journals, coa, loading } = useLedger();
+
+  const vat = computeVatReturn({ journals, chartOfAccounts: coa, period });
+
+  const rows = [...vat.entries.output, ...vat.entries.input].slice(0, 30).map(j => {
+    const isInput = vat.entries.input.includes(j);
+    return [
+      fmtDate(j.entry_date),
+      j.reference || j.description || '—',
+      isInput ? j.debit_account : j.credit_account,
+      <span className={isInput ? 'text-emerald-600 font-semibold' : 'text-red-500 font-semibold'}>
+        {isInput ? 'Input' : 'Output'}
+      </span>,
+      <span className="font-mono">{fmt(j.amount)}</span>,
+    ];
   });
-
-  const taxableRevenue = filtered.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-  const outputVAT      = taxableRevenue * 0.16;
-  const inputVAT       = outputVAT * 0.4;
-  const netVAT         = outputVAT - inputVAT;
-
-  const rows = filtered.slice(0, 20).map(p => [
-    fmtDate(p.payment_date || p.created_at),
-    p.reference_number || '—',
-    p.payment_method || '—',
-    fmt(p.amount),
-    fmt(parseFloat(p.amount || 0) * 0.16),
-    <span className="text-emerald-600 font-semibold">Standard Rate 16%</span>,
-  ]);
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-base font-semibold text-foreground">VAT Report</h3>
-          <p className="text-xs text-muted-foreground">Output and input VAT summary for filing</p>
+          <p className="text-xs text-muted-foreground">Output and input VAT from the ledger, for the selected period</p>
         </div>
         <input type="month" value={period} onChange={e => setPeriod(e.target.value)}
           className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KpiCard label="Taxable Revenue"  value={fmt(taxableRevenue)} icon="TrendingUp"  color="text-foreground" bg="bg-blue-100 dark:bg-blue-900/30" />
-        <KpiCard label="Output VAT (16%)" value={fmt(outputVAT)}      icon="ArrowUpRight" color="text-red-600"   bg="bg-red-100 dark:bg-red-900/30" />
-        <KpiCard label="Input VAT (Est.)" value={fmt(inputVAT)}       icon="ArrowDownLeft" color="text-emerald-600" bg="bg-emerald-100 dark:bg-emerald-900/30" />
-        <KpiCard label="Net VAT Payable"  value={fmt(netVAT)}         icon="Receipt"      color="text-primary"   bg="bg-primary/10" />
+        <KpiCard label="Standard Rated Sales" value={fmt(vat.taxableSales)} icon="TrendingUp"  color="text-foreground" bg="bg-blue-100 dark:bg-blue-900/30" />
+        <KpiCard label="Output VAT (16%)"     value={fmt(vat.outputVAT)}    icon="ArrowUpRight" color="text-red-600"   bg="bg-red-100 dark:bg-red-900/30" />
+        <KpiCard label="Input VAT Claimable"  value={fmt(vat.inputVAT)}     icon="ArrowDownLeft" color="text-emerald-600" bg="bg-emerald-100 dark:bg-emerald-900/30" />
+        <KpiCard label="Net VAT Payable"      value={fmt(vat.netVAT)}       icon="Receipt"      color="text-primary"   bg="bg-primary/10" />
       </div>
+
+      {/* A zero input VAT is now a real answer, so say which kind of zero it is. */}
+      {!loading && vat.inputVAT === 0 && vat.outputVAT !== 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 dark:bg-amber-900/20 dark:border-amber-800">
+          <p className="text-sm font-semibold text-amber-800 dark:text-amber-400">No input VAT recorded</p>
+          <p className="text-xs text-amber-700 dark:text-amber-500 mt-1">
+            {vat.diagnostics.hasInputVatAccount
+              ? 'An input VAT account exists but nothing was posted to it this period, so nothing is being reclaimed.'
+              : 'No input VAT account exists in the chart of accounts. Add one (e.g. "Input VAT", a current asset) and post the VAT on purchases to it.'}
+          </p>
+        </div>
+      )}
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 dark:bg-amber-900/20 dark:border-amber-800">
         <p className="text-sm font-semibold text-amber-800 dark:text-amber-400">VAT Return Due</p>
         <p className="text-xs text-amber-700 dark:text-amber-500 mt-1">
-          VAT for {new Date(period + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })} is due by the 20th of the following month. Net VAT payable: <strong>{fmt(netVAT)}</strong>
+          VAT for {new Date(period + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })} is due by the 20th of the following month.{' '}
+          {vat.netVAT < 0
+            ? <>Credit carried forward: <strong>{fmt(Math.abs(vat.netVAT))}</strong></>
+            : <>Net VAT payable: <strong>{fmt(vat.netVAT)}</strong></>}
         </p>
       </div>
 
-      <Table headers={['Date', 'Reference', 'Method', 'Amount', 'VAT Amount', 'Rate']} rows={rows} empty="No transactions in selected period" />
+      {loading
+        ? <div className="flex items-center justify-center py-12"><p className="text-sm text-muted-foreground">Loading ledger…</p></div>
+        : <Table headers={['Date', 'Reference', 'Account', 'Side', 'VAT Amount']} rows={rows} empty="No VAT entries posted in this period" />}
     </div>
   );
 };
 
 // ─── REPORT: CASH FLOW ────────────────────────────────────────────────────────
-const CashFlowReport = ({ payments }) => {
-  const [months] = useState(6);
+const CashFlowReport = () => {
+  const months = 6;
+  const { journals, coa, loading } = useLedger();
 
-  const getLast6Months = () => {
+  // Actual movements on the cash accounts, month by month.
+  //
+  // Outflows were `inflows * 0.35` — a flat assumption that every month spends
+  // 35% of what it takes, which made "net cash flow" a fixed 65% of collections
+  // and the chart a picture of one constant. Inflows were no better: they
+  // counted completed client payments only, so capital introduced, loans drawn
+  // and every other receipt were invisible. Both sides now come off the ledger.
+  // See src/utils/financialStatements.js.
+  const monthKeys = useMemo(() => {
     const result = [];
     for (let i = months - 1; i >= 0; i--) {
       const d = new Date();
@@ -116,24 +191,39 @@ const CashFlowReport = ({ payments }) => {
       result.push(d.toISOString().slice(0, 7));
     }
     return result;
-  };
+  }, []);
 
-  const monthlyData = getLast6Months().map(m => {
-    const inflows  = payments.filter(p => (p.payment_date || p.created_at || '').startsWith(m) && p.payment_status === 'completed').reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-    const outflows = inflows * 0.35; // estimated expenses
-    return { month: new Date(m + '-01').toLocaleString('default', { month: 'short', year: '2-digit' }), inflows, outflows, net: inflows - outflows };
-  });
+  const monthlyData = useMemo(() => monthKeys.map(m => {
+    const cf = buildCashFlow({ journals, chartOfAccounts: coa, period: m });
+    return {
+      key: m,
+      month: new Date(m + '-01').toLocaleString('default', { month: 'short', year: '2-digit' }),
+      inflows: cf.inflows,
+      outflows: cf.outflows,
+      net: cf.netChange,
+      closing: cf.closingCash,
+      operating: cf.operating,
+      investing: cf.investing,
+      financing: cf.financing,
+    };
+  }), [monthKeys, journals, coa]);
 
   const totalInflows  = monthlyData.reduce((s, m) => s + m.inflows, 0);
   const totalOutflows = monthlyData.reduce((s, m) => s + m.outflows, 0);
   const netCashflow   = totalInflows - totalOutflows;
-  const maxVal        = Math.max(...monthlyData.map(m => m.inflows), 1);
+  // Scaled against the largest movement in EITHER direction, so the two bars in
+  // a row are comparable. Scaling outflows against peak inflow made a month
+  // that spent more than it earned draw a bar past the end of its track.
+  const maxVal = Math.max(...monthlyData.map(m => Math.max(m.inflows, m.outflows)), 1);
+
+  const cashAccountNames = buildCashFlow({ journals, chartOfAccounts: coa }).cashAccountNames;
 
   const rows = monthlyData.map(m => [
     m.month,
     <span className="text-emerald-600 font-semibold">{fmt(m.inflows)}</span>,
     <span className="text-red-500">{fmt(m.outflows)}</span>,
     <span className={`font-bold ${m.net >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{fmt(m.net)}</span>,
+    <span className="font-mono text-xs text-muted-foreground">{fmt(m.closing)}</span>,
     <div className="flex items-center gap-2 min-w-24">
       <Bar pct={(m.inflows / maxVal) * 100} color="bg-emerald-500" />
     </div>,
@@ -143,8 +233,21 @@ const CashFlowReport = ({ payments }) => {
     <div className="space-y-5">
       <div>
         <h3 className="text-base font-semibold text-foreground">Cash Flow Statement</h3>
-        <p className="text-xs text-muted-foreground">6-month cash inflows and outflows summary</p>
+        <p className="text-xs text-muted-foreground">
+          {months}-month cash movement, from the ledger
+          {cashAccountNames.length > 0 && ` · Cash accounts: ${cashAccountNames.join(', ')}`}
+        </p>
       </div>
+
+      {!loading && cashAccountNames.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 dark:bg-amber-900/20 dark:border-amber-800">
+          <p className="text-sm font-semibold text-amber-800 dark:text-amber-400">No cash accounts found</p>
+          <p className="text-xs text-amber-700 dark:text-amber-500 mt-1">
+            This statement tracks movements on accounts named for cash, a bank, M-Pesa or a till.
+            Without one in your chart of accounts there is nothing to report.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <KpiCard label="Total Inflows"  value={fmt(totalInflows)}  icon="ArrowDownLeft" color="text-emerald-600" bg="bg-emerald-100 dark:bg-emerald-900/30" />
@@ -176,7 +279,10 @@ const CashFlowReport = ({ payments }) => {
         </div>
       </div>
 
-      <Table headers={['Month', 'Inflows', 'Outflows', 'Net Cash Flow', 'Trend']} rows={rows} />
+      {loading
+        ? <div className="flex items-center justify-center py-12"><p className="text-sm text-muted-foreground">Loading ledger…</p></div>
+        : <Table headers={['Month', 'Inflows', 'Outflows', 'Net Cash Flow', 'Closing Cash', 'Trend']} rows={rows}
+            empty="No cash movements posted in the last six months" />}
     </div>
   );
 };
@@ -615,29 +721,41 @@ const PayrollSummaryReport = ({ agents, employees = [], payrollRecords = [] }) =
     load();
   }, []);
 
-  const calcPAYE = (gross) => {
-    if (gross <= 24000)  return 0;
-    if (gross <= 32333)  return (gross - 24000) * 0.10;
-    if (gross <= 500000) return 833 + (gross - 32333) * 0.25;
-    return 833 + 116917 * 0.25 + (gross - 500000) * 0.30;
+  // This report used to carry its OWN copy of the Kenya tax rules — a fourth
+  // one, with 25% running all the way to 500,000, no personal relief and NSSF
+  // capped at 1,080 — so the PAYE an admin read here disagreed with the PAYE HR
+  // actually paid. It now computes through the same engine as payroll.
+  //
+  // Where a real payroll run exists for the period, its stored figures are used
+  // instead of re-pricing the salary: that is what was paid and filed. The
+  // `hasActualPayroll` flag was already here and was never acted on.
+  const periodRecords = payrollRecords.filter(r => r.pay_month === period);
+  const hasActualPayroll = periodRecords.length > 0;
+  const recordByEmployee = Object.fromEntries(periodRecords.map(r => [r.employee_id, r]));
+
+  const figuresFor = (p) => {
+    const actual = recordByEmployee[p.id];
+    if (actual) {
+      return {
+        gross: parseFloat(actual.gross_salary || 0),
+        paye:  parseFloat(actual.paye || 0),
+        net:   parseFloat(actual.net_salary || 0),
+        basic: parseFloat(actual.basic_salary ?? p.basic_salary ?? 0),
+        actual: true,
+      };
+    }
+    const r = computePayroll(payrollInputForEmployee(p, {}, period));
+    return { gross: r.grossCash, paye: r.paye, net: r.netPay, basic: r.basic, actual: false };
   };
 
   const depts = profiles.reduce((acc, p) => {
     const dept = p.role || 'other';
     if (!acc[dept]) acc[dept] = { dept, count: 0, grossPay: 0, netPay: 0, paye: 0 };
-    const basic    = parseFloat(p.basic_salary || 0);
-    const housing  = parseFloat(p.housing_allowance || 0);
-    const transport= parseFloat(p.transport_allowance || 0);
-    const gross    = basic + housing + transport;
-    const paye     = calcPAYE(gross);
-    const nssf     = Math.min(gross * 0.06, 1080);
-    const sha      = gross * 0.0275;
-    const levy     = gross * 0.015;
-    const net      = gross - paye - nssf - sha - levy;
+    const f = figuresFor(p);
     acc[dept].count++;
-    acc[dept].grossPay += gross;
-    acc[dept].netPay   += net;
-    acc[dept].paye     += paye;
+    acc[dept].grossPay += f.gross;
+    acc[dept].netPay   += f.net;
+    acc[dept].paye     += f.paye;
     return acc;
   }, {});
 
@@ -647,27 +765,19 @@ const PayrollSummaryReport = ({ agents, employees = [], payrollRecords = [] }) =
   const totalPAYE    = deptList.reduce((s, d) => s + d.paye, 0);
   const totalStaff   = profiles.length;
 
-  // If actual payroll records exist, show those instead of profile estimates
-  const hasActualPayroll = payrollRecords.length > 0;
   const rows = profiles.slice(0, 30).map(p => {
-    const basic     = parseFloat(p.basic_salary || 0);
-    const housing   = parseFloat(p.housing_allowance || 0);
-    const transport = parseFloat(p.transport_allowance || 0);
-    const gross     = basic + housing + transport;
-    const paye      = calcPAYE(gross);
-    const nssf      = Math.min(gross * 0.06, 1080);
-    const sha       = gross * 0.0275;
-    const levy      = gross * 0.015;
-    const net       = gross - paye - nssf - sha - levy;
+    const f = figuresFor(p);
     return [
       <span className="font-semibold text-foreground">{p.full_name || '—'}</span>,
       <span className="capitalize text-muted-foreground text-xs">{p.role || '—'}</span>,
-      <span className="font-mono">{fmt(basic)}</span>,
-      <span className="font-mono">{fmt(gross)}</span>,
-      <span className="font-mono text-red-500">{fmt(paye)}</span>,
-      <span className="font-mono text-emerald-600 font-semibold">{fmt(net)}</span>,
-      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${p.is_active !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
-        {p.is_active !== false ? 'Active' : 'Inactive'}
+      <span className="font-mono">{fmt(f.basic)}</span>,
+      <span className="font-mono">{fmt(f.gross)}</span>,
+      <span className="font-mono text-red-500">{fmt(f.paye)}</span>,
+      <span className="font-mono text-emerald-600 font-semibold">{fmt(f.net)}</span>,
+      // Whether this row is a real payroll line or a projection off the salary
+      // on file. Both are useful; conflating them is not.
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${f.actual ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
+        {f.actual ? 'Paid' : 'Projected'}
       </span>,
     ];
   });
@@ -677,7 +787,14 @@ const PayrollSummaryReport = ({ agents, employees = [], payrollRecords = [] }) =
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-bold text-foreground">Payroll Summary Report</h3>
-          <p className="text-xs text-muted-foreground">Total payroll cost by department and period</p>
+          {/* Whether this is what was paid or what it would cost if payroll were
+              run on today's salaries. The two get read the same way otherwise,
+              and only one of them is a fact. */}
+          <p className="text-xs text-muted-foreground">
+            {hasActualPayroll
+              ? `${periodRecords.length} payroll record(s) processed for this period — figures shown are what was paid.`
+              : 'No payroll run for this period yet — figures are projected from the salaries on file.'}
+          </p>
         </div>
         <input type="month" value={period} onChange={e => setPeriod(e.target.value)}
           className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
@@ -717,7 +834,7 @@ const PayrollSummaryReport = ({ agents, employees = [], payrollRecords = [] }) =
         </div>
       ) : (
         <Table
-          headers={['Employee', 'Role', 'Basic Salary', 'Gross Pay', 'PAYE', 'Net Pay', 'Status']}
+          headers={['Employee', 'Role', 'Basic Salary', 'Gross Pay', 'PAYE', 'Net Pay', 'Source']}
           rows={rows}
           empty="No employees found"
         />
@@ -879,12 +996,21 @@ const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], emp
   // use filterByDate, which works on an in-memory array.
   const activeDateRange = getDateRange(dateRange, customFrom, customTo);
 
+  // The builder is self-contained: its own source, its own period, its own
+  // export. The hub's toolbar would act on data it is not showing.
+  const isBuilder = activeReport === 'builder';
+
   // Apply global date filter to shared datasets
   const filteredPayments = filterByDate(payments, 'payment_date', dateRange, customFrom, customTo);
   const filteredClients  = filterByDate(clients,  'created_at',   dateRange, customFrom, customTo);
   const filteredAssets   = filterByDate(assets,   'created_at',   dateRange, customFrom, customTo);
 
   const reports = [
+    // First in the strip, but not the default: the standard reports answer the
+    // questions people already know they have, and the builder is for the ones
+    // they do not. Leading with it is discoverability, not a change to what
+    // this screen opens on.
+    { id: 'builder',     label: 'Report Builder',        icon: 'Wand2'       },
     { id: 'vat',         label: 'VAT Report',            icon: 'Receipt'     },
     { id: 'cashflow',    label: 'Cash Flow',             icon: 'TrendingUp'  },
     { id: 'inventory',   label: 'Inventory Movement',    icon: 'Package'     },
@@ -991,9 +1117,16 @@ Nothing has been exported.`,
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-lg font-bold text-foreground">Reports Hub</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">Financial and operational reports</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {isBuilder ? 'Build a report from any module, then keep it' : 'Financial and operational reports'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Export is per-report and hard-coded below; the builder chooses its
+              own columns, so it carries its own export. Print is generic — it
+              lifts whatever is inside .print-report-content, which the builder
+              renders too — so it stays for both. */}
+          {!isBuilder && (
           <button
             onClick={handleExport}
             className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -1001,6 +1134,7 @@ Nothing has been exported.`,
             <Icon name="Download" size={14} color="currentColor" />
             Export CSV
           </button>
+          )}
           <button
            onClick={() => {
               const reportEl = document.querySelector('.print-report-content');
@@ -1051,8 +1185,9 @@ Nothing has been exported.`,
         </div>
       </div>
 
-      {/* Global date range filter */}
-      <div className="bg-card border border-border rounded-xl px-5 py-4">
+      {/* Global date range filter. The builder carries its own period control
+          — showing two would leave the user guessing which one applied. */}
+      <div className={`bg-card border border-border rounded-xl px-5 py-4 ${isBuilder ? 'hidden' : ''}`}>
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <p className="text-xs font-semibold text-muted-foreground mb-1.5">Date Range</p>
@@ -1129,8 +1264,12 @@ Nothing has been exported.`,
 
       {/* Report content — filtered data passed to each report */}
       <div className="print-report-content">
-        {activeReport === 'vat'         && <VATReport         payments={filteredPayments} assets={filteredAssets} />}
-        {activeReport === 'cashflow'    && <CashFlowReport    payments={filteredPayments} />}
+        {/* Self-fetching and self-exporting: the builder chooses its own
+            source, so the hub's shared arrays and date range do not apply to
+            it and its toolbar is hidden above. */}
+        {activeReport === 'builder'     && <ReportBuilder />}
+        {activeReport === 'vat'         && <VATReport />}
+        {activeReport === 'cashflow'    && <CashFlowReport />}
         {activeReport === 'inventory'   && <InventoryReport   assets={filteredAssets} />}
         {activeReport === 'portfolio'   && <ClientPortfolioReport clients={filteredClients} payments={filteredPayments} />}
         {activeReport === 'commission'  && <CommissionReport  agents={agents} payments={filteredPayments} assets={filteredAssets} />}

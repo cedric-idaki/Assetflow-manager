@@ -272,7 +272,7 @@ const AuditTrailTab = () => {
   useEffect(() => {
     if (!liveEnabled) {
       if (channelRef?.current) {
-        supabase?.removeChannel(channelRef?.current);
+        supabase.removeChannel(channelRef?.current);
         channelRef.current = null;
       }
       setConnStatus('error');
@@ -290,10 +290,10 @@ const AuditTrailTab = () => {
           let newLog = payload?.new;
           try {
             const { data } = await supabase
-              ?.from('audit_logs')
-              ?.select('*, user:user_profiles(full_name, email, role)')
-              ?.eq('id', newLog?.id)
-              ?.single();
+              .from('audit_logs')
+              .select('*, user:user_profiles(full_name, email, role)')
+              .eq('id', newLog?.id)
+              .single();
             if (data) newLog = data;
           } catch (_) {}
 
@@ -334,7 +334,7 @@ const AuditTrailTab = () => {
 
     return () => {
       if (channelRef?.current) {
-        supabase?.removeChannel(channelRef?.current);
+        supabase.removeChannel(channelRef?.current);
         channelRef.current = null;
       }
     };
@@ -486,7 +486,10 @@ const AuditTrailTab = () => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {kycActions?.map(action => {
           const count = auditLogs?.filter(l => l?.action === action)?.length;
-          const { icon, color } = actionIconMap?.[action];
+          // Same fallback as the three other actionIconMap lookups in this file
+          // (446, 470, 543). Without it, adding a fifth entry to kycActions
+          // without a matching icon destructures undefined and blanks the tab.
+          const { icon, color } = actionIconMap[action] || { icon: 'Activity', color: 'bg-slate-500/10 text-slate-500' };
           const labels = {
             kyc_document_upload: 'Doc Uploads',
             kyc_status_change:   'Status Changes',

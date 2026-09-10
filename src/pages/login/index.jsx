@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, setRememberDevice as persistRememberChoice, REMEMBER_DEVICE_KEY } from '../../lib/supabase';
 import Icon from '../../components/AppIcon';
+import BrandLogo from '../../components/BrandLogo';
 import BrandPreviewPanel from '../../components/BrandPreviewPanel';
 import { isAndroidAppContext } from '../../utils/androidApp';
 
 const STEPS = [
-  'Sign in with the account your team set up for you.',
+  'Sign in, or register directly as a client — no agent needed.',
   ['Land on ', 'your', ' portal — client, member, or admin.'],
   'Apply, vote, sign, and track balances — same day.',
 ];
@@ -163,16 +164,11 @@ const LoginPage = () => {
   };
 
   const brand = (
-    <div className="relative z-10 flex items-center gap-3">
-      {/* Navy tile with a cyan glyph — the landing page's brand-mark. A cyan
-          tile would disappear into the cyan ground. */}
-      <div
-        className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
-        style={{ background: C.navy, boxShadow: '0 4px 14px rgba(12,32,55,0.30)' }}
-      >
-        <Icon name="Building2" size={22} color={C.primary} />
-      </div>
-      <div style={{ ...SERIF, fontSize: '20px', fontWeight: 700, letterSpacing: '-0.01em', color: C.navy }}>Ararat</div>
+    <div className="relative z-10">
+      {/* Tiled: the mark's gold and teal are drawn for a navy ground and go
+          flat on this page's near-white. The wordmark drops to the logo's
+          deepest gold so it still clears contrast on light. */}
+      <BrandLogo size={44} tile wordmark wordmarkColor="#a96f2b" />
     </div>
   );
 
@@ -494,6 +490,32 @@ const LoginPage = () => {
                   )}
                 </button>
               </form>
+
+              {/* Client self-registration. Deliberately OUTSIDE the web-only
+                  block below: that block is hidden in the Play Store app
+                  because it sells a subscription, and this one takes no
+                  payment at all — the same reason Routes.jsx keeps
+                  /user-registration-screen available in the app. A client who
+                  downloaded the app and has no account yet would otherwise
+                  have nowhere to go. */}
+              <div
+                className="mt-5 pt-4 text-center"
+                style={{ borderTop: '1px solid ' + C.border }}
+              >
+                <p className="text-sm" style={{ color: C.textMuted }}>
+                  Don't have a client account?{' '}
+                  <button
+                    onClick={function() { navigate('/user-registration-screen'); }}
+                    className="font-semibold hover:underline"
+                    style={{ color: C.accentDeep }}
+                  >
+                    Register with your company
+                  </button>
+                </p>
+                <p className="text-xs mt-1" style={{ color: C.textMuted }}>
+                  You'll need their registration code. A sales agent's code is optional.
+                </p>
+              </div>
 
               {/* Register CTA — web only. In the Play Store app this whole block
                   is gone: it advertises subscription plans and leads to the

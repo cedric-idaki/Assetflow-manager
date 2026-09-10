@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase';
 
 export const triggerKYCReminders = async () => {
-  const { data, error } = await supabase?.functions?.invoke('kyc-renewal-reminders', {
+  const { data, error } = await supabase.functions.invoke('kyc-renewal-reminders', {
     body: {},
   });
   if (error) throw new Error(error.message || 'Failed to trigger KYC reminders');
@@ -10,13 +10,13 @@ export const triggerKYCReminders = async () => {
 
 export const fetchReminderLogs = async ({ limit = 50, clientId = null } = {}) => {
   let query = supabase
-    ?.from('kyc_reminder_logs')
-    ?.select('id, client_id, document_type, expiry_date, days_before_expiry, channel, recipient, status, error_message, sent_at, clients(full_name, account_number)')
-    ?.order('sent_at', { ascending: false })
+    .from('kyc_reminder_logs')
+    .select('id, client_id, document_type, expiry_date, days_before_expiry, channel, recipient, status, error_message, sent_at, clients(full_name, account_number)')
+    .order('sent_at', { ascending: false })
     ?.limit(limit);
 
   if (clientId) {
-    query = query?.eq('client_id', clientId);
+    query = query.eq('client_id', clientId);
   }
 
   const { data, error } = await query;
@@ -29,9 +29,9 @@ export const fetchReminderStats = async () => {
   thirtyDaysAgo?.setDate(thirtyDaysAgo?.getDate() - 30);
 
   const { data, error } = await supabase
-    ?.from('kyc_reminder_logs')
-    ?.select('channel, status, days_before_expiry')
-    ?.gte('sent_at', thirtyDaysAgo?.toISOString());
+    .from('kyc_reminder_logs')
+    .select('channel, status, days_before_expiry')
+    .gte('sent_at', thirtyDaysAgo?.toISOString());
 
   if (error) throw new Error(error.message);
 

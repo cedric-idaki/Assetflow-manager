@@ -7,11 +7,12 @@ import { useAuth } from '../../../contexts/AuthContext';
 import Icon from '../../../components/AppIcon';
 
 // ── Subscription plans (mirrors the "Register Your Company" flow) ───────────────
-// Flat KES 360 / month per plan. The plan sets the company's staff-portal user
-// limit; extra users beyond the tier cost KES 360 each (upgrade).
+// Per-user rate by tier, matching src/config/companyPlans.js. The plan sets the
+// company's staff-portal user limit; extra users beyond the tier cost KES 360
+// each (upgrade).
 const PLANS = [
   { id: 'bronze', name: 'Bronze', price: 360, maxUsers: 5,    storageGb: 5,  userRange: '1–5 users',  color: '#CD7F32' },
-  { id: 'silver', name: 'Silver', price: 360, maxUsers: 16,   storageGb: 10, userRange: '6–16 users', color: '#C0C0C0', popular: true },
+  { id: 'silver', name: 'Silver', price: 305, maxUsers: 16,   storageGb: 10, userRange: '6–16 users', color: '#C0C0C0', popular: true },
   { id: 'gold',   name: 'Gold',   price: 360, maxUsers: null, storageGb: 15, userRange: '17+ users',  color: '#C9A84C' },
 ];
 

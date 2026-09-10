@@ -7,6 +7,7 @@ import TransactionHistoryTable from './components/TransactionHistoryTable';
 import PenaltyCalculationPanel from './components/PenaltyCalculationPanel';
 import RecurringBillingPanel from './components/RecurringBillingPanel';
 import PaymentAlertsPanel from './components/PaymentAlertsPanel';
+import BankReconciliationPanel from './components/BankReconciliationPanel';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import RealtimeStatusBar from '../../components/ui/RealtimeStatusBar';
@@ -193,6 +194,7 @@ const PaymentCollectionsHub = () => {
     { id: 'penalties', label: 'Penalties', icon: 'Calculator' },
     { id: 'recurring', label: 'Recurring', icon: 'RefreshCw' },
     { id: 'alerts', label: 'Alerts', icon: 'Bell' },
+    { id: 'reconciliation', label: 'Bank Reconciliation', icon: 'GitCompare' },
   ];
 
   return (
@@ -322,6 +324,10 @@ const PaymentCollectionsHub = () => {
               {activeTab === 'penalties' && <PenaltyCalculationPanel overdueAccounts={overdueAccounts} onPenaltyApplied={() => loadOverdueAccounts()} />}
               {activeTab === 'recurring' && <RecurringBillingPanel />}
               {activeTab === 'alerts' && <PaymentAlertsPanel />}
+              {/* Owns its own fetching, so it is not swapped for this page's
+                  skeleton on a background refetch — that would drop a
+                  half-reviewed import preview. */}
+              {activeTab === 'reconciliation' && <BankReconciliationPanel />}
             </div>
           </LivePulseWidget>
         )}

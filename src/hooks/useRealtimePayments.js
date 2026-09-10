@@ -2,6 +2,18 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { paymentsService } from '../services/supabaseService';
 
+// Module-level counter. These three channels used to carry FIXED names
+// ('rt_payments_hub_payments' etc.), which is a worse version of the Date.now()
+// problem fixed elsewhere: supabase.channel(name) returns the EXISTING channel
+// for a name already in use, and removeChannel() is async, so navigating away
+// from the payments hub and straight back re-runs this effect while the old
+// channels are still torn down — .on() then throws "cannot add
+// `postgres_changes` callbacks after `subscribe()`" and the error boundary
+// blanks the page. A fixed name collides on EVERY such remount, not just ones
+// landing in the same millisecond. See the useAdminDashboard/useCrmOversight
+// convention this now matches.
+let _paymentsChannelSeq = 0;
+
 /**
  * useRealtimePayments
  * Subscribes to payments, installment_plans, installment_charges
@@ -65,9 +77,8 @@ export const useRealtimePayments = () => {
       const totalToday = todayPayments?.reduce((sum, p) => sum + parseFloat(p?.amount || 0), 0);
 
       // Fetch installment stats
-      const { count: totalInstallmentPlans } = await supabase?.from('installment_plans')?.select('id', { count: 'exact', head: true }) || { count: 0 };
-
-const { count: activeCharges } = await supabase?.from('installment_charges')?.select('id', { count: 'exact', head: true }) || { count: 0 };
+      const { count: totalInstallmentPlans } = await supabase.from('installment_plans').select('id', { count: 'exact', head: true }) || { count: 0 };
+      const { count: activeCharges } = await supabase.from('installment_charges').select('id', { count: 'exact', head: true }) || { count: 0 };
 
       setPaymentStats({
         totalToday,
@@ -102,29 +113,30 @@ const { count: activeCharges } = await supabase?.from('installment_charges')?.se
 
   useEffect(() => {
     fetchTransactions('init');
+    const t = ++_paymentsChannelSeq;
 
-    const paymentsCh = supabase?.channel('rt_payments_hub_payments')?.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'payments' }, (payload) => {
+    const paymentsCh = supabase.channel(`rt_payments_hub_payments_${t}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'payments' }, (payload) => {
         addRecentEvent({ type: 'new_payment', data: payload?.new, timestamp: new Date() });
         fetchTransactions('payments');
-      })?.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'payments' }, (payload) => {
+      }).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'payments' }, (payload) => {
         const prev = payload?.old?.payment_status;
         const next = payload?.new?.payment_status;
         if (prev !== next) {
           addRecentEvent({ type: 'status_change', from: prev, to: next, data: payload?.new, timestamp: new Date() });
         }
         fetchTransactions('payments');
-      })?.subscribe(status => {
+      }).subscribe(status => {
         if (status === 'SUBSCRIBED') setConnectionStatus('connected');
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setConnectionStatus('disconnected');
         if (status === 'CLOSED') setConnectionStatus('connecting');
       });
 
-    const installmentPlansCh = supabase?.channel('rt_payments_hub_plans')?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_plans' }, (payload) => {
+    const installmentPlansCh = supabase.channel(`rt_payments_hub_plans_${t}`).on('postgres_changes', { event: '*', schema: 'public', table: 'installment_plans' }, (payload) => {
         addRecentEvent({ type: 'installment_plan', data: payload?.new || payload?.old, timestamp: new Date() });
         fetchTransactions('installment_plans');
-      })?.subscribe();
+      }).subscribe();
 
-    const installmentChargesCh = supabase?.channel('rt_payments_hub_charges')?.on('postgres_changes', { event: '*', schema: 'public', table: 'installment_charges' }, (payload) => {
+    const installmentChargesCh = supabase.channel(`rt_payments_hub_charges_${t}`).on('postgres_changes', { event: '*', schema: 'public', table: 'installment_charges' }, (payload) => {
         const charge = payload?.new || payload?.old;
         if (charge?.status === 'failed') {
           addRecentEvent({ type: 'charge_failed', data: charge, timestamp: new Date() });
@@ -132,12 +144,12 @@ const { count: activeCharges } = await supabase?.from('installment_charges')?.se
           addRecentEvent({ type: 'charge_succeeded', data: charge, timestamp: new Date() });
         }
         fetchTransactions('installment_charges');
-      })?.subscribe();
+      }).subscribe();
 
     channelsRef.current = [paymentsCh, installmentPlansCh, installmentChargesCh];
 
     return () => {
-      channelsRef?.current?.forEach(ch => supabase?.removeChannel(ch));
+      channelsRef?.current?.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
   }, [fetchTransactions, addRecentEvent]);

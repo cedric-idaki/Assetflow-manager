@@ -3,6 +3,7 @@ import { supabase } from "../../lib/supabase";
 import Icon from "../AppIcon";
 import FieldFiller from "./FieldFiller";
 import { applyFieldsToPDF } from "../../utils/applySignatureToPDF";
+import { mintEsignSerial } from "../../utils/esignCertificateSerial";
 
 // WalkInSigning — in-person multi-signatory signing on a single device.
 //
@@ -150,8 +151,9 @@ export default function WalkInSigning({ doc, adminId, currentUser, onRecordAudit
             let allQ = supabase.from("esign_fields").select("*").eq("admin_id", adminId);
             allQ = source === "esign_doc" ? allQ.eq("esign_document_id", refId) : allQ.eq("contract_id", refId).eq("source_type", source);
             const { data: allFields } = await allQ;
+            const serial = await mintEsignSerial(source, refId);
             const blob = await applyFieldsToPDF(fileUrl, allFields || [], {
-              documentName: name, hash,
+              documentName: name, hash, serial,
               signers: updated.map(s => ({ name: s.name || s.email, role: s.role, signedAt: fmtDateTime(s.signed_at), ip: s.ip || "in-person" })),
             });
             const bucket = source === "esign_doc" ? "esign-documents" : "contracts";

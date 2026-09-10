@@ -1,11 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Icon from '../../../components/AppIcon';
+import { channelMeta } from '../../../config/crmVocabulary';
 
-const TYPE_STYLES = {
-  site_visit:     { cls: 'bg-primary/10 text-primary',            icon: 'MapPin' },
-  office_meeting: { cls: 'bg-blue-500/10 text-blue-600',          icon: 'Briefcase' },
-  phone_call:     { cls: 'bg-emerald-500/10 text-emerald-600',    icon: 'Phone' },
-  follow_up:      { cls: 'bg-amber-500/10 text-amber-600',        icon: 'PhoneCall' },
+// Tailwind cannot see class names built at runtime, so every tone a channel can
+// carry is spelled out here where the scanner finds it. Same map as
+// InteractionTimeline, so a logged email and a scheduled one look alike.
+const TONE = {
+  blue:    'bg-blue-500/10 text-blue-600',
+  emerald: 'bg-emerald-500/10 text-emerald-600',
+  violet:  'bg-violet-500/10 text-violet-600',
+  amber:   'bg-amber-500/10 text-amber-600',
+  orange:  'bg-orange-500/10 text-orange-600',
+  indigo:  'bg-indigo-500/10 text-indigo-600',
+  slate:   'bg-slate-500/10 text-slate-600',
 };
 
 const fmtWhen = (d) =>
@@ -68,8 +75,8 @@ const CompleteForm = ({ onConfirm, onCancel }) => {
 const FollowUpRow = ({ appt, isOverdue, onComplete, onSnooze, onCancel }) => {
   const [mode, setMode] = useState(null); // 'complete' | null
   const [busy, setBusy] = useState(false);
-  const type = TYPE_STYLES[appt.appointment_type] || TYPE_STYLES.follow_up;
-  const dt   = new Date(appt.scheduled_at);
+  const channel = channelMeta(appt.appointment_type);
+  const dt      = new Date(appt.scheduled_at);
 
   const snooze = async (days) => {
     setBusy(true);
@@ -109,9 +116,9 @@ const FollowUpRow = ({ appt, isOverdue, onComplete, onSnooze, onCancel }) => {
             <p className="text-sm font-semibold text-foreground truncate">
               {appt.lead_name || 'Unknown lead'}
             </p>
-            <span className={`flex-shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${type.cls}`}>
-              <Icon name={type.icon} size={10} color="currentColor" />
-              {(appt.appointment_type || 'follow_up').replace(/_/g, ' ')}
+            <span className={`flex-shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${TONE[channel.tone] || TONE.slate}`}>
+              <Icon name={channel.icon} size={10} color="currentColor" />
+              {channel.label}
             </span>
           </div>
 
@@ -196,9 +203,38 @@ const FollowUpsPanel = ({
   buckets, completedFollowUps = [], loading,
   onSchedule, onComplete, onSnooze, onCancel,
 }) => {
-  const [tab, setTab] = useState('open'); // 'open' | 'done'
+  const [tab, setTab] = useState('open');            // 'open' | 'done'
+  const [channelFilter, setChannelFilter] = useState('all');
   const { overdue = [], today = [], thisWeek = [], later = [] } = buckets || {};
   const openCount = overdue.length + today.length + thisWeek.length + later.length;
+
+  // Which channels the open diary actually contains, with counts. Derived from
+  // the rows rather than from the vocabulary, so the filter never offers
+  // "Email" when there are no emails to write — an empty chip is a dead end.
+  const channelCounts = useMemo(() => {
+    const counts = new Map();
+    for (const a of [...overdue, ...today, ...thisWeek, ...later]) {
+      const meta = channelMeta(a.appointment_type);
+      const seen = counts.get(meta.value);
+      counts.set(meta.value, { ...meta, count: (seen?.count || 0) + 1 });
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count);
+  }, [overdue, today, thisWeek, later]);
+
+  // "Show me just the emails I owe." Work batches by channel — an afternoon of
+  // calls is a different sitting from an afternoon of writing — so the diary
+  // has to be sliceable that way.
+  const onChannel = (a) =>
+    channelFilter === 'all' || channelMeta(a.appointment_type).value === channelFilter;
+
+  const shown = {
+    overdue:  overdue.filter(onChannel),
+    today:    today.filter(onChannel),
+    thisWeek: thisWeek.filter(onChannel),
+    later:    later.filter(onChannel),
+  };
+  const shownCount =
+    shown.overdue.length + shown.today.length + shown.thisWeek.length + shown.later.length;
 
   if (loading) {
     return (
@@ -265,6 +301,36 @@ const FollowUpsPanel = ({
         </div>
       </div>
 
+      {/* Channel filter — only earns its space once the diary is mixed */}
+      {tab === 'open' && channelCounts.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-3 pb-3 border-b border-border/60">
+          <button
+            onClick={() => setChannelFilter('all')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
+              channelFilter === 'all'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            All {openCount}
+          </button>
+          {channelCounts.map(c => (
+            <button
+              key={c.value}
+              onClick={() => setChannelFilter(channelFilter === c.value ? 'all' : c.value)}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                channelFilter === c.value
+                  ? 'bg-primary text-primary-foreground'
+                  : `${TONE[c.tone] || TONE.slate} hover:opacity-80`
+              }`}
+            >
+              <Icon name={c.icon} size={11} color="currentColor" />
+              {c.label} {c.count}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Open */}
       {tab === 'open' && (
         openCount === 0 ? (
@@ -272,39 +338,52 @@ const FollowUpsPanel = ({
             <Icon name="CalendarCheck" size={30} color="var(--color-muted-foreground)" />
             <p className="text-sm font-medium text-muted-foreground mt-2">No follow-ups scheduled</p>
             <p className="text-xs text-muted-foreground/70 mt-0.5 max-w-xs">
-              When a lead says "check me next week", schedule it here and you'll be
-              reminded in the portal and by email.
+              When a lead says "check me next week", schedule it here — by call, email,
+              WhatsApp or a visit — and you'll be reminded in the portal and by email.
             </p>
             <button onClick={onSchedule} className="mt-3 text-xs text-primary hover:underline font-semibold">
               Schedule a follow-up →
             </button>
           </div>
+        ) : shownCount === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <Icon name="Filter" size={26} color="var(--color-muted-foreground)" />
+            <p className="text-sm text-muted-foreground mt-2">
+              Nothing open on {channelMeta(channelFilter).label.toLowerCase()}
+            </p>
+            <button
+              onClick={() => setChannelFilter('all')}
+              className="mt-2 text-xs text-primary hover:underline font-semibold"
+            >
+              Show all {openCount}
+            </button>
+          </div>
         ) : (
           <div className="space-y-4 max-h-[460px] overflow-y-auto scrollbar-custom pr-1">
-            <Section title="Overdue" count={overdue.length} tone="danger">
+            <Section title="Overdue" count={shown.overdue.length} tone="danger">
               <div className="space-y-2">
-                {overdue.map(a => (
+                {shown.overdue.map(a => (
                   <FollowUpRow key={a.id} appt={a} isOverdue onComplete={onComplete} onSnooze={onSnooze} onCancel={onCancel} />
                 ))}
               </div>
             </Section>
-            <Section title="Today" count={today.length} tone="warn">
+            <Section title="Today" count={shown.today.length} tone="warn">
               <div className="space-y-2">
-                {today.map(a => (
+                {shown.today.map(a => (
                   <FollowUpRow key={a.id} appt={a} onComplete={onComplete} onSnooze={onSnooze} onCancel={onCancel} />
                 ))}
               </div>
             </Section>
-            <Section title="This week" count={thisWeek.length} tone="normal">
+            <Section title="This week" count={shown.thisWeek.length} tone="normal">
               <div className="space-y-2">
-                {thisWeek.map(a => (
+                {shown.thisWeek.map(a => (
                   <FollowUpRow key={a.id} appt={a} onComplete={onComplete} onSnooze={onSnooze} onCancel={onCancel} />
                 ))}
               </div>
             </Section>
-            <Section title="Later" count={later.length} tone="normal">
+            <Section title="Later" count={shown.later.length} tone="normal">
               <div className="space-y-2">
-                {later.map(a => (
+                {shown.later.map(a => (
                   <FollowUpRow key={a.id} appt={a} onComplete={onComplete} onSnooze={onSnooze} onCancel={onCancel} />
                 ))}
               </div>
@@ -330,7 +409,7 @@ const FollowUpsPanel = ({
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{a.lead_name || 'Unknown lead'}</p>
                   <p className="text-xs text-muted-foreground">
-                    {fmtWhen(a.scheduled_at)} · {(a.appointment_type || 'follow_up').replace(/_/g, ' ')}
+                    {fmtWhen(a.scheduled_at)} · {channelMeta(a.appointment_type).label}
                   </p>
                   {a.outcome && (
                     <p className="text-xs text-foreground mt-1 bg-muted rounded-lg px-2 py-1">{a.outcome}</p>

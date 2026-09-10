@@ -1,33 +1,47 @@
-import React, { useState } from 'react';
+/**
+ * EXPORT MODAL — pick the format and what goes in the file.
+ *
+ * Every control here used to be decorative: the handler behind it wrote the
+ * whole dashboard as a CSV whatever was chosen. The three checkboxes now name
+ * real groups of tables (see SECTION_GROUP in utils/kycReportSections.js), and
+ * the format is honoured by the writers in utils/reportExport.js.
+ *
+ * "Charts and graphs" is the one that needed renaming rather than wiring. A
+ * spreadsheet cannot hold a picture of a chart, and printing one into the PDF
+ * would mean rasterising live SVG whose colours are CSS variables. What a
+ * reader opening the file actually wants is the SERIES behind each chart, so
+ * that is what the option offers and what it is now called.
+ */
+
+import React, { useState, useEffect } from 'react';
 import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 import Select from '../../../components/ui/Select';
 import { Checkbox } from '../../../components/ui/Checkbox';
+import { FORMATS } from '../../../utils/reportExport';
 
-const ExportModal = ({ isOpen, onClose, reportTitle, onExport }) => {
-  const [exportFormat, setExportFormat] = useState('pdf');
+const ExportModal = ({ isOpen, onClose, reportTitle, onExport, defaultFormat = 'pdf', busy = false }) => {
+  const [exportFormat, setExportFormat] = useState(defaultFormat);
   const [includeSummary, setIncludeSummary] = useState(true);
   const [includeCharts, setIncludeCharts] = useState(true);
-  const [includeRawData, setIncludeRawData] = useState(false);
+  const [includeRawData, setIncludeRawData] = useState(true);
+
+  // The button that opened this said which format it meant, so the modal opens
+  // on it. Re-synced per opening rather than once, or "Export Excel" would show
+  // PDF for anyone who had already opened the dialog from the PDF button.
+  useEffect(() => {
+    if (isOpen) setExportFormat(defaultFormat);
+  }, [isOpen, defaultFormat]);
 
   if (!isOpen) return null;
 
-  const formatOptions = [
-    { value: 'pdf', label: 'PDF Document' },
-    { value: 'excel', label: 'Excel Spreadsheet' },
-    { value: 'csv', label: 'CSV File' }
-  ];
+  const nothingChosen = !includeSummary && !includeCharts && !includeRawData;
 
   const handleExport = () => {
     onExport({
       format: exportFormat,
-      options: {
-        includeSummary,
-        includeCharts,
-        includeRawData
-      }
+      options: { includeSummary, includeCharts, includeRawData },
     });
-    onClose();
   };
 
   return (
@@ -51,7 +65,7 @@ const ExportModal = ({ isOpen, onClose, reportTitle, onExport }) => {
 
           <Select
             label="Export Format"
-            options={formatOptions}
+            options={FORMATS.map(f => ({ value: f.value, label: f.label, description: f.hint }))}
             value={exportFormat}
             onChange={setExportFormat}
           />
@@ -59,21 +73,28 @@ const ExportModal = ({ isOpen, onClose, reportTitle, onExport }) => {
           <div className="space-y-3">
             <p className="text-sm font-medium text-foreground">Include in Export:</p>
             <Checkbox
-              label="Summary Statistics"
+              label="Summary statistics"
+              description="The KPI figures at the top of the dashboard"
               checked={includeSummary}
               onChange={(e) => setIncludeSummary(e?.target?.checked)}
             />
             <Checkbox
-              label="Charts and Graphs"
+              label="Chart data"
+              description="The series behind each chart, as tables"
               checked={includeCharts}
               onChange={(e) => setIncludeCharts(e?.target?.checked)}
-              disabled={exportFormat === 'csv'}
             />
             <Checkbox
-              label="Raw Data Tables"
+              label="Segment breakdown"
+              description="The aging analysis, split by client segment"
               checked={includeRawData}
               onChange={(e) => setIncludeRawData(e?.target?.checked)}
             />
+            {nothingChosen && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Tick at least one — there would be nothing in the file.
+              </p>
+            )}
           </div>
         </div>
 
@@ -81,8 +102,15 @@ const ExportModal = ({ isOpen, onClose, reportTitle, onExport }) => {
           <Button variant="outline" onClick={onClose} className="flex-1">
             Cancel
           </Button>
-          <Button variant="default" iconName="Download" iconPosition="left" onClick={handleExport} className="flex-1">
-            Export Report
+          <Button
+            variant="default"
+            iconName={busy ? 'Loader' : 'Download'}
+            iconPosition="left"
+            onClick={handleExport}
+            disabled={nothingChosen || busy}
+            className="flex-1"
+          >
+            {busy ? 'Writing…' : 'Export Report'}
           </Button>
         </div>
       </div>
