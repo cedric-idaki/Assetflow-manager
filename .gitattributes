@@ -1,0 +1,39 @@
+# Check every text file out with LF, on every machine.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# `core.autocrlf=true` is set on the Windows build machine, so git stored LF and
+# handed the working tree CRLF. That is invisible until something reads a source
+# file as text -- and this repo does that a lot. The `*.sync.test.js` contract
+# tests read migrations and config and assert on their content, and several match
+# across a line break:
+#
+#     sql.indexOf('agents_agent_role_valid\n  check')
+#
+# Against a CRLF working tree that is `\r\n  check` and the search returns -1, so
+# the test reports the constraint as missing when it is sitting right there. Five
+# tests failed that way the first time the repo was checked out fresh on Windows,
+# in three files, all of them contract tests and none of them actually broken.
+#
+# Pinning `eol=lf` costs nothing: git already stores LF, so this changes what
+# lands in the working tree, not what is committed. Every editor in normal use
+# handles LF, and the alternative -- teaching each test to tolerate both endings
+# -- would have to be remembered by every test written from here on.
+* text=auto eol=lf
+
+# Binaries git must never touch. `text=auto` detects most of these on its own;
+# saying so explicitly means a corrupt file can never be blamed on detection.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.pdf     binary
+*.zip     binary
+*.woff    binary
+*.woff2   binary
+*.ttf     binary
+*.otf     binary
+*.mp4     binary
+*.keystore binary
