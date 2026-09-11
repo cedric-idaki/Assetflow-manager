@@ -1,7 +1,7 @@
 # Publishing Ararat to Google Play
 
 The Android app is a **Trusted Web Activity (TWA)** — a thin native shell that
-renders `https://assetflow.smebusinessclinic.com` fullscreen, with no browser
+renders `https://araratsbc.com` fullscreen, with no browser
 UI. It is the same site, not a second codebase, so a content change on the web
 is live in the app immediately with no Play release.
 
@@ -37,7 +37,7 @@ so turn on "show hidden files":
 Then confirm the server is doing the right thing:
 
 ```bash
-curl -sI https://assetflow.smebusinessclinic.com/.well-known/assetlinks.json | grep -i content-type
+curl -sI https://araratsbc.com/.well-known/assetlinks.json | grep -i content-type
 ```
 
 It must say **`application/json`**. If it says `text/html`, the `.htaccess`
@@ -48,7 +48,7 @@ every later step depends on it.
 
 ## Step 2 — Package the app with PWABuilder
 
-1. Go to **pwabuilder.com** and enter `https://assetflow.smebusinessclinic.com`.
+1. Go to **pwabuilder.com** and enter `https://araratsbc.com`.
 2. Click **Package for stores → Android**.
 3. Open the advanced options and set:
 
@@ -97,7 +97,7 @@ with the key Google signs the released app with. Both belong in the array:
 Rebuild, re-upload, and check it:
 
 ```bash
-curl -s https://assetflow.smebusinessclinic.com/.well-known/assetlinks.json
+curl -s https://araratsbc.com/.well-known/assetlinks.json
 ```
 
 **If this is wrong, the app still works — it just opens with a browser address
@@ -169,7 +169,7 @@ This is the single most likely cause of rejection for this app.
 > • Reporting and analytics
 >
 > An Ararat account is required to sign in. Accounts are set up at
-> assetflow.smebusinessclinic.com.
+> araratsbc.com.
 
 That last line matters — it tells a reviewer why there is no signup button.
 

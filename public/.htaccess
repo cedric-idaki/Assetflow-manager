@@ -1,4 +1,4 @@
-# Apache config for the live site at assetflow.smebusinessclinic.com.
+# Apache config for the live site at araratsbc.com.
 #
 # This file lives in public/ so `vite build` copies it into dist/ — upload it to
 # the web root along with everything else. It is what makes the Play Store build
@@ -15,6 +15,18 @@
   RewriteCond %{HTTPS} !=on
   RewriteCond %{HTTP:X-Forwarded-Proto} !=https
   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+  # ── Canonical host ────────────────────────────────────────────────────────
+  # Commented out until araratsbc.com serves a valid certificate — with it on
+  # too early every visitor is redirected into a certificate warning. Uncomment
+  # at cutover (Step 6 of docu/DOMAIN_MIGRATION.md), rebuild, upload.
+  #
+  # The old hostname must keep resolving after this: agent share links and
+  # client portal links already in circulation carry it, and this redirect is
+  # the only thing that still honours them.
+  #
+  # RewriteCond %{HTTP_HOST} !^araratsbc\.com$ [NC]
+  # RewriteRule ^ https://araratsbc.com%{REQUEST_URI} [R=301,L]
 
   # ── Digital Asset Links ───────────────────────────────────────────────────
   # Must be matched before the SPA fallback. Stated explicitly rather than
