@@ -257,12 +257,12 @@ const POSModule = () => {
   const [quick, setQuick]             = useState({ fullName: '', phone: '', email: '', kraPin: '' });
   const [quickSaving, setQuickSaving] = useState(false);
 
+  const [clientSearch, setClientSearch] = useState('');
+  const [selectedClient, setSelectedClient] = useState(null);
+
   // A cash customer is never lent to. The screen reflects that; the sales
   // trigger in 20260908180000 is what enforces it.
   const isCashCustomer = selectedClient?.customer_type === 'cash';
-
-  const [clientSearch, setClientSearch] = useState('');
-  const [selectedClient, setSelectedClient] = useState(null);
 
   const [assetSearch, setAssetSearch]   = useState('');
   const [selectedAsset, setSelectedAsset] = useState(null);

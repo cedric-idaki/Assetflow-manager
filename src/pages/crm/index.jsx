@@ -3,7 +3,6 @@ import { useSearchParams } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import Icon from '../../components/AppIcon';
-import { useAuth } from '../../contexts/AuthContext';
 import AdminCrmTab, { CRM_VIEWS } from '../../components/crm/AdminCrmTab';
 import { downloadCSV } from '../../utils/exportUtils';
 
@@ -27,7 +26,6 @@ const VIEW_IDS = CRM_VIEWS.map(v => v.id);
 const DEFAULT_VIEW = 'overview';
 
 const CrmPage = () => {
-  const { userProfile } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const requested = searchParams.get('view');
@@ -67,7 +65,6 @@ const CrmPage = () => {
             <div>
               <h1 className="text-2xl font-bold text-foreground">CRM</h1>
               <p className="text-sm text-muted-foreground">
-                {userProfile?.full_name ? `${userProfile.full_name} · ` : ''}
                 Customer relationships, follow-ups and the sales team
               </p>
             </div>
