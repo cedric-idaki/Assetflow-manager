@@ -167,7 +167,7 @@ const AdminCrmTab = ({ onExport, view: viewProp, onViewChange }) => {
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
           <button
             onClick={() => setLogFor(null)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-opacity"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           >
             <Icon name="PhoneCall" size={14} color="currentColor" />
             Log a contact
