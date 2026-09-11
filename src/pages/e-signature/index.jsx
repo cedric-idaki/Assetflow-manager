@@ -8,6 +8,7 @@ import Icon from "../../components/AppIcon";
 import SignatureCanvas from "../../components/esign/SignatureCanvas";
 import FieldEditor from "../../components/esign/FieldEditor";
 import FieldFiller from "../../components/esign/FieldFiller";
+import { signerFingerprint } from "../../utils/esignSavedSignature";
 import WalkInSigning from "../../components/esign/WalkInSigning";
 import ApiEmbedPanel from "../../components/esign/ApiEmbedPanel";
 import TemplatesPanel from "../../components/esign/TemplatesPanel";
@@ -1144,6 +1145,12 @@ export default function ESignaturePage() {
   const [signMode, setSignMode]       = useState("single"); // single | walkin (in-person multi-signatory)
   const [walkInDoc, setWalkInDoc]     = useState(null);     // { refId, source, fileUrl, name, label }
 
+  // Who is signing. One-tap reuse of an earlier signature is filed under this
+  // account's own fingerprint, so a device shared between tenants (or a fresh
+  // SACCO / company account on a machine someone else used) never inherits a
+  // signature it did not draw.
+  const signerKey = signerFingerprint(adminId, currentUser?.id || currentUser?.email);
+
   const dbDocs = dbContracts.map(c => ({
     id: c.invoice_number || c.id,
     _dbId: c.id,
@@ -1690,7 +1697,8 @@ export default function ESignaturePage() {
                   {signFields.length > 0 && isPdfUrl(selectedContract.file_url) ? (
                     /* Field-based signing — the document renders inside the filler */
                     <FieldFiller fileUrl={selectedContract.file_url} fields={signFields}
-                      signerName={currentUser?.name} onComplete={handleFieldsComplete} />
+                      signerName={currentUser?.name} signerKey={signerKey}
+                      onComplete={handleFieldsComplete} />
                   ) : (
                     <>
                       {/* Document viewer — review before signing */}

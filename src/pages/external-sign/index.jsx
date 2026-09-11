@@ -4,6 +4,7 @@ import { supabase } from "../../lib/supabase";
 import Icon from "../../components/AppIcon";
 import SignatureCanvas from "../../components/esign/SignatureCanvas";
 import FieldFiller from "../../components/esign/FieldFiller";
+import { signerFingerprint } from "../../utils/esignSavedSignature";
 import { detectSignableAreas } from "../../utils/detectSignableAreas";
 
 // Invoke the esign-public edge function, surfacing the server's JSON error.
@@ -103,6 +104,9 @@ export default function ExternalSignPage({ embedded = false }) {
   const sealTimer = useRef(null);
 
   const device = navigator.userAgent.slice(0, 80);
+  // One-tap reuse is scoped to THIS link and THIS signer, so a shared or public
+  // device never offers the previous signer's ink to the next one.
+  const signerKey = signerFingerprint("link", token, signer?.email);
   const isPdf = !!doc?.file_url && /\.pdf(\?|$)/i.test(doc.file_url);
   const effFields = dbFields.length ? dbFields : adhocFields;
   // PDFs always sign directly on the document — even with zero pre-placed
@@ -452,6 +456,7 @@ export default function ExternalSignPage({ embedded = false }) {
                   </div>
                 )}
                 <FieldFiller fileUrl={doc.file_url} fields={effFields} signerName={signer?.name}
+                  signerKey={signerKey}
                   submitting={submitting} onComplete={handleFieldsComplete}
                   onAddField={!dbFields.length ? handleAddField : undefined} />
               </>

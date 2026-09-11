@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import Icon from "../AppIcon";
 import { FONTS, INKS, NIBS, ensureSignatureFonts } from "./SignatureCanvas";
+import { getSavedCapture, setSavedCapture, clearSavedCaptures } from "../../utils/esignSavedSignature";
 
 // InPlaceSigner — SignNow-style "sign with your pen directly on the document".
 //
@@ -15,30 +16,15 @@ import { FONTS, INKS, NIBS, ensureSignatureFonts } from "./SignatureCanvas";
 //   pageCanvas   — the rendered <canvas> of the field's page (from PdfFieldCanvas);
 //                  falls back to plain paper when unavailable.
 //   signerName   — used to prefill the Type tab.
+//   signerKey    — fingerprint of WHO is signing (see utils/esignSavedSignature).
 //   initialValue — existing capture JSON when re-editing a filled field.
 //   onApply(cap, { reuse }) — cap = { type:"drawn"|"typed", data, font? }.
 //   onClose()
 //
 // Saved-signature reuse (SignNow parity): the applied signature is stored per
-// kind (signature / initials) so every later field is one tap.
-
-const STORE_KEY = "ararat_esign_saved_v1";
-
-export function getSavedCapture(kind) {
-  try {
-    const all = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
-    const cap = all[kind];
-    return cap && cap.data ? cap : null;
-  } catch { return null; }
-}
-
-export function setSavedCapture(kind, cap) {
-  try {
-    const all = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
-    all[kind] = cap;
-    localStorage.setItem(STORE_KEY, JSON.stringify(all));
-  } catch { /* private mode — reuse just won't persist */ }
-}
+// kind (signature / initials) so every later field is one tap. It is filed
+// under signerKey and expires, so it is offered back only to the person who
+// drew it — never to the next account or signatory on this device.
 
 // Crop the ink canvas to the drawn strokes (plus breathing room) so the
 // signature stamps into the field exactly as written, with no dead margins.
@@ -70,7 +56,7 @@ function trimInk(canvas) {
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
-export default function InPlaceSigner({ field, pageCanvas, signerName, initialValue, onApply, onClose }) {
+export default function InPlaceSigner({ field, pageCanvas, signerName, signerKey, initialValue, onApply, onClose }) {
   const kind = field.field_type === "initials" ? "initials" : "signature";
   const wrapRef  = useRef(null);   // measures available width
   const bgRef    = useRef(null);   // magnified document pixels
@@ -89,7 +75,9 @@ export default function InPlaceSigner({ field, pageCanvas, signerName, initialVa
   const [uploadImg, setUploadImg] = useState(null);
   const [reuse, setReuse] = useState(true);
   const [dims, setDims] = useState(null); // { W, H, fx, fy, fw, fh } display px
-  const saved = getSavedCapture(kind);
+  // Re-read on dismissal so "Not mine" clears the offer immediately.
+  const [forgotten, setForgotten] = useState(false);
+  const saved = forgotten ? null : getSavedCapture(kind, signerKey);
   const inkCol = useRef(ink); inkCol.current = ink;
   const nibW   = useRef(nib); nibW.current = nib;
 
@@ -237,7 +225,7 @@ export default function InPlaceSigner({ field, pageCanvas, signerName, initialVa
 
   const finish = (cap) => {
     if (!cap) return;
-    if (reuse) setSavedCapture(kind, cap);
+    if (reuse) setSavedCapture(kind, cap, signerKey);
     onApply(cap, { reuse });
   };
 
@@ -291,7 +279,15 @@ export default function InPlaceSigner({ field, pageCanvas, signerName, initialVa
                 ? <img src={saved.data} alt="Saved" className="max-h-7 max-w-[120px] object-contain" />
                 : <span style={{ fontFamily: saved.font, fontSize: 20 }} className="text-slate-800">{saved.data}</span>}
             </div>
-            <p className="flex-1 text-[11px] text-emerald-800">Your saved {noun} from earlier</p>
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] text-emerald-800">
+                The {noun} {signerName ? <strong>{signerName}</strong> : "you"} drew earlier on this device
+              </p>
+              <button onClick={() => { clearSavedCaptures(signerKey); setForgotten(true); }}
+                className="text-[10px] text-emerald-700/80 underline hover:text-emerald-900">
+                Not mine — sign fresh
+              </button>
+            </div>
             <button onClick={() => finish(saved)}
               className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-colors">
               Use it
@@ -405,10 +401,12 @@ export default function InPlaceSigner({ field, pageCanvas, signerName, initialVa
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-border flex items-center gap-3 flex-wrap">
-          <label className="flex items-center gap-1.5 cursor-pointer mr-auto">
-            <input type="checkbox" checked={reuse} onChange={e => setReuse(e.target.checked)} className="w-3.5 h-3.5" />
-            <span className="text-[11px] text-muted-foreground">Reuse for my other {noun} fields</span>
-          </label>
+          {signerKey ? (
+            <label className="flex items-center gap-1.5 cursor-pointer mr-auto">
+              <input type="checkbox" checked={reuse} onChange={e => setReuse(e.target.checked)} className="w-3.5 h-3.5" />
+              <span className="text-[11px] text-muted-foreground">Reuse for my other {noun} fields</span>
+            </label>
+          ) : <span className="mr-auto" />}
           <button onClick={onClose}
             className="px-4 py-2 border border-border rounded-xl text-xs font-medium text-muted-foreground hover:bg-muted transition-colors">Cancel</button>
           <button onClick={apply}

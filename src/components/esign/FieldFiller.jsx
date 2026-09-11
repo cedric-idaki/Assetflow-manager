@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Icon from "../AppIcon";
 import PdfFieldCanvas from "./PdfFieldCanvas";
-import InPlaceSigner, { getSavedCapture } from "./InPlaceSigner";
+import InPlaceSigner from "./InPlaceSigner";
+import { getSavedCapture } from "../../utils/esignSavedSignature";
 
 // FieldFiller — the signer's SignNow-style workspace. The document fills the
 // screen with a viewer toolbar (page / zoom / progress), each of THIS signer's
@@ -12,6 +13,10 @@ import InPlaceSigner, { getSavedCapture } from "./InPlaceSigner";
 // a small popover anchored to the field; checkboxes toggle in place.
 //
 // onComplete receives [{ id, value }] for every field the signer filled.
+//
+// signerKey identifies WHO is signing. One-tap reuse of an earlier signature is
+// offered only to that same person; without a key nothing is reused or kept, so
+// no account is ever handed another account's ink.
 //
 // value convention (matches applyFieldsToPDF / esign-public):
 //   signature|initials → JSON.stringify({ type, data, font })
@@ -118,7 +123,7 @@ function FieldPopover({ field, value, anchor, onSave, onClose }) {
   );
 }
 
-export default function FieldFiller({ fileUrl, fields = [], signerName, submitting = false, onComplete, onAddField }) {
+export default function FieldFiller({ fileUrl, fields = [], signerName, signerKey, submitting = false, onComplete, onAddField }) {
   const [values, setValues] = useState({});
   const [editing, setEditing] = useState(null);     // field open in the in-place signer
   const [popover, setPopover] = useState(null);     // { field, anchor } for date/text
@@ -259,7 +264,7 @@ export default function FieldFiller({ fileUrl, fields = [], signerName, submitti
     // signature / initials — one tap applies the saved signature (SignNow
     // behaviour); tapping the field again opens the pen to change it.
     const kind = f.field_type === "initials" ? "initials" : "signature";
-    const saved = getSavedCapture(kind);
+    const saved = getSavedCapture(kind, signerKey);
     if (!isFilled(values[f.id]) && saved) {
       applyCapture(f, saved);
       showToast(`Your saved ${kind} was applied — tap the field to change it.`);
@@ -445,7 +450,7 @@ export default function FieldFiller({ fileUrl, fields = [], signerName, submitti
       )}
 
       {editing && (
-        <InPlaceSigner field={editing} signerName={signerName}
+        <InPlaceSigner field={editing} signerName={signerName} signerKey={signerKey}
           pageCanvas={canvasesRef.current?.[editing.page_index] || null}
           initialValue={values[editing.id]}
           onClose={() => setEditing(null)}

@@ -4,6 +4,7 @@ import Icon from "../AppIcon";
 import FieldFiller from "./FieldFiller";
 import { applyFieldsToPDF } from "../../utils/applySignatureToPDF";
 import { mintEsignSerial } from "../../utils/esignCertificateSerial";
+import { signerFingerprint, clearSavedCaptures } from "../../utils/esignSavedSignature";
 
 // WalkInSigning — in-person multi-signatory signing on a single device.
 //
@@ -46,6 +47,11 @@ export default function WalkInSigning({ doc, adminId, currentUser, onRecordAudit
   const closeSigner = () => { setActiveId(null); setStage("consent"); setConsented(false); setError(""); };
 
   const colorFor = (i) => SIGNER_COLORS[i % SIGNER_COLORS.length];
+
+  // Saved-signature identity for the person currently at the pen. Each roster
+  // row gets its own, so signatory two is never offered signatory one's ink on
+  // this shared desk machine — and it is forgotten as soon as they finish.
+  const inkKey = (signerId) => signerFingerprint(adminId, "walkin", signerId);
 
   // Load the roster + placed fields for this document (source-aware links).
   const load = useCallback(async () => {
@@ -168,12 +174,14 @@ export default function WalkInSigning({ doc, adminId, currentUser, onRecordAudit
         }
         await onRecordAudit?.({ contractId: refId, documentLabel: label, eventType: "completed", actor: "System", detail: "All signatories signed in person. Document sealed.", hash });
         await onNotify?.({ userId: currentUser?.id, type: "success", title: `${name} fully signed`, detail: `${total} signatories signed in person on ${fmtDateTime(signedAt)}.`, contractId: refId });
+        clearSavedCaptures(inkKey(signer.id));
         closeSigner();
         await onSealed?.();
         return;
       }
 
       await onNotify?.({ userId: currentUser?.id, type: "info", title: `${name} — ${signer.name || signer.email} signed`, detail: `${signedCount + 1} of ${total} signatories done.`, contractId: refId });
+      clearSavedCaptures(inkKey(signer.id));
       closeSigner();
     } catch (err) {
       setError(err.message || "Could not record this signature.");
@@ -233,6 +241,7 @@ export default function WalkInSigning({ doc, adminId, currentUser, onRecordAudit
           </div>
         ) : myFields.length > 0 && isPdfUrl(fileUrl) ? (
           <FieldFiller fileUrl={fileUrl} fields={myFields} signerName={active.name}
+            signerKey={inkKey(active.id)}
             submitting={submitting} onComplete={(vals) => completeSigner(active, vals)} />
         ) : (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700">
