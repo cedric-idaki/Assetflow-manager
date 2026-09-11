@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -17,14 +17,16 @@ import { useFinanceHubContext } from '../../contexts/FinanceHubContext';
 import { sendInvoiceEmail } from '../../services/emailService';
 import Icon from '../../components/AppIcon';
 import SaccoFinanceHub from './sacco';
+import { S, Sk, Empty, toast, fmt } from './components/_shared';
+import RecordTransactionTab from './components/RecordTransactionTab';
+import ClientsTab from './components/ClientsTab';
+import ClientRecordModal from '../../components/clients/ClientRecordModal';
 import { html, rawHtml } from '../../utils/htmlEscape';
 import { fetchEmployeePii } from '../../services/employeePiiService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
-const fmt = (n) =>
-  `KES ${parseFloat(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 const fmtDate  = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const fmtMonth = (m) => m ? new Date(m + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) : '—';
 const fmtPct   = (n) => `${parseFloat(n || 0).toFixed(1)}%`;
@@ -62,30 +64,8 @@ const fmtDuration = (months) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESIGN TOKENS (FINNOVA-inspired dark-mode aesthetic adapted for Ararat)
-// ─────────────────────────────────────────────────────────────────────────────
-const S = {
-  page:     'min-h-screen bg-background',
-  panel:    'bg-card border border-border rounded-xl',
-  header:   'flex items-center justify-between px-5 py-4 border-b border-border',
-  body:     'p-5',
-  th:       'text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/40',
-  td:       'px-4 py-3 text-sm text-muted-foreground border-t border-border',
-  tdFirst:  'px-4 py-3 text-sm font-medium text-foreground border-t border-border',
-  row:      'hover:bg-muted/30 transition-colors',
-  input:    'w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all',
-  select:   'bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all',
-  btnPri:   'inline-flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors',
-  btnSec:   'inline-flex items-center gap-2 bg-muted text-foreground px-4 py-2 rounded-lg text-sm font-medium border border-border hover:bg-muted/70 transition-colors',
-  btnGhost: 'inline-flex items-center gap-2 text-muted-foreground px-3 py-1.5 rounded-lg text-sm hover:text-foreground hover:bg-muted transition-colors',
-  label:    'block text-xs font-semibold text-muted-foreground mb-1.5',
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // SHARED COMPONENTS
 // ─────────────────────────────────────────────────────────────────────────────
-const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-md ${className}`} />;
-
 const Tab = ({ active, label, icon, badge, onClick }) => (
   <button
     onClick={onClick}
@@ -199,34 +179,6 @@ const FSRow = ({ label, value, indent = false, total = false, header = false, co
   </div>
 );
 
-// Empty state
-const Empty = ({ icon, text, sub }) => (
-  <div className="flex flex-col items-center justify-center py-16 text-center">
-    <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3">
-      <Icon name={icon} size={20} color="var(--muted-foreground)" />
-    </div>
-    <p className="text-sm font-medium text-foreground mb-1">{text}</p>
-    {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
-  </div>
-);
-
-// Toast
-let _toastTimer;
-const toast = (msg, type = 'success') => {
-  const el = document.getElementById('fh-toast');
-  if (!el) return;
-  const colors = { success: '#10b981', error: '#ef4444', info: '#3b82f6', warning: '#f59e0b' };
-  const icons  = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' };
-  el.textContent = `${icons[type]} ${msg}`;
-  el.style.borderColor = colors[type];
-  el.style.opacity = '1';
-  el.style.transform = 'translateY(0)';
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => {
-    el.style.opacity = '0';
-    el.style.transform = 'translateY(8px)';
-  }, 3500);
-};
 
 // Printable payslip. The markup lives in src/utils/payslipDocument.js so HR can
 // print the same document, and so the payslip an employee receives can be
@@ -422,6 +374,7 @@ const blankInvoiceForm = () => {
 const InvoicesTab = ({
   invoices, loading, companyProfile, financialSummary: fs,
   clients = [], assets = [], onCreate, onUpdateStatus, onDelete,
+  prefillClient = null, onPrefillConsumed, onClientCreated,
 }) => {
   const [search,  setSearch]  = useState('');
   const [filter,  setFilter]  = useState('all');
@@ -431,6 +384,7 @@ const InvoicesTab = ({
   const [saving,   setSaving]   = useState(false);
   const [busyRow,  setBusyRow]  = useState(null);
   const [form,     setForm]     = useState(blankInvoiceForm);
+  const [newClient, setNewClient] = useState(false);
   const { downloading, download } = useDocumentDownload();
 
   // A pending invoice downloads as a TAX INVOICE and a settled one as an
@@ -463,6 +417,30 @@ const InvoicesTab = ({
       client_kra_pin: c?.kra_pin      || '',
     }));
   };
+
+  // Billing a client picked on the Clients tab, or one just created here. The
+  // fields are taken from the row that was handed over rather than looked up in
+  // `clients` — a record created a second ago is not in that list yet, and
+  // finding nothing would blank the bill-to line the user just filled in.
+  const billTo = useCallback((c) => {
+    if (!c) return;
+    setForm(p => ({
+      ...p,
+      client_id:      c.id             || '',
+      client_name:    c.full_name      || '',
+      client_email:   c.email          || '',
+      client_phone:   c.phone          || '',
+      account_no:     c.account_number || '',
+      client_kra_pin: c.kra_pin        || '',
+    }));
+    setShowForm(true);
+  }, []);
+
+  useEffect(() => {
+    if (!prefillClient) return;
+    billTo(prefillClient);
+    onPrefillConsumed?.();
+  }, [prefillClient, billTo, onPrefillConsumed]);
 
   // Choosing an asset fills the first empty line with its description and price
   // so the common case — billing a client for an asset — is two clicks.
@@ -694,7 +672,7 @@ const InvoicesTab = ({
           {inv.plan && (
             <div className="mt-5 rounded-lg border border-primary/25 bg-primary/5 p-4">
               <div className="flex items-center gap-2 mb-3">
-                <Icon name="CalendarClock" size={14} color="var(--primary)" />
+                <Icon name="CalendarClock" size={14} color="var(--color-primary)" />
                 <p className="text-xs font-bold uppercase tracking-wider text-primary">Payment Plan</p>
               </div>
               <div className="grid grid-cols-2 gap-4 pb-3 mb-3 border-b border-primary/20">
@@ -788,7 +766,7 @@ const InvoicesTab = ({
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-48">
-          <Icon name="Search" size={14} color="var(--muted-foreground)" className="absolute left-3 top-1/2 -translate-y-1/2" />
+          <Icon name="Search" size={14} color="var(--color-muted-foreground)" className="absolute left-3 top-1/2 -translate-y-1/2" />
           <input className={`${S.input} pl-9`} placeholder="Search client, invoice #, reference…" value={search} onChange={e => setSearch(e.target.value)} />
         </div>
         {['all', 'draft', 'paid', 'pending', 'overdue'].map(s => (
@@ -810,14 +788,23 @@ const InvoicesTab = ({
         <div className={`${S.panel} border-primary/40`} style={{ background: 'rgba(26,86,219,0.03)' }}>
           <div className={S.header}>
             <span className="font-semibold text-foreground flex items-center gap-2">
-              <Icon name="FilePlus" size={15} color="var(--primary)" /> New Invoice
+              <Icon name="FilePlus" size={15} color="var(--color-primary)" /> New Invoice
             </span>
             <span className="text-xs text-muted-foreground">Number is allocated automatically</span>
           </div>
           <div className={S.body}>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
-                <label className={S.label}>Client *</label>
+                <div className="flex items-center justify-between">
+                  <label className={S.label}>Client *</label>
+                  {/* The dropdown used to be the only way in, so billing a new
+                      customer meant leaving the half-typed invoice to go and
+                      create them somewhere else. */}
+                  <button type="button" className="text-xs font-medium text-primary hover:underline mb-1.5"
+                    onClick={() => setNewClient(true)}>
+                    + New client
+                  </button>
+                </div>
                 <select className={`${S.input} ${S.select}`} value={form.client_id} onChange={e => pickClient(e.target.value)}>
                   <option value="">— Select client —</option>
                   {clients.map(c => (
@@ -1021,6 +1008,21 @@ const InvoicesTab = ({
           </table>
         </div>
       </div>
+
+      <ClientRecordModal
+        isOpen={newClient}
+        onClose={() => setNewClient(false)}
+        onCreated={(client, { linked }) => {
+          // Straight onto the invoice being written. Going back to the dropdown
+          // to find the record you just made is the step this button exists to
+          // remove.
+          billTo(client);
+          onClientCreated?.(client);
+          toast(linked
+            ? `Billing ${client.full_name} — the record already existed`
+            : `${client.full_name} added · ${client.account_number}`, 'success');
+        }}
+      />
     </div>
   );
 };
@@ -1157,7 +1159,7 @@ const blankHead  = () => ({ date: todayISO(), description: '', reference: '', en
 const blankLines = () => [{ account: '', debit: '', credit: '' }, { account: '', debit: '', credit: '' }];
 const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
 
-const JournalTab = ({ journalEntries, chartOfAccounts, companyProfile, loading, onPost, onReverse }) => {
+const JournalTab = ({ journalEntries, chartOfAccounts, companyProfile, loading, onPost, onReverse, onSimpleEntry }) => {
   const [head,   setHead]   = useState(blankHead);
   const [lines,  setLines]  = useState(blankLines);
   const [saving, setSaving] = useState(false);
@@ -1247,11 +1249,31 @@ const JournalTab = ({ journalEntries, chartOfAccounts, companyProfile, loading, 
 
   return (
     <div className="space-y-5">
+      {/* Anyone who has landed here and does not think in debits and credits
+          has a way out. This grid is the specialist tool, not the only one. */}
+      {onSimpleEntry && (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border border-border bg-muted/30">
+          <div className="flex items-start gap-3 min-w-0">
+            <Icon name="Sparkles" size={18} color="var(--color-primary)" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">Not sure which side an amount goes on?</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Record a Transaction asks what happened in plain language and works the double entry out for you.
+                It posts into this same journal.
+              </p>
+            </div>
+          </div>
+          <button className={S.btnSec} onClick={onSimpleEntry}>
+            <Icon name="ArrowRight" size={14} color="currentColor" /> Record a Transaction
+          </button>
+        </div>
+      )}
+
       {/* New entry composer */}
       <div className={S.panel}>
         <div className={S.header}>
           <div className="flex items-center gap-2">
-            <Icon name="BookOpen" size={16} color="var(--primary)" />
+            <Icon name="BookOpen" size={16} color="var(--color-primary)" />
             <span className="font-semibold text-foreground">New Journal Entry</span>
           </div>
           <span className={`text-xs font-semibold ${balanced ? 'text-emerald-600' : 'text-muted-foreground'}`}>
@@ -1539,7 +1561,7 @@ const ChartOfAccountsTab = ({ chartOfAccounts, loading, onAdd, onToggle }) => {
       {/* Toolbar */}
       <div className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-48">
-          <Icon name="Search" size={14} color="var(--muted-foreground)" className="absolute left-3 top-1/2 -translate-y-1/2" />
+          <Icon name="Search" size={14} color="var(--color-muted-foreground)" className="absolute left-3 top-1/2 -translate-y-1/2" />
           <input className={`${S.input} pl-9`} placeholder="Search by code, name or category…" value={search} onChange={e => setSearch(e.target.value)} />
         </div>
         <select className={`${S.input} ${S.select} w-auto`} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
@@ -1557,7 +1579,7 @@ const ChartOfAccountsTab = ({ chartOfAccounts, loading, onAdd, onToggle }) => {
         <div className={`${S.panel} border-primary/40`} style={{ background: 'rgba(26,86,219,0.03)' }}>
           <div className={S.header}>
             <span className="font-semibold text-foreground flex items-center gap-2">
-              <Icon name="Plus" size={15} color="var(--primary)" /> New Account
+              <Icon name="Plus" size={15} color="var(--color-primary)" /> New Account
             </span>
           </div>
           <div className={S.body}>
@@ -1681,7 +1703,7 @@ const PayeWorking = ({ result }) => {
         className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/30 hover:bg-muted/50 transition-colors"
       >
         <span className="text-xs font-semibold text-foreground">How this PAYE was calculated</span>
-        <Icon name={open ? 'ChevronUp' : 'ChevronDown'} size={14} color="var(--muted-foreground)" />
+        <Icon name={open ? 'ChevronUp' : 'ChevronDown'} size={14} color="var(--color-muted-foreground)" />
       </button>
 
       {open && (
@@ -2011,7 +2033,7 @@ const PayrollTab = ({ payrollRecords, employees, loading, onRunPayroll, onApprov
             ) : (
               <div className={`${S.panel} flex items-center justify-center py-20`}>
                 <div className="text-center">
-                  <Icon name="Calculator" size={32} color="var(--muted-foreground)" />
+                  <Icon name="Calculator" size={32} color="var(--color-muted-foreground)" />
                   <p className="text-sm text-muted-foreground mt-3">Select an employee and click Preview</p>
                   <p className="text-xs text-muted-foreground">to see Kenya statutory deductions</p>
                 </div>
@@ -2735,7 +2757,7 @@ const FinanceHub = () => {
     postJournalEntry, reverseJournalEntry, runPayroll, approvePayroll,
     addAccountToCOA, toggleAccountStatus,
     createInvoice, updateInvoiceStatus, deleteInvoice,
-    refetch, TRIGGER_LABELS,
+    refetch, refreshClients, TRIGGER_LABELS,
   } = useFinanceHubContext();
 
   // Tab state lives in the URL so it survives navigation and page refresh
@@ -2743,8 +2765,21 @@ const FinanceHub = () => {
   const activeTab = searchParams.get('tab') || 'invoices';
   const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
 
+  // Billing somebody chosen on the Clients tab. Held here because the two tabs
+  // are siblings: the client is picked in one and the invoice is written in the
+  // other, and the hand-off is cleared as soon as the form has taken it.
+  const [invoiceFor, setInvoiceFor] = useState(null);
+  const billClient = (client) => { setInvoiceFor(client); setActiveTab('invoices'); };
+
   const tabs = [
     { id: 'invoices',   label: 'Invoices',            icon: 'FileText',  badge: fs.pendingInvoices  },
+    // Next to Invoices because that is the order the work happens in: you
+    // cannot bill somebody who is not on file.
+    { id: 'clients',    label: 'Clients',             icon: 'Users',     badge: 0 },
+    // Ahead of the journal deliberately. Most people opening this hub want to
+    // record what happened today, and the debit/credit grid is the specialist
+    // tool, not the default one.
+    { id: 'record',     label: 'Record a Transaction',icon: 'Sparkles',  badge: 0 },
     { id: 'automated',  label: 'Auto Journal Feed',   icon: 'Zap',       badge: automatedEntries.length > 0 ? 0 : 0 },
     { id: 'journal',    label: 'Journal Entries',     icon: 'BookOpen',  badge: 0 },
     { id: 'coa',        label: 'Chart of Accounts',   icon: 'Layers',    badge: 0 },
@@ -2832,6 +2867,22 @@ const FinanceHub = () => {
               onCreate={createInvoice}
               onUpdateStatus={updateInvoiceStatus}
               onDelete={deleteInvoice}
+              prefillClient={invoiceFor}
+              onPrefillConsumed={() => setInvoiceFor(null)}
+              onClientCreated={refreshClients}
+            />
+          )}
+          {activeTab === 'clients' && (
+            <ClientsTab
+              onInvoiceClient={billClient}
+              onClientCreated={refreshClients}
+            />
+          )}
+          {activeTab === 'record' && (
+            <RecordTransactionTab
+              chartOfAccounts={chartOfAccounts} loading={loading}
+              onPost={postJournalEntry} onAddAccount={addAccountToCOA}
+              onSeeJournal={() => setActiveTab('journal')}
             />
           )}
           {activeTab === 'automated' && (
@@ -2846,6 +2897,7 @@ const FinanceHub = () => {
               journalEntries={journalEntries} chartOfAccounts={chartOfAccounts} loading={loading}
               companyProfile={companyProfile}
               onPost={postJournalEntry} onReverse={reverseJournalEntry}
+              onSimpleEntry={() => setActiveTab('record')}
             />
           )}
           {activeTab === 'coa' && (

@@ -3,6 +3,9 @@ import { supabase } from '../../../lib/supabase';
 import { formatKEPhone } from '../../../utils/phoneUtils';
 import { NOK_RELATIONSHIPS, nokRelationshipLabel, normalizeNokRelationship } from '../../../utils/nokRelationship';
 import { useAuth } from '../../../contexts/AuthContext';
+import {
+  useClientRecords, useDuplicateWatch, describeMatch, isBlockingMatch, DUPLICATE_CODE,
+} from '../../../hooks/useClientRecords';
 import Icon from '../../../components/AppIcon';
 
 // ── Input class helper ──────────────────────────────────────────────────────────
@@ -11,12 +14,10 @@ const ic = (err) =>
     err ? 'border-red-400 bg-red-50' : 'border-gray-200'
   }`;
 
-// ── Account number (matches the admin client form: AF-YYYY-NNNNNN) ──────────────
-const generateAccountNumber = () => {
-  const year = new Date().getFullYear();
-  const seq  = String(Math.floor(Math.random() * 999999) + 1).padStart(6, '0');
-  return `AF-${year}-${seq}`;
-};
+// The account number used to be minted here, as AF-YYYY-NNNNNN from Math.random.
+// finhub_create_client allocates it now: the column is UNIQUE across the whole
+// table, and two browsers inventing one is how you get a 23505 in front of a
+// customer. The format is unchanged.
 
 // ── Strong temporary password (>= 8 chars, one of each class, no ambiguous) ─────
 const generatePassword = () => {
@@ -61,9 +62,13 @@ const SuccessPopup = ({ account, onDone }) => {
           </div>
         </div>
 
-        <h3 className="text-2xl font-bold text-gray-900 mb-1">Client Created!</h3>
+        <h3 className="text-2xl font-bold text-gray-900 mb-1">
+          {account.adopted ? 'Linked to Their Record' : 'Client Created!'}
+        </h3>
         <p className="text-sm text-gray-500 mb-5">
-          {account.full_name} is now a client of your company
+          {account.adopted
+            ? `${account.full_name} was already on file — the lead is now linked to that record, so there is still only one of them.`
+            : `${account.full_name} is now a client of your company`}
         </p>
 
         {/* Account summary card */}
@@ -91,8 +96,14 @@ const SuccessPopup = ({ account, onDone }) => {
           )}
         </div>
 
-        {/* Login provisioning / email status */}
-        {account.loginCreated ? (
+        {/* Login provisioning / email status. An adopted record is not given a
+            second login — it has been on file and may already have one. */}
+        {account.adopted ? (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-700 mb-3 text-left w-full">
+            No new login was created. If they cannot sign in, an admin can provision one
+            against this existing record.
+          </div>
+        ) : account.loginCreated ? (
           <div className={`border rounded-xl p-3 text-xs mb-3 text-left w-full ${emailLabel.cls}`}>
             {emailLabel.text}
           </div>
@@ -118,11 +129,16 @@ const SuccessPopup = ({ account, onDone }) => {
 const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSuccess }) => {
   const { user, userProfile } = useAuth();
 
+  const { findDuplicates, createClient } = useClientRecords({ enabled: false });
+
   const [step, setStep]       = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
   const [success, setSuccess] = useState(false);
   const [createdAccount, setCreatedAccount] = useState(null);
+  // "They really are two different people." Ticked by the agent, recorded by
+  // finhub_create_client against their name.
+  const [force, setForce]     = useState(false);
 
   const [form, setForm] = useState({
     // Client contact (prefilled from a lead when converting one)
@@ -140,6 +156,11 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
     nok_relationship: normalizeNokRelationship(prefillLead?.next_of_kin_relationship) || '',
   });
   const [errors, setErrors] = useState({});
+
+  // Who is already on file that looks like this. Asked while the form is being
+  // filled in, because a duplicate customer cannot be undone once invoices have
+  // been raised against both records.
+  const { matches, blocking } = useDuplicateWatch(form, findDuplicates, { enabled: isOpen });
 
   const set = (k, v) => {
     setForm(p => ({ ...p, [k]: v }));
@@ -177,6 +198,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
     });
     setErrors({});
     setError('');
+    setForce(false);
     setSuccess(false);
     setCreatedAccount(null);
     onClose();
@@ -238,7 +260,17 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
   };
 
   // ── Submit — create the client record + portal login ────────────────────────
-  const handleSubmit = async () => {
+  //
+  // The record itself is created by finhub_create_client, not by an insert from
+  // here. That is what links it to the lead, what makes converting the same
+  // lead twice return the first customer instead of making a second one, and
+  // what refuses a record that duplicates somebody already on file. An insert
+  // from the browser can do none of those things, and this form used to write
+  // the lead id into an audit line and nowhere else.
+  //
+  // `useExistingId` is the agent saying "that IS them" from the duplicate panel:
+  // no new record, the one on file takes the lead link.
+  const handleSubmit = async ({ useExistingId = null } = {}) => {
     setLoading(true);
     setError('');
 
@@ -246,58 +278,68 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
       const email   = form.email.trim().toLowerCase();
       // The client belongs to the agent's own company.
       const adminId = agentProfile?.admin_id || userProfile?.admin_id || null;
-      const accountNumber = generateAccountNumber();
 
-      // 1. Insert the client row (RLS: authenticated_manage_clients allows this).
-      //    safeKeys mirrors the admin client form so any column absent in this
-      //    environment is dropped instead of throwing a schema-cache error.
-      const insertPayload = {
-        account_number:   accountNumber,
-        full_name:        form.full_name.trim(),
-        email,
-        phone:            form.phone.trim()            || null,
-        national_id:      form.national_id.trim()      || null,
-        kra_pin:          form.kra_pin.trim()          || null,
-        physical_address: form.physical_address.trim() || null,
+      const newClient = await createClient(
+        {
+          full_name:       form.full_name,
+          phone:           form.phone,
+          email,
+          kra_pin:         form.kra_pin,
+          national_id:     form.national_id,
+          billing_address: form.physical_address,
+          customer_type:   'account',
+        },
+        {
+          leadId:  prefillLead?.id || null,
+          agentId: agentProfile?.id || null,
+          useExistingId,
+          force:   useExistingId ? false : force,
+        },
+      );
+
+      // Adopting an existing customer means writing as little as possible to
+      // their file: the record is theirs, and what is already on it beats what
+      // somebody has just typed into a lead form.
+      const adopted = Boolean(useExistingId);
+
+      // The KYC details this form collects on top of a billing identity. Kept
+      // out of the RPC on purpose — it exists to create the MINIMUM a customer
+      // needs to be invoiced — and applied here as a patch. NOT applied to an
+      // adopted record: overwriting an existing customer's next of kin with
+      // whatever was typed here is not a detail, it is data loss. `.select()`
+      // because an update without it cannot tell success from an RLS refusal.
+      const kycPatch = {
         postal_address:   form.postal_address.trim()   || null,
         city:             form.city.trim()             || null,
-        country:          'Kenya',
         nok_name:         form.nok_name.trim()         || null,
         nok_phone:        form.nok_phone.trim()        || null,
         nok_relationship: normalizeNokRelationship(form.nok_relationship),
-        client_status:    'active',
-        kyc_status:       'unverified',
-        admin_id:         adminId,
-        created_by:       user?.id || null,
-        agent_id:         agentProfile?.id || null,
       };
-      const safeKeys = [
-        'account_number', 'full_name', 'email', 'phone', 'national_id', 'kra_pin',
-        'physical_address', 'postal_address', 'city', 'country',
-        'nok_name', 'nok_phone', 'nok_relationship',
-        'client_status', 'kyc_status', 'admin_id', 'created_by', 'agent_id',
-      ];
-      const safePayload = Object.fromEntries(
-        Object.entries(insertPayload).filter(([k, v]) => safeKeys.includes(k) && v !== undefined)
-      );
-
-      const { data: newClient, error: clientErr } = await supabase
-        .from('clients')
-        .insert(safePayload)
-        .select('id, account_number')
-        .single();
-      if (clientErr) throw clientErr;
+      if (!adopted && Object.values(kycPatch).some(Boolean)) {
+        const { data: patched, error: patchErr } = await supabase
+          .from('clients')
+          .update(kycPatch)
+          .eq('id', newClient.id)
+          .select('id');
+        if (patchErr || !patched?.length) {
+          // The customer exists and can be billed; only the extra KYC detail
+          // did not stick. Say so rather than failing the whole registration.
+          console.warn('[Ararat] client KYC details not saved:', patchErr?.message || 'no row updated');
+        }
+      }
 
       // 2. Provision the portal login and link it to the client row.
-      const password  = generatePassword();
-      const provision = await provisionLogin({
-        clientId: newClient.id,
-        email,
-        fullName: form.full_name.trim(),
-        phone:    form.phone.trim(),
-        adminId,
-        password,
-      });
+      const password  = adopted ? null : generatePassword();
+      const provision = adopted
+        ? { success: false, error: null }
+        : await provisionLogin({
+            clientId: newClient.id,
+            email,
+            fullName: form.full_name.trim(),
+            phone:    form.phone.trim(),
+            adminId,
+            password,
+          });
 
       // 3. Email the credentials (best-effort — falls back to on-screen display).
       let emailStatus = 'skipped';
@@ -317,7 +359,9 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
         await auditLogsService.log(
           'create',
           'clients',
-          `Sales agent ${agentProfile?.full_name || 'Agent'} (${agentProfile?.agent_code || ''}) registered client "${form.full_name.trim()}" (${email}) — Acc ${newClient.account_number}`,
+          `Sales agent ${agentProfile?.full_name || 'Agent'} (${agentProfile?.agent_code || ''}) ${
+            adopted ? 'linked a lead to existing client' : 'registered client'
+          } "${newClient.full_name || form.full_name.trim()}" (${email}) — Acc ${newClient.account_number}`,
           newClient.id,
           user?.id,
           {
@@ -327,6 +371,7 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
             created_by_agent: agentProfile?.agent_code,
             agent_name:       agentProfile?.full_name,
             from_lead_id:     prefillLead?.id || null,
+            linked_existing:  adopted,
           }
         );
       } catch (auditErr) {
@@ -334,13 +379,14 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
       }
 
       const accountDetails = {
-        full_name:      form.full_name.trim(),
+        full_name:      newClient.full_name || form.full_name.trim(),
         email,
         account_number: newClient.account_number,
         password:       provision.success ? password : null,
         loginCreated:   provision.success,
         loginError:     provision.error,
         emailStatus,
+        adopted,
         leadId:         prefillLead?.id || null,
         clientId:       newClient.id,
       };
@@ -350,7 +396,12 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
       onSuccess?.(accountDetails);
 
     } catch (err) {
-      setError(err.message || 'Something went wrong. Please try again.');
+      // The database refuses a record that duplicates somebody already on file.
+      // Name what happened rather than letting a raw SQLSTATE message stand: the
+      // panel above already lists who it collided with.
+      setError(err?.code === DUPLICATE_CODE
+        ? `${err.message} Pick them from the list above, or tick the box to register a separate customer.`
+        : (err?.message || 'Something went wrong. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -539,6 +590,55 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
               )}
             </div>
           )}
+
+          {/* ── Already on file ─────────────────────────────────────────────
+              Shown on both steps, because the answer changes as the details
+              are typed and it is useless if it only appears at the end. */}
+          {matches.length > 0 && (
+            <div className={`mt-4 rounded-xl border p-3 space-y-2 ${
+              blocking.length > 0 ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-gray-50'
+            }`}>
+              <p className="text-xs font-semibold text-gray-900 flex items-center gap-2">
+                <Icon name={blocking.length > 0 ? 'AlertTriangle' : 'Search'} size={14}
+                  color={blocking.length > 0 ? '#d97706' : '#6b7280'} />
+                {blocking.length > 0
+                  ? 'This customer may already be registered'
+                  : 'Possible match'}
+              </p>
+              {matches.map(row => (
+                <div key={row.id} className="flex items-start justify-between gap-3 p-2.5 rounded-lg border border-gray-200 bg-white">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 truncate">
+                      {row.full_name}
+                      {row.account_number && <span className="font-normal text-gray-500"> · {row.account_number}</span>}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {describeMatch(row.matched_on)}
+                      {!isBlockingMatch(row) && ' — quite possibly a different person'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => handleSubmit({ useExistingId: row.id })}
+                    className="flex-shrink-0 px-3 py-1.5 text-xs font-semibold rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                  >
+                    That's them
+                  </button>
+                </div>
+              ))}
+              {blocking.length > 0 && (
+                <label className="flex items-start gap-2 text-xs text-gray-700 pt-1 cursor-pointer">
+                  <input type="checkbox" checked={force} className="mt-0.5"
+                    onChange={e => { setForce(e.target.checked); setError(''); }} />
+                  <span>
+                    Different people — register a separate client anyway.
+                    <span className="text-gray-500"> Recorded against your name.</span>
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -550,8 +650,8 @@ const CreateClientModal = ({ isOpen, onClose, agentProfile, prefillLead, onSucce
             </button>
           )}
           <button
-            onClick={step < 2 ? handleNext : handleSubmit}
-            disabled={loading}
+            onClick={step < 2 ? handleNext : () => handleSubmit()}
+            disabled={loading || (step === 2 && blocking.length > 0 && !force)}
             className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl disabled:opacity-60"
           >
             {loading ? (

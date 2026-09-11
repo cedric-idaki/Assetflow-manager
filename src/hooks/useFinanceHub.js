@@ -468,6 +468,14 @@ export const useFinanceHub = () => {
     } catch { setClients([]); }
   }, []);
 
+  // Re-read the bill-to list on its own. Creating a client from inside the
+  // invoice form must put that client in the dropdown, and reloading the whole
+  // hub for it would re-fetch the ledger, the payroll and the chart as well.
+  const refreshClients = useCallback(async () => {
+    const aId = adminIdRef.current;
+    if (aId) await fetchClients(aId);
+  }, [fetchClients]);
+
   const fetchAssets = useCallback(async (aId) => {
     try {
       // assets.admin_id names the owning tenant directly, so the old
@@ -935,6 +943,7 @@ const { data, error: err } = await supabase
     deleteInvoice,
     runPayroll,
     approvePayroll,
+    refreshClients,
     refetch: loadAll,
     TRIGGER_LABELS,
     DEFAULT_COA,

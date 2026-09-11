@@ -238,7 +238,14 @@ export const createFakeSupabase = ({
         writes.push({ op: 'rpc', name, args });
         return { data: data === undefined ? null : data, error: null };
       } catch (err) {
-        return { data: null, error: { message: err?.message || String(err) } };
+        // `code` rides along because PostgREST passes the SQLSTATE through, and
+        // callers switch on it: a duplicate refusal ('23505') is a question to
+        // put to the user, not a failure to report. Dropping it here would make
+        // that branch untestable.
+        return {
+          data: null,
+          error: { message: err?.message || String(err), code: err?.code, details: err?.details },
+        };
       }
     },
     auth: {
