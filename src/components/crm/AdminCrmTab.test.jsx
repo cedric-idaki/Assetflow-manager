@@ -212,3 +212,64 @@ describe('AdminCrmTab', () => {
     expect(screen.getByText('Jane Mwangi')).toBeInTheDocument();
   });
 });
+
+/**
+ * The front page /crm opens on.
+ *
+ * Driven through the controlled `view` prop, which is the contract the page
+ * uses to keep the chosen view in its URL. Uncontrolled the component still
+ * opens on the client book, which every test above relies on.
+ */
+describe('AdminCrmTab — overview', () => {
+  const card = (title) => screen.getByText(title).closest('.bg-card');
+
+  it('renders the three things a morning starts with', () => {
+    render(<AdminCrmTab view="overview" />);
+    expect(screen.getByText('Due now')).toBeInTheDocument();
+    expect(screen.getByText('Needs attention')).toBeInTheDocument();
+    expect(screen.getByText('Recent contact')).toBeInTheDocument();
+  });
+
+  it('ranks the customer nobody has ever called above the one merely gone quiet', () => {
+    render(<AdminCrmTab view="overview" />);
+
+    const names = within(card('Needs attention'))
+      .getAllByText(/^(Jane Mwangi|Peter Otieno|Grace Wanjiru)$/);
+    // Peter was spoken to two days ago, so he is not neglected at all.
+    expect(names.map(n => n.textContent)).toEqual(['Grace Wanjiru', 'Jane Mwangi']);
+  });
+
+  it('shows the late office appointment, what it was for and how late', () => {
+    render(<AdminCrmTab view="overview" />);
+
+    const due = within(card('Due now'));
+    expect(due.getByText('Chase the payment plan')).toBeInTheDocument();
+    expect(due.getByText('3 days late')).toBeInTheDocument();
+    // The agent's appointment is two days out and belongs to their diary.
+    expect(due.queryByText('Peter Otieno')).not.toBeInTheDocument();
+  });
+
+  it('reports coverage as the same figure the reports view does', () => {
+    render(<AdminCrmTab view="overview" />);
+    expect(within(screen.getByRole('button', { name: /Reached/ })).getByText('33%'))
+      .toBeInTheDocument();
+  });
+
+  it('hands a tile click back to the page rather than switching views itself', () => {
+    const onViewChange = vi.fn();
+    render(<AdminCrmTab view="overview" onViewChange={onViewChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Overdue/ }));
+    expect(onViewChange).toHaveBeenCalledWith('followups');
+    // Still on the overview: the page owns the view, not the component.
+    expect(screen.getByText('Due now')).toBeInTheDocument();
+  });
+
+  it('opens the log form for a neglected customer straight from the list', () => {
+    render(<AdminCrmTab view="overview" />);
+
+    const rows = within(card('Needs attention')).getAllByTitle('Log a contact');
+    fireEvent.click(rows[0]);
+    expect(screen.getByText('Log a Contact')).toBeInTheDocument();
+  });
+});

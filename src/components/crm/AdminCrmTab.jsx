@@ -4,6 +4,7 @@ import { useAdminCrm, buildClientCrmExport, buildActivityExport } from '../../ho
 import { downloadCSV } from '../../utils/exportUtils';
 import { Sk } from './crmFormat';
 
+import CrmOverviewPanel    from './CrmOverviewPanel';
 import ClientBookPanel     from './ClientBookPanel';
 import ClientCrmDrawer     from './ClientCrmDrawer';
 import FollowUpDiaryPanel  from './FollowUpDiaryPanel';
@@ -22,8 +23,9 @@ import ScheduleFollowUpModal from '../../pages/sales-agent-portal/components/Sch
 /**
  * The administrator's CRM.
  *
- * Five views over one tenant's customer relationships:
+ * Six views over one tenant's customer relationships:
  *
+ *   Overview   — what needs doing this morning, and a way into the rest.
  *   Clients    — the book, sorted by who has been neglected longest.
  *   Follow-ups — the diary, sorted by what is late.
  *   Activity   — the communication record, filterable and exportable.
@@ -34,9 +36,15 @@ import ScheduleFollowUpModal from '../../pages/sales-agent-portal/components/Sch
  * still read-only: watching an agent's pipeline and running your own customer
  * relationships are different jobs, and mixing them is how an admin ends up
  * editing a lead out from under the person working it.
+ *
+ * The view can be driven from outside (`view` + `onViewChange`) or left to look
+ * after itself. /crm drives it, so the chosen view lives in that page's URL and
+ * survives a refresh; uncontrolled it opens on the client book, which is what
+ * this component has always done on its own.
  */
 
-const VIEWS = [
+export const CRM_VIEWS = [
+  { id: 'overview',  label: 'Overview',   icon: 'LayoutDashboard', hint: 'What needs doing today' },
   { id: 'clients',   label: 'Clients',    icon: 'Users',         hint: 'Your customer book' },
   { id: 'followups', label: 'Follow-ups', icon: 'CalendarClock', hint: 'What you have promised' },
   { id: 'activity',  label: 'Activity',   icon: 'MessagesSquare',hint: 'Every contact recorded' },
@@ -44,7 +52,9 @@ const VIEWS = [
   { id: 'agents',    label: 'Sales team', icon: 'UserCheck',     hint: 'Agent pipelines (read-only)' },
 ];
 
-const AdminCrmTab = ({ onExport }) => {
+const VIEWS = CRM_VIEWS;
+
+const AdminCrmTab = ({ onExport, view: viewProp, onViewChange }) => {
   const crm = useAdminCrm();
   const {
     canView, book, interactions, clients, diary, teamDiary, summary,
@@ -53,7 +63,10 @@ const AdminCrmTab = ({ onExport }) => {
     deleteFollowUp, deleteInteraction, saveClientNote, refetch,
   } = crm;
 
-  const [view, setView]       = useState('clients');
+  const [localView, setLocalView] = useState('clients');
+  const view    = viewProp || localView;
+  const setView = onViewChange || setLocalView;
+
   const [openClient, setOpen] = useState(null);
   const [logFor, setLogFor]       = useState(undefined);   // undefined = closed
   const [scheduleFor, setSchedule] = useState(undefined);
@@ -120,7 +133,9 @@ const AdminCrmTab = ({ onExport }) => {
       {/* View switch */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {VIEWS.map((v) => {
-          const badge = v.id === 'followups' ? diary.overdue
+          // `diary.overdue` is the bucket itself, not a count — comparing the
+          // array against 0 yields NaN, so this chip has never shown its badge.
+          const badge = v.id === 'followups' ? diary.overdue.length
             : v.id === 'clients' ? summary.clients.never
             : 0;
           return (
@@ -145,13 +160,33 @@ const AdminCrmTab = ({ onExport }) => {
           );
         })}
 
-        <button
-          onClick={refetch}
-          title="Refresh"
-          className="ml-auto p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex-shrink-0"
-        >
-          <Icon name="RefreshCw" size={15} color="currentColor" />
-        </button>
+        {/* The two writes, on every view rather than only where a row happens
+            to offer them: a call that has just come in is logged from wherever
+            the screen already was. `null` means "no client chosen yet" — the
+            modals open on their own picker. */}
+        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+          <button
+            onClick={() => setLogFor(null)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-opacity"
+          >
+            <Icon name="PhoneCall" size={14} color="currentColor" />
+            Log a contact
+          </button>
+          <button
+            onClick={() => setSchedule(null)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Icon name="CalendarPlus" size={14} color="currentColor" />
+            Book a follow-up
+          </button>
+          <button
+            onClick={refetch}
+            title="Refresh"
+            className="p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Icon name="RefreshCw" size={15} color="currentColor" />
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -170,6 +205,21 @@ const AdminCrmTab = ({ onExport }) => {
       )}
 
       {/* Panels */}
+      {view === 'overview' && (
+        <CrmOverviewPanel
+          book={book}
+          interactions={interactions}
+          diary={diary}
+          summary={summary}
+          loading={loading}
+          nameFor={clientName}
+          onGo={setView}
+          onOpenClient={c => setOpen(c.id)}
+          onLog={c => setLogFor(c)}
+          onSchedule={c => setSchedule(c)}
+        />
+      )}
+
       {view === 'clients' && (
         <ClientBookPanel
           book={book}

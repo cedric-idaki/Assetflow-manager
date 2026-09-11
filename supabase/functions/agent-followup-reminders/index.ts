@@ -31,12 +31,14 @@ declare const Deno: any;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 // Where the portal lives, for the "open my portal" button in the email. An
-// appointment booked by the office belongs to the admin CRM tab, not the agent
-// portal — sending a manager to a portal they cannot open is a dead link.
+// appointment booked by the office belongs to the CRM, not the agent portal —
+// sending a manager to a portal they cannot open is a dead link. /crm replaced
+// /admin-dashboard?tab=crm when the CRM moved to the sidebar; that old address
+// still forwards, so reminders already sent keep working.
 const PORTAL_URL = Deno.env.get("PORTAL_URL") || "";
 const baseUrl = PORTAL_URL.replace(/\/$/, "");
 const portalLink = PORTAL_URL ? `${baseUrl}/sales-agent-portal` : "";
-const officeLink = PORTAL_URL ? `${baseUrl}/admin-dashboard?tab=crm` : "";
+const officeLink = PORTAL_URL ? `${baseUrl}/crm` : "";
 
 // How far back to look. A follow-up whose remind_at is older than this was
 // almost certainly missed while the worker was down; emailing a two-week-old

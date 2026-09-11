@@ -142,7 +142,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
           <div class="grid">
             <div class="row"><span class="label">Full Name:</span><span class="value">${client?.full_name || '—'}</span></div>
             <div class="row"><span class="label">Account Number:</span><span class="value">${client?.account_number || '—'}</span></div>
-            <div class="row"><span class="label">ID Number:</span><span class="value">${client?.id_number || '—'}</span></div>
+            <div class="row"><span class="label">ID Number:</span><span class="value">${client?.national_id || '—'}</span></div>
             <div class="row"><span class="label">Phone:</span><span class="value">${client?.phone || '—'}</span></div>
             <div class="row"><span class="label">Email:</span><span class="value">${client?.email || '—'}</span></div>
           </div>

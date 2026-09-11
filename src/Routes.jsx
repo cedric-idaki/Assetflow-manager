@@ -42,6 +42,7 @@ const ResetPassword             = lazy(() => import('./pages/reset-password'));
 const ClientPortal              = lazy(() => import('./pages/client-portal'));
 const SubscriptionBilling       = lazy(() => import('./pages/subscription-billing'));
 const ProfilePage               = lazy(() => import('./pages/profile'));
+const CrmPage                   = lazy(() => import('./pages/crm'));
 const SaccoDashboard            = lazy(() => import('./pages/sacco-dashboard'));
 const SaccoMemberPortal         = lazy(() => import('./pages/sacco-member-portal'));
 const SaccoOversight            = lazy(() => import('./pages/sacco-oversight'));
@@ -78,6 +79,11 @@ const ALL_INTERNAL  = ['super_admin', 'admin', 'director', 'accountant', 'collec
 // The sacco side: both society portals plus the platform operator, matching how
 // /sacco-dashboard is gated. Used by the certificate verification desk.
 const SACCO_ROLES   = ['sacco_admin', 'sacco_member', 'super_admin'];
+// Who may open the CRM. Mirrors public.is_crm_supervisor() exactly — the
+// database is the thing actually enforcing it, and a role allowed through here
+// but not there would reach a screen that reads as empty rather than refused.
+// Kept in step with CRM_SUPERVISOR_ROLES in src/hooks/useCrmOversight.js.
+const CRM_ROLES     = ['super_admin', 'admin', 'director', 'manager', 'sacco_admin'];
 
 /**
  * Routes the Play Store app must not show, because they sell a subscription.
@@ -255,6 +261,22 @@ const Routes = () => {
               <RoleGuard allowedRoles={KYC_RENEWAL_ROLES}>
                 <ModuleGuard module="kyc">
                   <KYCRenewalManagementScreen />
+                </ModuleGuard>
+              </RoleGuard>
+            </ProtectedRoute>
+          } />
+
+          {/* ── CRM ────────────────────────────────────────────────────────
+              Its own page rather than a tab on /admin-dashboard, which only an
+              `admin` can open — the tenant's book is shared with its directors
+              and managers, and they had no way in. ?tab=crm on the old
+              dashboard redirects here, so emailed follow-up reminders and any
+              bookmark still land. */}
+          <Route path="/crm" element={
+            <ProtectedRoute>
+              <RoleGuard allowedRoles={CRM_ROLES}>
+                <ModuleGuard module="crm">
+                  <CrmPage />
                 </ModuleGuard>
               </RoleGuard>
             </ProtectedRoute>

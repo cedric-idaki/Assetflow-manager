@@ -79,7 +79,7 @@ export const MODULES = [
   },
   {
     key: 'crm', label: 'CRM & Leads', icon: 'PhoneCall', scope: 'all',
-    requires: ['clients'], routes: [],
+    requires: ['clients'], routes: ['/crm'],
     desc: 'Interaction log, follow-ups and lead conversion.',
   },
   {

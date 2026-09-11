@@ -6,15 +6,14 @@ import Icon from '../../../components/AppIcon';
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
-const SettlementsTab = ({ adminId, clients }) => {
+const SettlementsTab = ({ adminId }) => {
   const [plans,           setPlans]           = useState([]);
   const [assets,          setAssets]          = useState({});
+  const [clientMap,       setClientMap]       = useState({});
   const [companyProfile,  setCompanyProfile]  = useState(null);
   const [loading,         setLoading]         = useState(true);
   const [selectedPlan,    setSelectedPlan]    = useState(null);
   const [filter,          setFilter]          = useState('completed');
-
-  const clientMap = Object.fromEntries((clients || []).map(c => [c.id, c]));
 
   const fetchData = useCallback(async () => {
     if (!adminId) return;
@@ -27,6 +26,24 @@ const SettlementsTab = ({ adminId, clients }) => {
         .order('created_at', { ascending: false });
 
       setPlans(plansData || []);
+
+      // Resolve the people on these plans from the plans themselves, the same
+      // way the assets below are resolved. This used to arrive as a `clients`
+      // prop, and the caller could not be trusted to cover what is on screen:
+      // on the super-admin dashboard row-level security lets a global viewer
+      // read every tenant's plans, while the list handed in was filtered to
+      // one tenant, so most rows rendered a dash where a name belongs. The
+      // columns are the ones this table and the settlement letter print.
+      const clientIds = [...new Set((plansData || []).map(p => p.client_id).filter(Boolean))];
+      if (clientIds.length > 0) {
+        const { data: clientsData } = await supabase
+          .from('clients')
+          .select('id, full_name, account_number, national_id, phone, email')
+          .in('id', clientIds);
+        const cmap = {};
+        (clientsData || []).forEach(c => { cmap[c.id] = c; });
+        setClientMap(cmap);
+      }
 
       // Fetch related assets
       const assetIds = [...new Set((plansData || []).map(p => p.asset_id).filter(Boolean))];

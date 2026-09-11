@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Navigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
@@ -12,10 +12,6 @@ import StaffTab       from './components/StaffTab';
 import ContractsTab        from './components/ContractsTab';
 import SettlementsTab      from './components/SettlementsTab';
 import PaymentRemindersTab from './components/PaymentRemindersTab';
-import SalesReportTab from './components/SalesReportTab';
-
-import KYCReviewTab   from './components/KYCReviewTab';
-import AdminCrmTab from '../../components/crm/AdminCrmTab';
 import SalesTeamPanel from '../../components/sales/SalesTeamPanel';
 
 const Sk = ({ className = '' }) => (
@@ -65,7 +61,7 @@ const ConnDot = ({ status }) => (
 const AdminDashboard = () => {
   const { userProfile } = useAuth();
   const {
-    stats, clients, assets, agents, staff,
+    stats, clients, agents, staff,
     contracts, payments, auditLogs, subscription, companyProfile,
     salesAnalytics, loading, connectionStatus,
     refetch, inviteClient, createAgent, inviteStaff, toggleStaffActive,
@@ -89,15 +85,18 @@ const AdminDashboard = () => {
   const activeStaff = (staff || []).filter(s => s.role !== 'client' && s.role !== 'staff' && s.is_active !== false).length;
   const staffSlotsLeft = maxUsers ? maxUsers - activeStaff : null;
 
+  // The CRM left this tab bar for its own sidebar entry. Follow-up reminder
+  // emails sent before that change point at ?tab=crm, and so does anything
+  // anyone bookmarked, so the old address forwards rather than falling through
+  // to the overview and looking like the CRM was deleted.
+  if (activeTab === 'crm') return <Navigate to="/crm" replace />;
+
   const tabs = [
     { id: 'overview',  label: 'Overview',      icon: 'LayoutDashboard' },
     { id: 'clients',   label: 'Clients',        icon: 'Users',     badge: stats.pendingKYC },
     { id: 'agents',    label: 'Sales Agents',   icon: 'UserCheck' },
-    { id: 'crm',       label: 'CRM',            icon: 'Contact' },
     { id: 'staff',     label: 'Staff',          icon: 'UserCog',   badge: staffSlotsLeft !== null && staffSlotsLeft <= 0 ? '!' : 0 },
     { id: 'contracts', label: 'Contracts',      icon: 'FileText' },
-    { id: 'kyc',       label: 'KYC Review',     icon: 'Shield',    badge: stats.pendingKYC },
-    { id: 'reports',      label: 'Sales Reports',  icon: 'BarChart3' },
     { id: 'settlements',  label: 'Settlements',     icon: 'Award' },
     { id: 'reminders',    label: 'Reminders',       icon: 'Bell' },
     
@@ -189,7 +188,7 @@ const AdminDashboard = () => {
         </div>
 
         {/* Tab content */}
-        {loading && !['contracts', 'crm'].includes(activeTab) ? (
+        {loading && activeTab !== 'contracts' ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[1,2,3,4,5,6].map(i => (
@@ -274,38 +273,15 @@ const AdminDashboard = () => {
               />
             )}
 
-            {activeTab === 'kyc' && (
-              <KYCReviewTab adminId={userProfile?.id} />
-            )}
-
             {activeTab === 'reminders' && (
               <PaymentRemindersTab adminId={userProfile?.id} />
             )}
 
             {activeTab === 'settlements' && (
-              <SettlementsTab adminId={userProfile?.id} clients={clients} />
-            )}
-            {activeTab === 'reports' && (
-              <SalesReportTab
-                assets={assets}
-                payments={payments}
-                agents={agents}
-                clients={clients}
-                onExport={exportCSV}
-              />
+              <SettlementsTab adminId={userProfile?.id} />
             )}
           </>
         )}
-
-        {/* CRM TAB — the admin's own customer relationships (client book,
-            diary, communication record, reporting) with the read-only agent
-            oversight kept as one view inside it. Rendered outside the loading
-            swap because it fetches its own rows (clients / crm_interactions /
-            follow_ups arrive through the supervisor policies, not through
-            useAdminDashboard) and carries its own skeleton — gating it on this
-            page's spinner would leave it blank while its data was already
-            there. */}
-        {activeTab === 'crm' && <AdminCrmTab onExport={exportCSV} />}
 
         {/* CONTRACTS TAB — render directly (no loading swap) so the upload modal
             and its selected-file state aren't torn down by a background refetch */}

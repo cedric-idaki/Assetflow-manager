@@ -75,7 +75,12 @@ var Sidebar = function(props) {
      src/config/modules.js). An item shows while ANY of them is enabled; an
      item with no `modules` is never gateable. Dashboards and Staff & System
      deliberately carry none — Staff & System is where modules are switched
-     back on, so freezing your way out of it must be impossible. */
+     back on, so freezing your way out of it must be impossible.
+
+     `roles` narrows an item to some of the roles that share a rail. Only the
+     staff rail needs it: six roles read from one list, and the CRM is granted
+     to two of them. A link that leads to "not available for your role" is
+     worse than no link. */
   var superAdminItems = [
     { label: 'SA Dashboard',   path: '/super-admin-dashboard',         icon: 'Crown' },
     { label: 'Finance Hub',    path: '/finance-hub',                   icon: 'Landmark' },
@@ -91,6 +96,7 @@ var Sidebar = function(props) {
   var adminItems = [
     { label: 'Dashboard',        path: '/admin-dashboard',               icon: 'LayoutDashboard' },
     { label: 'Assets & Clients', path: '/asset-client-management',       icon: 'Briefcase',   modules: ['assets', 'clients'] },
+    { label: 'CRM',              path: '/crm',                           icon: 'Contact',     modules: ['crm'] },
     { label: 'POS / New Sale',   path: '/pos',                           icon: 'ShoppingCart',modules: ['pos'] },
     { label: 'E-Signature',       path: '/e-signature',                   icon: 'PenTool',     modules: ['esign'] },
     { label: 'Payments',         path: '/payment-collections-hub',       icon: 'CreditCard',  modules: ['payments'] },
@@ -104,6 +110,9 @@ var Sidebar = function(props) {
   var staffItems = [
     { label: 'Dashboard',        path: '/role-based-dashboard',    icon: 'LayoutDashboard' },
     { label: 'Assets & Clients', path: '/asset-client-management', icon: 'Briefcase',   modules: ['assets', 'clients'] },
+    // Directors and managers share the tenant's customer book with the admin
+    // (public.is_crm_supervisor); the other four staff roles do not.
+    { label: 'CRM',              path: '/crm',                     icon: 'Contact',     modules: ['crm'], roles: ['director', 'manager'] },
     { label: 'Payments',         path: '/payment-collections-hub', icon: 'CreditCard',  modules: ['payments'] },
     { label: 'KYC Management',   path: '/kyc-management-screen',   icon: 'ShieldCheck', modules: ['kyc'] },
     { label: 'Reports',          path: '/reports-analytics-center',icon: 'BarChart3',   modules: ['reports'] },
@@ -171,6 +180,11 @@ var Sidebar = function(props) {
     (role === 'director' || role === 'accountant' || role === 'collections_officer' ||
      role === 'manager'  || role === 'finance'    || role === 'operations')
                                  ? staffItems : adminItems;
+
+  // Items a rail offers to only some of the roles reading it.
+  navItems = navItems.filter(function(item) {
+    return !item.roles || item.roles.indexOf(role) !== -1;
+  });
 
   // Drop items whose modules this tenant has frozen. The super admin is the
   // platform operator rather than a tenant, so their rail is never filtered.

@@ -22,8 +22,6 @@ import AgentsTab from './components/AgentsTab';
 import ContractsTab from './components/ContractsTab';
 import SettlementsTab from './components/SettlementsTab';
 import PaymentRemindersTab from './components/PaymentRemindersTab';
-import SalesReportTab from './components/SalesReportTab';
-import KYCReviewTab from './components/KYCReviewTab';
 import MpesaSettingsTab from './components/MpesaSettingsTab';
 import OnboardingTab from './components/OnboardingTab';
 import SuperAdminCrmTab from '../../components/crm/SuperAdminCrmTab';
@@ -174,8 +172,6 @@ const SuperAdminDashboard = () => {
     { id: 'approvals',    label: 'Payment Approvals',       icon: 'Gavel' },
     { id: 'withdrawals',  label: 'Legacy Withdrawals',      icon: 'Wallet', badge: withdrawalRequests.length || 0 },
     { id: 'contracts',    label: 'Contracts',               icon: 'FileText' },
-    { id: 'kyc',          label: 'KYC Review',              icon: 'Shield', badge: stats?.pendingKYC || 0 },
-    { id: 'reports',      label: 'Sales Reports',           icon: 'BarChart3' },
     { id: 'settlements',  label: 'Settlements',             icon: 'Award' },
     { id: 'reminders',    label: 'Reminders',               icon: 'Bell' },
     { id: 'companies',    label: 'Companies',               icon: 'Building2' },
@@ -407,37 +403,12 @@ const SuperAdminDashboard = () => {
           </div>
         )}
 
-        {/* KYC REVIEW TAB */}
-        {activeTab === 'kyc' && (
-          <div className="space-y-4">
-            {loading ? <Sk className="h-64" /> : (
-              <KYCReviewTab adminId={userProfile?.id} />
-            )}
-          </div>
-        )}
-
-        {/* SALES REPORTS TAB */}
-        {activeTab === 'reports' && (
-          <div className="space-y-4">
-            {loading ? <Sk className="h-64" /> : (
-              <SalesReportTab
-                assets={stats.assets || []}
-                payments={stats.payments || []}
-                agents={salesAgents}
-                clients={stats.clients || []}
-                onExport={exportCSV}
-              />
-            )}
-          </div>
-        )}
-
         {/* SETTLEMENTS TAB */}
         {activeTab === 'settlements' && (
           <div className="space-y-4">
             {loading ? <Sk className="h-64" /> : (
               <SettlementsTab
                 adminId={userProfile?.id}
-                clients={stats.clients || []}
               />
             )}
           </div>
