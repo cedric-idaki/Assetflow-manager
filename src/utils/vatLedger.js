@@ -77,7 +77,17 @@ export const classifyVatAccount = (account) => {
   return null;
 };
 
-/** Index every VAT account in the chart by name, so journal lines can be looked up. */
+/**
+ * Index every VAT account in the chart by name, so journal lines can be looked
+ * up.
+ *
+ * Both spellings a journal line can carry are indexed — the bare name, and the
+ * `"2100 — VAT Payable"` form the hub's composers write. The bare-name
+ * fallback in `roleOf` below usually rescues the second one, but only where
+ * the name alone is unambiguous; an account called "VAT Control" is placed by
+ * its TYPE, which is only reachable through the chart. Without the second key
+ * that VAT silently leaves the return.
+ */
 export const vatAccountIndex = (chartOfAccounts = []) => {
   const index = {};
   const unclassified = [];
@@ -85,8 +95,10 @@ export const vatAccountIndex = (chartOfAccounts = []) => {
     const name = account?.account_name;
     if (!name || !VAT_TOKEN.test(name)) continue;
     const role = classifyVatAccount(account);
-    if (role) index[name] = role;
-    else unclassified.push(name);
+    if (role) {
+      index[name] = role;
+      if (account.account_code) index[`${account.account_code} — ${name}`] = role;
+    } else unclassified.push(name);
   }
   return { index, unclassified };
 };

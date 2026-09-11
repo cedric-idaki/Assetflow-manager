@@ -58,6 +58,54 @@ describe('account classification', () => {
     expect(inferred).toMatchObject({ cls: 'expense', charted: false });
   });
 
+  /**
+   * A journal line names its account in one of two shapes and both are in the
+   * live ledger: the bare name, and the "6000 — Sales Revenue" form the hub's
+   * account pickers write. Only the first used to be indexed.
+   *
+   * The failure that caused is silent and total. An unmatched string gets no
+   * class, an account with no class is summed into nothing, and the entry
+   * disappears from the income statement and the balance sheet while still
+   * sitting in the journal, balanced, where anyone looking for it would find
+   * it. It only showed up on accounts whose NAME trips none of the patterns
+   * above — "Rent" and "Input VAT" among them.
+   */
+  it('resolves an account written with its code in front', () => {
+    const index = buildAccountIndex(coa);
+    expect(resolveAccount('6000 — Sales Revenue', index))
+      .toMatchObject({ cls: 'revenue', charted: true, code: '6000' });
+    expect(resolveAccount('1500 — Motor Vehicles', index))
+      .toMatchObject({ cls: 'asset', type: 'non_current_asset', charted: true });
+  });
+
+  it('reads a code-prefixed account the chart does not carry by its name alone', () => {
+    const index = buildAccountIndex(coa);
+    expect(resolveAccount('9100 — Office Rent Expense', index))
+      .toMatchObject({ cls: 'expense', charted: false });
+  });
+
+  it('folds both spellings of one account into a single balance', () => {
+    const balances = accountBalances([
+      je('2026-08-01', 'Cash at Bank',        'Sales Revenue',        1000),
+      je('2026-08-02', '1000 — Cash at Bank', '6000 — Sales Revenue', 500),
+    ], buildAccountIndex(coa));
+
+    expect(Object.keys(balances).sort()).toEqual(['Cash at Bank', 'Sales Revenue']);
+    expect(balances['Sales Revenue'].balance).toBe(1500);
+    expect(balances['Cash at Bank'].balance).toBe(1500);
+  });
+
+  it('keeps a code-prefixed expense in the income statement', () => {
+    // The regression itself, stated as money: this used to be zero.
+    const pl = buildIncomeStatement({
+      journals: [je('2026-08-01', '8000 — Salaries', '1000 — Cash at Bank', 120000)],
+      chartOfAccounts: coa,
+      period: '2026-08',
+    });
+    expect(pl.expenses).toBe(120000);
+    expect(pl.netProfit).toBe(-120000);
+  });
+
   it('resolves the names that sit on both sides of the ledger', () => {
     const cls = (name) => resolveAccount(name, {})?.cls;
     // Each of these contains a word that would place it on the wrong side if

@@ -92,6 +92,24 @@ const NAME_CLASS = [
 const CASH_NAME = /\b(cash|bank|m-?pesa|petty\s*cash|till)\b/i;
 
 /**
+ * A journal line names its account in one of two shapes, and both are in the
+ * live ledger: the bare `account_name`, and the `"1000 — Cash at Bank"` form
+ * the hub's composers write out of their account pickers.
+ *
+ * THIS IS NOT COSMETIC. An account string the index cannot place gets no class,
+ * and an account with no class is summed into nothing — it drops out of the
+ * income statement, out of the balance sheet, and off both totals. Indexing
+ * only the bare name meant every entry written the second way was invisible
+ * unless its name happened to trip one of the patterns below, which "Rent" and
+ * "Input VAT" do not. The entry posts, balances, appears in the journal, and is
+ * simply absent from the accounts.
+ */
+const CODE_PREFIX = /^\s*[A-Za-z0-9.\-/]+\s+[—–-]\s+/;
+
+/** `"6000 — Rent"` -> `"Rent"`; anything else unchanged. */
+const stripCode = (name) => String(name || '').replace(CODE_PREFIX, '');
+
+/**
  * Index the chart by account name, so a journal line can be classified in O(1).
  * Accounts the chart does not carry fall back to the name patterns, and are
  * reported so the UI can say which figures rest on a guess.
@@ -102,13 +120,18 @@ export const buildAccountIndex = (chartOfAccounts = []) => {
     if (!a?.account_name) continue;
     const cls = TYPE_CLASS[a.account_type];
     if (cls) {
-      index[a.account_name] = {
+      const meta = {
+        name: a.account_name,
         cls,
         code: a.account_code || '—',
         type: a.account_type,
         isCash: cls === 'asset' && CASH_NAME.test(a.account_name),
         charted: true,
       };
+      index[a.account_name] = meta;
+      // Both spellings resolve to the SAME meta object, which is what lets
+      // accountBalances fold them back into one account below.
+      if (a.account_code) index[`${a.account_code} — ${a.account_name}`] = meta;
     }
   }
   return index;
@@ -121,17 +144,27 @@ const classifyByName = (name) => {
   return null;
 };
 
-/** Resolve one account name to its class, chart first, name patterns second. */
+/**
+ * Resolve one account name to its class, chart first, name patterns second.
+ *
+ * A code prefix is stripped before both fallbacks, so an account the chart does
+ * not carry is still read by its name rather than by the digits in front of it.
+ */
 export const resolveAccount = (name, index = {}) => {
   if (!name) return null;
   if (index[name]) return index[name];
-  const cls = classifyByName(name);
+
+  const bare = stripCode(name);
+  if (bare !== name && index[bare]) return index[bare];
+
+  const cls = classifyByName(bare);
   if (!cls) return null;
   return {
+    name,
     cls,
     code: '—',
     type: `${cls} (inferred)`,
-    isCash: cls === 'asset' && CASH_NAME.test(name),
+    isCash: cls === 'asset' && CASH_NAME.test(bare),
     charted: false,
   };
 };
@@ -164,12 +197,21 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 export const accountBalances = (journals, index) => {
   const accounts = {};
 
+  // One row per ACCOUNT, not per spelling of it. A tenant whose automated feed
+  // writes "Sales Revenue" and whose composer writes "4000 — Sales Revenue"
+  // would otherwise get two trial-balance rows holding half a balance each.
   const touch = (name) => {
-    if (!accounts[name]) {
-      const meta = resolveAccount(name, index) || { cls: null, code: '—', type: '?', isCash: false, charted: false };
-      accounts[name] = { name, ...meta, debit: 0, credit: 0 };
+    const meta = resolveAccount(name, index);
+    const key = meta?.charted ? meta.name : name;
+    if (!accounts[key]) {
+      accounts[key] = {
+        ...(meta || { cls: null, code: '—', type: '?', isCash: false, charted: false }),
+        name: key,
+        debit: 0,
+        credit: 0,
+      };
     }
-    return accounts[name];
+    return accounts[key];
   };
 
   for (const j of journals) {
@@ -386,7 +428,11 @@ export const buildCashFlow = ({ journals = [], chartOfAccounts = [], period = nu
     movements,
     // Which accounts were treated as cash. The set is name-matched, so naming
     // it lets a user spot an account that should have been in it (or should not).
-    cashAccountNames: Object.entries(index).filter(([, a]) => a.isCash).map(([name]) => name),
+    // Read off the account, not off the index keys — an account is in the index
+    // under both the spellings a journal line can use.
+    cashAccountNames: [...new Set(
+      Object.values(index).filter((a) => a.isCash).map((a) => a.name),
+    )],
     entryCount: movements.length,
   };
 };

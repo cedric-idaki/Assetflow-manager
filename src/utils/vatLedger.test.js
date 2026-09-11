@@ -51,8 +51,47 @@ describe('vatAccountIndex', () => {
       ...coa,
       { account_name: 'VAT Suspense', account_type: 'operating_expense' },
     ]);
-    expect(index).toEqual({ 'Input VAT': 'input', 'VAT Payable': 'output' });
+    // Both spellings a journal line can carry. The hub's composers write the
+    // code-prefixed form, so indexing only the bare name left those entries
+    // resting on the name-pattern fallback — which cannot place an account
+    // whose role only its TYPE reveals.
+    expect(index).toEqual({
+      'Input VAT': 'input',
+      '1400 — Input VAT': 'input',
+      'VAT Payable': 'output',
+      '2100 — VAT Payable': 'output',
+    });
     expect(unclassified).toEqual(['VAT Suspense']);
+  });
+
+  it('places a code-prefixed ambiguous account that the name alone cannot', () => {
+    // "VAT Control" is placeable only by its type, which is only in the chart.
+    const { index } = vatAccountIndex([
+      { account_code: '2150', account_name: 'VAT Control', account_type: 'current_liability' },
+    ]);
+    expect(index['2150 — VAT Control']).toBe('output');
+  });
+
+  it('counts an account once in the diagnostics despite the two keys', () => {
+    const { index } = vatAccountIndex(coa);
+    expect(Object.values(index).filter((r) => r === 'input')).toHaveLength(2);
+    expect(new Set(Object.values(index))).toEqual(new Set(['input', 'output']));
+  });
+});
+
+describe('a return built from code-prefixed journal lines', () => {
+  it('reads the VAT off accounts written as "2100 — VAT Payable"', () => {
+    const vat = computeVatReturn({
+      journals: [
+        je({ amount: 1600, debit_account: '1100 — Cash at Bank', credit_account: '2100 — VAT Payable' }),
+        je({ amount: 800,  debit_account: '1400 — Input VAT',    credit_account: '1100 — Cash at Bank' }),
+      ],
+      chartOfAccounts: coa,
+      period: '2026-08',
+    });
+    expect(vat.outputVAT).toBe(1600);
+    expect(vat.inputVAT).toBe(800);
+    expect(vat.netVAT).toBe(800);
   });
 });
 
