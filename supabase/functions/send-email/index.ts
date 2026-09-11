@@ -2,14 +2,11 @@
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { authenticateCaller } from "../_shared/auth.ts";
 import { ApiError, callerIdentity, openRequest } from "../_shared/http.ts";
+import { EMAIL_FROM } from "../_shared/email.ts";
 
 const API_VERSIONS = ["2026-08-21"];
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-// Set EMAIL_FROM to a verified-domain sender (e.g. "Ararat <noreply@yourco.com>")
-// so emails deliver to any recipient. The onboarding@resend.dev fallback only
-// delivers to the Resend account owner's own address (test mode).
-const EMAIL_FROM = Deno.env.get("EMAIL_FROM") || "Ararat <onboarding@resend.dev>";
 
 const formatCurrency = (val: number, currency = "KES") =>
   new Intl.NumberFormat("en-KE", { style: "currency", currency, minimumFractionDigits: 0 }).format(val || 0);

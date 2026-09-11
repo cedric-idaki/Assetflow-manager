@@ -3,6 +3,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
 import { callerIdentity, openRequest } from '../_shared/http.ts';
+import { EMAIL_FROM } from '../_shared/email.ts';
 
 declare const Deno: { env: { get(key: string): string | undefined } };
 
@@ -199,7 +200,7 @@ const sendEmail = async (to: string, subject: string, html: string) => {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: 'Ararat <notifications@assetflow.com>', to: [to], subject, html }),
+    body: JSON.stringify({ from: EMAIL_FROM, to: [to], subject, html }),
   });
   return res.ok ? { status: 'sent' } : { status: 'failed', reason: await res.text() };
 };

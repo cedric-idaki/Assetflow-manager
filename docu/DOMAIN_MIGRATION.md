@@ -116,6 +116,37 @@ agent follow-up reminders, e-sign reminders, SACCO governance tick and statutory
 return reminders all build their links from it, and have been sending mail with
 the link omitted.
 
+### The address the mail is signed with
+
+Resend signs outgoing mail with its own sender, not the site's hostname, so the
+rename does not reach it on its own. Two functions signed as
+`notifications@assetflow.com` and two as the Resend sandbox address
+`onboarding@resend.dev`, which delivers only to the Resend account owner.
+All four now read one value from
+[_shared/email.ts](../supabase/functions/_shared/email.ts), which prefers the
+`EMAIL_FROM` secret and falls back to `Ararat <notifications@araratsbc.com>`.
+
+| Secret | State | Set to |
+| --- | --- | --- |
+| `EMAIL_FROM` | set at an unknown date — confirm the value | `Ararat <notifications@araratsbc.com>` |
+
+```bash
+npx supabase secrets set --project-ref ektyvejahnkxqumeibke EMAIL_FROM="Ararat <notifications@araratsbc.com>"
+```
+
+Resend will not send from a domain it has not verified. Add `araratsbc.com` as
+a domain in the Resend dashboard and publish the DKIM and SPF records it hands
+back, in the same DNS zone edited in Step 1. Until those records resolve every
+send fails with a domain-not-verified error — and that is the better failure:
+the sandbox address it replaces delivered only to the Resend account owner's
+own inbox while reporting success.
+
+The four senders carry the address in their bundle, so they need a redeploy:
+
+```bash
+npx supabase functions deploy send-email payment-alerts maker-checker-notify kyc-renewal-reminders --use-api
+```
+
 ## 6. Cutover
 
 Only once Step 2 passes. In [public/.htaccess](../public/.htaccess), uncomment

@@ -3,6 +3,7 @@
 declare const Deno: any;
 
 import { hashedIp, openRequest } from '../_shared/http.ts';
+import { EMAIL_FROM } from '../_shared/email.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -160,7 +161,7 @@ const sendEmail = async (to: string, clientName: string, documentType: string, e
         'Authorization': `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: 'onboarding@resend.dev',
+        from: EMAIL_FROM,
         to: [to],
         subject,
         html: buildKYCReminderEmail(clientName, documentType, expiryDate, daysLeft),

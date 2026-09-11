@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { authenticateCaller, requireStaff } from '../_shared/auth.ts';
 import { callerIdentity, openRequest } from '../_shared/http.ts';
+import { EMAIL_FROM } from '../_shared/email.ts';
 
 const API_VERSIONS = ['2026-08-21'];
 
@@ -69,7 +70,7 @@ serve(async (req) => {
     // Send email via Resend
     if (RESEND_API_KEY && initiator_email) {
       const emailBody = {
-        from: 'Ararat <notifications@assetflow.com>',
+        from: EMAIL_FROM,
         to: [initiator_email],
         subject: `${statusEmoji} Action ${statusLabel}: ${title}`,
         html: `

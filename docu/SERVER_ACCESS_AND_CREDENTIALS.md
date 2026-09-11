@@ -82,10 +82,14 @@ re-sealed with a new envelope and a dated signature.
 | `ALLOWED_ORIGINS` | internal | CORS opens up; not secret, but security-relevant |
 | `APP_URL`, `PORTAL_URL`, `ESIGN_ALLOWED_PORTALS` | internal | links in emails point at the wrong host |
 
-`EMAIL_FROM` deserves a note: unset, `send-email` falls back to
-`onboarding@resend.dev`, which delivers **only to the Resend account owner's own
-address**. Email appears to work in testing and reaches no customer. Confirm it
-is set after every rebuild.
+`EMAIL_FROM` deserves a note. Every sender reads it from one place,
+[_shared/email.ts](../supabase/functions/_shared/email.ts), and unset it falls
+back to `Ararat <notifications@araratsbc.com>`. That fallback used to be
+Resend's sandbox `onboarding@resend.dev`, which delivers **only to the Resend
+account owner's own address** — email appeared to work in testing and reached
+no customer. A missing secret now fails at Resend instead, which is visible.
+Both the secret and Resend's verification of `araratsbc.com` need confirming
+after every rebuild; an unverified sending domain bounces every send.
 
 ### 2.4 Per-tenant secrets in Vault
 
