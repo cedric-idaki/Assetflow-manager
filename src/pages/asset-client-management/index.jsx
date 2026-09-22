@@ -174,6 +174,7 @@ const AssetClientManagement = () => {
         nok_name:           c.nok_name,
         nok_phone:          c.nok_phone,
         nok_relationship:   c.nok_relationship,
+        client_auth_id:     c.client_auth_id,
         company_name:       c.company_name,
         company_reg_number: c.company_reg_number,
         directors:          c.directors,
@@ -451,6 +452,34 @@ const AssetClientManagement = () => {
         const { error: updateErr } = await supabase.from('clients').update(updatePayload).eq('id', editingClient._id);
         if (updateErr) throw updateErr;
         await auditLogsService?.log('update', 'clients', `Updated client ${name}`);
+
+        // Recover a client whose row was saved before login provisioning succeeded.
+        if (clientData.email && !editingClient.client_auth_id) {
+          const provisionResult = await provisionClientAccount({
+            clientId: editingClient._id,
+            email: clientData.email,
+            fullName: name,
+            phone: clientData.phone || null,
+          });
+
+          if (provisionResult.success) {
+            const creds = {
+              fullName: name,
+              email: clientData.email,
+              password: provisionResult.password,
+              accountNumber: editingClient.accountNumber || editingClient.account_number,
+            };
+            setPortalCredentials({ ...creds, emailStatus: 'sending' });
+            const emailRes = await sendCredentialsEmail(creds);
+            setPortalCredentials({
+              ...creds,
+              emailStatus: emailRes.success ? 'sent' : 'failed',
+              emailError: emailRes.error,
+            });
+          } else {
+            setError(`Client updated, but the portal login could not be created: ${provisionResult.error}.`);
+          }
+        }
       } else {
         const insertPayload = {
           account_number:   clientData.account_number || `ACC-${Date.now()}`,

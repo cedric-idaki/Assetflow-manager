@@ -685,7 +685,7 @@ begin
   -- 20260903120000's stamping.
   if v_agent is not null and to_regclass('public.agent_manager_assignments') is not null then
     execute
-      'select manager_agent_id from public.agent_manager_assignments
+      'select manager_id from public.agent_manager_assignments
         where agent_id = $1 and is_active and is_primary limit 1'
       into v_manager using v_agent;
   end if;

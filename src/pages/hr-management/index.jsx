@@ -452,6 +452,11 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${accessToken}`,
+              // Edge Function gateway authentication requires the project key
+              // as well as the caller JWT.  The Supabase client supplies this
+              // automatically, but this request is intentionally a raw fetch
+              // so the new staff account is only created after form validation.
+              'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
             },
             body: JSON.stringify({
               email:      form.email.trim().toLowerCase(),

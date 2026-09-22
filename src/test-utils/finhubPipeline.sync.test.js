@@ -44,6 +44,13 @@ describe('finhubPipeline mirrors the migration', () => {
     expect(sql).toContain('finhub_submit_payment_request');
   });
 
+  it('stamps an agent request with the hierarchy table manager column', () => {
+    // `agent_manager_assignments` has `manager_id`, not `manager_agent_id`.
+    // A typo here fails the withdrawal submission before a request can exist.
+    expect(sql).toContain('select manager_id from public.agent_manager_assignments');
+    expect(sql).not.toContain('manager_agent_id');
+  });
+
   it('has exactly the thirteen statuses the enum declares, in order', () => {
     const declared = enumValues('payment_request_status');
     expect(declared).not.toBeNull();

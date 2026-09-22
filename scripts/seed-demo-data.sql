@@ -52,8 +52,7 @@ create temporary table _demo_ctx as
 select up.id as admin_id
   from public.user_profiles up
  where up.role = 'admin'
-   and ('REPLACE_WITH_ADMIN_EMAIL' = 'REPLACE_WITH_ADMIN_EMAIL'
-        or lower(up.email) = lower('REPLACE_WITH_ADMIN_EMAIL'));
+  and lower(up.email) = lower('sbcdevwork5812@gmail.com');
 
 do $$
 declare n integer; candidates text;
@@ -229,7 +228,7 @@ select v.id::uuid, c.admin_id, v.agent_id::uuid, v.account, v.full_name, v.email
   v.ctype::public.customer_type, v.kyc, v.score,
   'Demo seed data — safe to delete.', v.created::timestamptz
 from _demo_ctx c, (values
-    ('94e53e2b-883e-5b8b-a4d3-005a93348b37', '19ca52bf-6418-5091-ab63-14535c1ea30f', 'DEMO-AF-2026-0001', 'Joseph Mwangi', 'demo.client1@example.com', '+254700000101', 'DEMO30000000', 'A012345678X', 'P.O. Box 1000, Nairobi', 'Nairobi', 'active', 'cash', 'verified', 520, '2026-03-02T08:00:00Z'),
+    ('94e53e2b-883e-5b8b-a4d3-005a93348b37', '19ca52bf-6418-5091-ab63-14535c1ea30f', 'DEMO-AF-2026-0001', 'Joseph Mwangi', 'demo.client1@example.com', '+254700000101', 'DEMO30000000', 'A012345678X', 'P.O. Box 1000, Nairobi', 'Nairobi', 'active', 'account', 'verified', 520, '2026-03-02T08:00:00Z'),
     ('e0130fdc-7194-5d06-9e0d-1b8b05ab745f', '96cec2d6-8a1f-5a48-9201-86741d59dc42', 'DEMO-AF-2026-0002', 'Lilian Achieng', 'demo.client2@example.com', '+254700000102', 'DEMO30007919', 'A023456789Y', 'P.O. Box 1037, Kisumu', 'Kisumu', 'active', 'account', 'verified', 557, '2026-04-03T08:00:00Z'),
     ('6875f7d1-6a0b-5710-817b-cabd47efff17', '1475e1bf-e981-5b37-a990-fbbae59ad0fa', 'DEMO-AF-2026-0003', 'Ibrahim Noor', 'demo.client3@example.com', '+254700000103', 'DEMO30015838', 'A034567890Z', 'P.O. Box 1074, Garissa', 'Garissa', 'active', 'account', 'verified', 594, '2026-05-04T08:00:00Z'),
     ('5d339f51-1ce2-5330-8b98-1d5eb23c019d', '19ca52bf-6418-5091-ab63-14535c1ea30f', 'DEMO-AF-2026-0004', 'Rose Wambui', 'demo.client4@example.com', '+254700000104', 'DEMO30023757', 'A045678901P', 'P.O. Box 1111, Nakuru', 'Nakuru', 'active', 'account', 'verified', 631, '2026-06-05T08:00:00Z'),
@@ -283,7 +282,7 @@ select v.id::uuid, c.admin_id, v.inv, v.rcp, v.client_id::uuid, v.asset_id::uuid
   v.deposit, v.financed, v.rate, v.tenure::integer, v.start_date::date,
   v.method, v.sale_date::date, v.status, v.pin, v.ctype::public.customer_type, v.notes
 from _demo_ctx c, (values
-    ('8beb1f3b-ea75-5d09-8106-3d61d2caa519', 'DEMO-INV-2026-1001', 'DEMO-RCP-2026-1001', '94e53e2b-883e-5b8b-a4d3-005a93348b37', '8bde930a-365e-5504-8ceb-a592132d53cb', '19ca52bf-6418-5091-ab63-14535c1ea30f', 'installment', 3450000, 552000, 16, 4002000, 690000, 3312000, 14, 24, '2026-05-14', 'mpesa', '2026-04-14', 'active', 'A012345678X', 'cash', 'Demo seed data — safe to delete.'),
+    ('8beb1f3b-ea75-5d09-8106-3d61d2caa519', 'DEMO-INV-2026-1001', 'DEMO-RCP-2026-1001', '94e53e2b-883e-5b8b-a4d3-005a93348b37', '8bde930a-365e-5504-8ceb-a592132d53cb', '19ca52bf-6418-5091-ab63-14535c1ea30f', 'installment', 3450000, 552000, 16, 4002000, 690000, 3312000, 14, 24, '2026-05-14', 'mpesa', '2026-04-14', 'active', 'A012345678X', 'account', 'Demo seed data — safe to delete.'),
     ('6096ab1a-383a-52d0-93b3-911a2118fb4e', 'DEMO-INV-2026-1002', 'DEMO-RCP-2026-1002', 'e0130fdc-7194-5d06-9e0d-1b8b05ab745f', '5512d16b-4ea5-534f-9acc-afc87bea6b65', '96cec2d6-8a1f-5a48-9201-86741d59dc42', 'cash', 920000, 147200, 16, 1067200, 0, 0, 0, 0, null, 'bank_transfer', '2026-04-22', 'active', 'A023456789Y', 'account', 'Demo seed data — safe to delete.'),
     ('eeb4a7db-457e-5478-ac13-4a06b2037a35', 'DEMO-INV-2026-1003', 'DEMO-RCP-2026-1003', '5d339f51-1ce2-5330-8b98-1d5eb23c019d', '31485987-12dc-5f04-a684-ec17423f29c9', '1475e1bf-e981-5b37-a990-fbbae59ad0fa', 'installment', 1280000, 204800, 16, 1484800, 256000, 1228800, 15, 18, '2026-06-06', 'cash', '2026-05-06', 'active', 'A045678901P', 'account', 'Demo seed data — safe to delete.'),
     ('7e6be18d-13d3-5d54-a2e2-56f4146ad12f', 'DEMO-INV-2026-1004', 'DEMO-RCP-2026-1004', '6d1a706a-a448-5902-bc77-46383d91f906', '351fc68d-1b9b-5059-917a-c6d311fee23c', '19ca52bf-6418-5091-ab63-14535c1ea30f', 'cash', 1080000, 172800, 16, 1252800, 0, 0, 0, 0, null, 'mpesa', '2026-05-19', 'active', 'A056789012Q', 'account', 'Demo seed data — safe to delete.'),
@@ -562,7 +561,7 @@ select v.id::uuid, c.admin_id, v.entry_no, v.entry_date::date, v.descr,
   v.dr, v.cr, v.amount, v.etype, v.reference, v.status, v.automated,
   v.trigger_event, v.period_month
 from _demo_ctx c, (values
-    ('ae8e12bf-582a-53e0-bed5-91093eb23821', 'DEMO-JE-20260401-001', '2026-04-01', 'Owner capital introduced at start of trading', '1000 — Cash at Bank', '3000 — Owner Capital', 5000000, 'opening', 'DEMO-CAP-001', 'posted', false, null, '2026-04'),
+    ('ae8e12bf-582a-53e0-bed5-91093eb23821', 'DEMO-JE-20260401-001', '2026-04-01', 'Owner capital introduced at start of trading', '1000 — Cash at Bank', '3000 — Owner Capital', 5000000, 'general', 'DEMO-CAP-001', 'posted', false, null, '2026-04'),
     ('041a83f7-de6c-550f-ab40-deaf7d7f3b0b', 'DEMO-JE-20260401-002', '2026-04-01', 'Asset finance facility drawn down — Equity Bank', '1000 — Cash at Bank', '2500 — Bank Loan', 3000000, 'financing', 'DEMO-LOAN-001', 'posted', false, null, '2026-04'),
     ('2ef5c2e8-a9dd-53ca-b3be-81fceafec1c1', 'DEMO-JE-20260402-003', '2026-04-02', 'Workshop equipment purchased', '1500 — Equipment', '1000 — Cash at Bank', 850000, 'purchase', 'DEMO-PO-0001', 'posted', false, null, '2026-04'),
     ('355a71b4-37e1-5741-973b-a3f427b2a92a', 'DEMO-JE-20260402-003', '2026-04-02', 'Workshop equipment purchased', '1300 — Input VAT', '1000 — Cash at Bank', 136000, 'purchase', 'DEMO-PO-0001', 'posted', false, null, '2026-04'),

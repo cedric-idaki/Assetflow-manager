@@ -15,6 +15,7 @@ import VotingTab        from './components/VotingTab';
 import ElectionsTab     from './components/ElectionsTab';
 import GovernanceTab    from './components/GovernanceTab';
 import SaccoContractsTab from './components/SaccoContractsTab';
+import CollateralReviewTab from './components/CollateralReviewTab';
 
 const Sk = ({ className = '' }) => <div className={`animate-pulse bg-muted rounded-lg ${className}`} />;
 
@@ -64,6 +65,7 @@ const SaccoDashboard = () => {
     { id: 'members',       label: 'Members',       icon: 'Users' },
     { id: 'contributions', label: 'Contributions', icon: 'PiggyBank', badge: stats.pendingContributions },
     { id: 'loans',         label: 'Loans',         icon: 'Banknote' },
+    { id: 'collateral',    label: 'Collateral',    icon: 'ShieldCheck' },
     { id: 'assets',        label: 'Assets',        icon: 'Package' },
     // Shares lives in the left sidebar now (still rendered here via ?tab=shares).
     { id: 'voting',        label: 'Voting',        icon: 'Vote',       badge: stats.openMotions },
@@ -138,6 +140,7 @@ const SaccoDashboard = () => {
             {activeTab === 'members'       && <MembersTab ctx={ctx} />}
             {activeTab === 'contributions' && <ContributionsTab ctx={ctx} />}
             {activeTab === 'loans'         && <LoansTab ctx={ctx} />}
+            {activeTab === 'collateral'    && <CollateralReviewTab sacco={sacco} />}
             {activeTab === 'shares'        && <SharesTab ctx={ctx} />}
             {activeTab === 'assets'        && <AssetRegisterTab ctx={ctx} />}
             {activeTab === 'voting'        && <VotingTab ctx={ctx} />}

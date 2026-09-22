@@ -235,7 +235,9 @@ const CLIENTS = CLIENT_NAMES.map(([name, city, status, pin], i) => ({
   phone:   `+2547000001${String(i + 1).padStart(2, '0')}`,
   nid:     `DEMO${String(30000000 + i * 7919)}`,
   agent:   AGENTS[i % AGENTS.length].id,
-  type:    name.includes('Ltd') || name.includes('Farms') ? 'account' : (i % 5 === 0 ? 'cash' : 'account'),
+  // Cash-sale customers are deliberately limited to the sales whose pricing
+  // model is cash; installment sales must use registered account customers.
+  type:    [1, 2, 4, 6, 8].includes(i) ? 'cash' : 'account',
 }));
 
 const ASSET_ROWS = [
@@ -358,7 +360,7 @@ const BOOKS = {
 tx('2026-04-01', 'Owner capital introduced at start of trading', [
   { account: A['1000'], debit: 5000000 },
   { account: A['3000'], credit: 5000000 },
-], { type: 'opening', reference: 'DEMO-CAP-001' });
+], { type: 'general', reference: 'DEMO-CAP-001' });
 
 tx('2026-04-01', 'Asset finance facility drawn down — Equity Bank', [
   { account: A['1000'], debit: 3000000 },
@@ -1272,8 +1274,9 @@ say(
   'select up.id as admin_id',
   '  from public.user_profiles up',
   " where up.role = 'admin'",
-  `   and (${q(ADMIN_EMAIL)} = 'REPLACE_WITH_ADMIN_EMAIL'`,
-  `        or lower(up.email) = lower(${q(ADMIN_EMAIL)}));`,
+  ADMIN_EMAIL === 'REPLACE_WITH_ADMIN_EMAIL'
+    ? '   and true;'
+    : `   and lower(up.email) = lower(${q(ADMIN_EMAIL)});`,
   '',
   'do $$',
   'declare n integer; candidates text;',

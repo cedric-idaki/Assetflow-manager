@@ -160,8 +160,8 @@ const ASSET_CONFIGS = {
     iconColor: '#059669',
     fields: [
       { key: 'propertyType',     label: 'Property Type',  placeholder: 'e.g. Residential Plot',        required: true,  col: 1, selectOther: PROPERTY_TYPES },
-      { key: 'landSize',         label: 'Land Size',      placeholder: '0.5',                           required: true,  col: 1, measure: LAND_UNITS },
-      { key: 'buildingSize',     label: 'House / Apartment Size', placeholder: '2500',                   required: false, col: 1, measure: BUILDING_UNITS,
+      { key: 'landSize',         label: 'Land Size',      placeholder: 'e.g. 0.5',                      required: true,  col: 1, measure: LAND_UNITS },
+      { key: 'buildingSize',     label: 'House / Apartment Size', placeholder: 'e.g. 2,500',             required: false, col: 1, measure: BUILDING_UNITS,
         hint: 'Leave blank for bare land.' },
       { key: 'bedrooms',         label: 'Bedrooms',       placeholder: '3',                             required: false, col: 1, type: 'number' },
       { key: 'bathrooms',        label: 'Bathrooms',      placeholder: '2',                             required: false, col: 1, type: 'number' },
@@ -354,15 +354,15 @@ const SelectWithOther = ({ value, onChange, options, error, placeholder, otherPl
 // unitless — "0.5" on a land listing is meaningless, and guessing later is how
 // half an acre becomes half a square metre.
 const MeasureInput = ({ value, unit, units, onValue, onUnit, error, placeholder }) => (
-  <div className="flex gap-2">
+  <div className="grid grid-cols-1 min-[360px]:grid-cols-[minmax(0,1fr)_minmax(8.5rem,1.35fr)] gap-2">
     <input
       type="number" min="0" step="any"
       value={value || ''} onChange={e => onValue(e.target.value)}
-      placeholder={placeholder} className={`${ic(error)} flex-1`}
+      placeholder={placeholder} className={`${ic(error)} min-w-0 placeholder:italic placeholder:text-muted-foreground/70`}
     />
     <select
       value={unit || units[0]} onChange={e => onUnit(e.target.value)}
-      className={`${ic(false)} w-40 flex-shrink-0`}
+      className={`${ic(false)} min-w-0 w-full`}
       aria-label="Unit"
     >
       {units.map(u => <option key={u} value={u}>{u}</option>)}
