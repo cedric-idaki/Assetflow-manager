@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import Input from '../../../components/ui/Input';
 import Select from '../../../components/ui/Select';
@@ -6,6 +6,12 @@ import Button from '../../../components/ui/Button';
 import { sendPaymentConfirmation, sendInvoiceEmail } from '../../../services/emailService';
 import { html, rawHtml } from '../../../utils/htmlEscape';
 import { buildPaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
+import { listPaymentProofs } from '../../../utils/paymentProofs';
+import PaymentProofList from '../../../components/payments/PaymentProofList';
+import {
+  LETTERHEAD_STYLES, letterheadFromRecord, letterheadHtml, mergeLetterhead,
+} from '../../../utils/letterhead';
+import { currentLetterhead } from '../../../lib/letterhead';
 
 const fmtKES = (n) => `KES ${Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const isPaidStatus = (s) => s === 'completed' || s === 'successful';
@@ -18,7 +24,10 @@ const printTxnReceipt = (txn, company) => {
   if (!w) { window.alert('Please allow pop-ups to print this document.'); return; }
   const paid = isPaidStatus(txn?.status);
   const docTitle = paid ? 'RECEIPT' : 'INVOICE';
-  const coName = company?.company_name || 'Ararat Company';
+  // The business's letterhead (logo, motto, contact details); the hub's own
+  // company row, which staff below the owner cannot read, only fills gaps.
+  const letterhead = mergeLetterhead(currentLetterhead(), letterheadFromRecord(company));
+  const coName = letterhead?.name || 'Ararat Company';
   const amount = Number(txn?.amount || 0);
   const when = [txn?.date, txn?.time].filter(Boolean).join(' ');
   const lineDesc = txn?.assetName || (paid ? 'Payment received' : 'Amount due');
@@ -49,13 +58,11 @@ const printTxnReceipt = (txn, company) => {
       .total .amt { font-family: monospace; font-size: 20px; font-weight: 800; }
       .note { margin-top: 16px; font-size: 12px; color: #666; font-style: italic; }
       .foot { margin-top: 28px; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 12px; }
+      ${rawHtml(LETTERHEAD_STYLES)}
+      .lh-name { font-size: 18px; }
     </style></head><body>
       <div class="head">
-        <div>
-          <div class="co">${coName}</div>
-          ${company?.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${company.kra_pin}</div>`) : ''}
-          ${company?.physical_address ? rawHtml(html`<div class="muted">${company.physical_address}</div>`) : ''}
-        </div>
+        ${rawHtml(letterheadHtml(letterhead, { fallbackName: coName }))}
         <div>
           <div class="title">${docTitle}</div>
           <div class="muted mono">${txn?.transactionId || ''}</div>
@@ -107,6 +114,20 @@ const TransactionHistoryTable = ({ transactions, companyProfile }) => {
   const [selected, setSelected] = useState(null);
   const [emailing, setEmailing] = useState(false);
   const [emailMsg, setEmailMsg] = useState(null);
+  // payment id → number of proof-of-payment documents on it.
+  const [proofCounts, setProofCounts] = useState({});
+
+  useEffect(() => {
+    let alive = true;
+    const ids = (transactions || []).map((t) => t?.id).filter(Boolean);
+    listPaymentProofs('company', ids)
+      .then((map) => {
+        if (!alive) return;
+        setProofCounts(Object.fromEntries(Object.entries(map).map(([k, v]) => [k, v.length])));
+      })
+      .catch(() => { /* the paperclip is a hint; the detail view loads its own list */ });
+    return () => { alive = false; };
+  }, [transactions]);
 
   // Printing is a dialog; this is a file. A client asking for "the receipt" is
   // asking for something they can attach to an email or file with their books,
@@ -323,6 +344,11 @@ const TransactionHistoryTable = ({ transactions, companyProfile }) => {
                   >
                     {txn?.status}
                   </span>
+                  {proofCounts[txn?.id] > 0 && (
+                    <span className="ml-1.5 inline-flex items-center gap-0.5 text-xs text-muted-foreground" title="Proof of payment attached">
+                      <Icon name="Paperclip" size={12} color="currentColor" />{proofCounts[txn.id]}
+                    </span>
+                  )}
                 </td>
                 <td className="py-3 px-4">
                   <div className="flex items-center gap-1">
@@ -535,6 +561,17 @@ const TransactionHistoryTable = ({ transactions, companyProfile }) => {
               </div>
 
               {selected.notes && <p className="text-xs text-muted-foreground italic">Note: {selected.notes}</p>}
+
+              {selected.id && (
+                <div className="pt-3 border-t border-border">
+                  <PaymentProofList
+                    module="company"
+                    recordId={selected.id}
+                    adminId={selected.adminId}
+                    onChange={(list) => setProofCounts((p) => ({ ...p, [selected.id]: list.length }))}
+                  />
+                </div>
+              )}
 
               {emailMsg && (
                 <div className={`text-xs px-3 py-2 rounded-lg ${

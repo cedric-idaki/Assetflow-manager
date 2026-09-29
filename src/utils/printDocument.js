@@ -21,6 +21,31 @@
 /** Marks our own frames so a later print can clear the one before it. */
 const FRAME_MARK = 'data-print-frame';
 
+/**
+ * Clear the frame the previous print left behind, if any, and give back the
+ * object URL a PDF frame was holding. Sweeping on the way IN rather than on a
+ * timer means a frame is never pulled out from under a dialog that is still
+ * open — not every engine blocks inside print(), and Firefox has returned from
+ * it before the preview closes — while still leaving at most one node behind
+ * however many documents a counter prints.
+ */
+const sweepFrames = () => {
+  document.querySelectorAll(`iframe[${FRAME_MARK}]`).forEach((el) => {
+    if (el.dataset.objectUrl) URL.revokeObjectURL(el.dataset.objectUrl);
+    el.remove();
+  });
+};
+
+const offscreenFrame = () => {
+  const frame = document.createElement('iframe');
+  // Off-screen rather than display:none — a hidden iframe is not laid out in
+  // every engine, and an unlaid-out document prints blank.
+  frame.setAttribute(FRAME_MARK, '');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;';
+  return frame;
+};
+
 const printViaWindow = (markup) => {
   const w = window.open('', '_blank');
   if (!w) return false;
@@ -41,21 +66,11 @@ const printViaWindow = (markup) => {
 export const printDocument = (markup) => {
   if (typeof document === 'undefined' || !document.body) return false;
 
-  // Clear the frame the previous print left behind, if any. Sweeping on the way
-  // IN rather than on a timer means a frame is never pulled out from under a
-  // dialog that is still open — not every engine blocks inside print(), and
-  // Firefox has returned from it before the preview closes — while still
-  // leaving at most one node behind however many receipts a till prints.
-  document.querySelectorAll(`iframe[${FRAME_MARK}]`).forEach((el) => el.remove());
+  sweepFrames();
 
   let frame;
   try {
-    frame = document.createElement('iframe');
-    // Off-screen rather than display:none — a hidden iframe is not laid out in
-    // every engine, and an unlaid-out document prints blank.
-    frame.setAttribute(FRAME_MARK, '');
-    frame.setAttribute('aria-hidden', 'true');
-    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;';
+    frame = offscreenFrame();
     frame.srcdoc = markup;
 
     frame.onload = () => {
@@ -75,6 +90,45 @@ export const printDocument = (markup) => {
   } catch {
     frame?.remove();
     return printViaWindow(markup);
+  }
+};
+
+/**
+ * Print a rendered PDF (a Blob) — the same off-screen frame, pointed at an
+ * object URL instead of markup, so the page that prints is byte for byte the
+ * page that downloads. If the frame refuses, the PDF opens in a tab and the
+ * viewer's own print button does the rest.
+ *
+ * Returns true when the document was handed on, false when the browser refused
+ * both routes.
+ */
+export const printPdf = (blob) => {
+  if (typeof document === 'undefined' || !document.body || !blob) return false;
+
+  sweepFrames();
+  const url = URL.createObjectURL(blob);
+  const openInTab = () => !!window.open(url, '_blank');
+
+  let frame;
+  try {
+    frame = offscreenFrame();
+    // Revoked by the next sweep, not here: the print dialog is still reading it.
+    frame.dataset.objectUrl = url;
+    frame.onload = () => {
+      try {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+      } catch {
+        frame.remove();
+        openInTab();
+      }
+    };
+    frame.src = url;
+    document.body.appendChild(frame);
+    return true;
+  } catch {
+    frame?.remove();
+    return openInTab();
   }
 };
 

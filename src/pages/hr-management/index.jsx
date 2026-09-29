@@ -109,6 +109,20 @@ const REQUIRED_FIELDS = [
 ];
 const isEmpty = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
 
+// Uploaded files on the employee record, keyed by their user_profiles column.
+// All of them are optional and live in the private `employee-documents` bucket.
+const EMPLOYEE_DOC_FIELDS = ['id_document_url', 'cv_url', 'photo_url'];
+// ID scan + photo of the next of kin and the secondary (emergency) contact.
+// Kept apart because their columns arrive in migration 20260925190000: until it
+// is applied, naming one in a select or an update fails the whole statement.
+const CONTACT_DOC_FIELDS = [
+  'next_of_kin_id_document_url',
+  'next_of_kin_photo_url',
+  'secondary_contact_id_document_url',
+  'secondary_contact_photo_url',
+];
+const ALL_DOC_FIELDS = [...EMPLOYEE_DOC_FIELDS, ...CONTACT_DOC_FIELDS];
+
 // Display label for a stored role value (e.g. 'staff' → 'Employee'). Falls back to a
 // title-cased version of the raw value for any role not in the ROLES list.
 const roleLabel = (role) => {
@@ -165,18 +179,27 @@ const DocLink = ({ url, label }) => url ? (
 // Thumbnail preview for an uploaded employee photo (links to the full image).
 // employee-documents is a private bucket, so the <img> needs a signed URL rather
 // than the stored one.
-const DocThumb = ({ url }) => {
+const DocThumb = ({ url, alt = 'Employee' }) => {
   const { url: signed } = useSignedUrl(url);
   if (!url) return <NoDoc />;
   return (
     <a href={url} onClick={(e) => { e.preventDefault(); openStoredFile(url); }}
       target="_blank" rel="noopener noreferrer" className="inline-block">
       {signed
-        ? <img src={signed} alt="Employee" loading="lazy" className="w-10 h-10 rounded-lg object-cover border border-border hover:ring-2 hover:ring-primary/40 transition-all" />
+        ? <img src={signed} alt={alt} loading="lazy" className="w-10 h-10 rounded-lg object-cover border border-border hover:ring-2 hover:ring-primary/40 transition-all" />
         : <span className="inline-block w-10 h-10 rounded-lg border border-border bg-muted" />}
     </a>
   );
 };
+
+// Documents-tab cell for one contact person: their ID link and photo side by
+// side, or a single "Not uploaded" when there is neither.
+const ContactDocs = ({ idUrl, photoUrl, who }) => (!idUrl && !photoUrl) ? <NoDoc /> : (
+  <div className="flex items-center gap-3">
+    {photoUrl && <DocThumb url={photoUrl} alt={who} />}
+    {idUrl && <DocLink url={idUrl} label="View ID" />}
+  </div>
+);
 
 /**
  * What this employee's compensation actually costs and nets, priced live off
@@ -245,7 +268,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
   // Newly-picked document files, keyed by column. null = keep whatever URL the
   // record already has (stored in form.*_url). Uploaded to the
   // `employee-documents` bucket on save once the employee id is known.
-  const [docFiles, setDocFiles] = useState({ id_document_url: null, cv_url: null, photo_url: null });
+  const [docFiles, setDocFiles] = useState(() => Object.fromEntries(ALL_DOC_FIELDS.map(f => [f, null])));
   const [form, setForm] = useState({
     full_name:           employee?.full_name           || '',
     email:               employee?.email               || '',
@@ -282,9 +305,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     bank_branch:         employee?.bank_branch         || '',
     leave_balance:       employee?.leave_balance       ?? 21,
     is_active:           employee?.is_active           ?? true,
-    id_document_url:     employee?.id_document_url     || '',
-    cv_url:              employee?.cv_url              || '',
-    photo_url:           employee?.photo_url           || '',
+    ...Object.fromEntries(ALL_DOC_FIELDS.map(f => [f, employee?.[f] || ''])),
   });
 
   // Bank account, NSSF and next-of-kin ID are encrypted at rest and are NOT on
@@ -362,12 +383,19 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     return supabase.storage.from('employee-documents').getPublicUrl(path).data.publicUrl;
   };
 
-  // Resolve the three document URLs for a given employee id: upload any newly
-  // picked file, otherwise keep the URL already on the form.
+  // Resolve the document URLs for a given employee id: upload any newly picked
+  // file, otherwise keep the URL already on the form.
   const resolveDocUrls = async (empId) => {
-    const out = { id_document_url: form.id_document_url || null, cv_url: form.cv_url || null, photo_url: form.photo_url || null };
-    for (const field of ['id_document_url', 'cv_url', 'photo_url']) {
+    const out = {};
+    for (const field of EMPLOYEE_DOC_FIELDS) {
+      out[field] = docFiles[field] ? await uploadDoc(empId, field, docFiles[field]) : (form[field] || null);
+    }
+    // A contact document column is only written when a file was picked or the
+    // loaded record already carries it — so a database still missing
+    // 20260925190000 keeps saving every other employee change.
+    for (const field of CONTACT_DOC_FIELDS) {
       if (docFiles[field]) out[field] = await uploadDoc(empId, field, docFiles[field]);
+      else if (employee && field in employee) out[field] = form[field] || null;
     }
     return out;
   };
@@ -536,7 +564,13 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
       onSaved();
       onClose();
     } catch (err) {
-      setError(err.message);
+      // PostgREST's "column not found" for a contact document means the file
+      // uploaded but the database has no column to record it in yet.
+      const missingContactCol = err?.code === 'PGRST204'
+        && CONTACT_DOC_FIELDS.some(f => String(err.message || '').includes(f));
+      setError(missingContactCol
+        ? 'Next-of-kin and secondary-contact documents cannot be saved yet: the database is missing migration 20260925190000_employee_contact_documents. Remove those files to save the rest, or apply the migration first.'
+        : err.message);
     } finally {
       setSaving(false);
     }
@@ -577,7 +611,9 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
               </button>
             </span>
           ) : existing ? (
-            <a href={existing} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-primary hover:underline">
+            // Private bucket: the stored URL does not open on its own, so sign it on click.
+            <a href={existing} onClick={(e) => { e.preventDefault(); openStoredFile(existing); }}
+              target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-primary hover:underline">
               <Icon name="ExternalLink" size={12} color="currentColor" /> View current
             </a>
           ) : (
@@ -648,6 +684,18 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
               <label className={S.label}>ID Number *</label>
               <input {...encrypted('next_of_kin_id')} placeholder={piiLoading ? 'Decrypting…' : 'National ID / Passport No.'} />
             </div>
+            <DocField
+              field="next_of_kin_id_document_url"
+              label="ID Document"
+              accept="image/*,application/pdf"
+              hint="Next of kin's National ID or passport scan · image or PDF"
+            />
+            <DocField
+              field="next_of_kin_photo_url"
+              label="Photo"
+              accept="image/*"
+              hint="Passport-style photo · image only"
+            />
 
             <Section title="Secondary Contact" />
             <div>
@@ -662,6 +710,18 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
               <label className={S.label}>Phone *</label>
               <input className={S.input + inv('secondary_contact_phone')} placeholder="+254 7XX XXX XXX" value={form.secondary_contact_phone} onChange={e => set('secondary_contact_phone', e.target.value)} />
             </div>
+            <DocField
+              field="secondary_contact_id_document_url"
+              label="ID Document"
+              accept="image/*,application/pdf"
+              hint="Contact's National ID or passport scan · image or PDF"
+            />
+            <DocField
+              field="secondary_contact_photo_url"
+              label="Photo"
+              accept="image/*"
+              hint="Passport-style photo · image only"
+            />
 
             <Section title="Employment Details" />
             <div>
@@ -858,6 +918,13 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
     </div>
   );
 
+  const DocRow = ({ label, children }) => (
+    <div className="flex items-center justify-between py-2.5 border-b border-border">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+
   // An encrypted row must never fall through to the plain '—' that Row shows for
   // an empty value: "not set" and "could not be decrypted" are different facts,
   // and confusing them is how someone concludes a bank account is missing.
@@ -943,6 +1010,8 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
             <Row label="Relationship" value={employee.next_of_kin_relationship} />
             <Row label="Phone"        value={employee.next_of_kin_phone} />
             <SecureRow label="ID Number" field="next_of_kin_id" />
+            <DocRow label="ID Document"><DocLink url={employee.next_of_kin_id_document_url} label="View ID" /></DocRow>
+            <DocRow label="Photo"><DocThumb url={employee.next_of_kin_photo_url} alt="Next of kin" /></DocRow>
           </div>
 
           <div>
@@ -950,6 +1019,8 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
             <Row label="Name"         value={employee.secondary_contact_name} />
             <Row label="Relationship" value={employee.secondary_contact_relationship} />
             <Row label="Phone"        value={employee.secondary_contact_phone} />
+            <DocRow label="ID Document"><DocLink url={employee.secondary_contact_id_document_url} label="View ID" /></DocRow>
+            <DocRow label="Photo"><DocThumb url={employee.secondary_contact_photo_url} alt="Secondary contact" /></DocRow>
           </div>
 
           <div>
@@ -968,18 +1039,9 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
 
           <div>
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Documents</p>
-            <div className="flex items-center justify-between py-2.5 border-b border-border">
-              <span className="text-xs text-muted-foreground">ID / Passport</span>
-              <DocLink url={employee.id_document_url} label="View ID" />
-            </div>
-            <div className="flex items-center justify-between py-2.5 border-b border-border">
-              <span className="text-xs text-muted-foreground">CV</span>
-              <DocLink url={employee.cv_url} label="View CV" />
-            </div>
-            <div className="flex items-center justify-between py-2.5 border-b border-border">
-              <span className="text-xs text-muted-foreground">Photo</span>
-              <DocThumb url={employee.photo_url} />
-            </div>
+            <DocRow label="ID / Passport"><DocLink url={employee.id_document_url} label="View ID" /></DocRow>
+            <DocRow label="CV"><DocLink url={employee.cv_url} label="View CV" /></DocRow>
+            <DocRow label="Photo"><DocThumb url={employee.photo_url} /></DocRow>
           </div>
 
           {payrollHistory.length > 0 && (
@@ -1476,6 +1538,10 @@ const HRPage = () => {
     // same reason next-of-kin does: naming a not-yet-migrated column fails the
     // whole query, and an empty staff list is far worse than a blank field.
     const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url, pension_contribution, mortgage_interest, post_retirement_medical, insurance_premiums, has_disability_exemption`;
+    // Contact documents (20260925190000) get a tier of their own, so a database
+    // without them loses only these four columns instead of dropping all the way
+    // to the base set.
+    const EMP_COL_TIERS = [`${FULL_EMP_COLS}, ${CONTACT_DOC_FIELDS.join(', ')}`, FULL_EMP_COLS, BASE_EMP_COLS];
 
     const runEmpQuery = (cols) => {
       let q = supabase.from('user_profiles')
@@ -1497,13 +1563,13 @@ const HRPage = () => {
       return isSuper ? q : q.eq('admin_id', aId);
     };
 
-    let [empRes, payRes] = await Promise.all([runEmpQuery(FULL_EMP_COLS), runPayQuery(FULL_PAY_COLS)]);
+    let [empRes, payRes] = await Promise.all([runEmpQuery(EMP_COL_TIERS[0]), runPayQuery(FULL_PAY_COLS)]);
 
-    // Pending migration → enriched select errors. Fall back to base columns so the
-    // list still loads (the new contact fields just won't populate until migrated).
-    if (empRes.error) {
-      console.warn('HR: enriched employee query failed — falling back to base columns. Apply the latest migrations to enable next-of-kin / secondary-contact fields.', empRes.error.message);
-      empRes = await runEmpQuery(BASE_EMP_COLS);
+    // Pending migration → enriched select errors. Step down a tier at a time so
+    // the list still loads (the missing fields just won't populate until migrated).
+    for (let tier = 1; empRes.error && tier < EMP_COL_TIERS.length; tier++) {
+      console.warn(`HR: employee query failed — retrying with column tier ${tier}. Apply the latest migrations to enable every HR field.`, empRes.error.message);
+      empRes = await runEmpQuery(EMP_COL_TIERS[tier]);
     }
     // Same guard on payroll: the statutory breakdown columns land in
     // 20260829120000, and the history table must still render without them.
@@ -1894,7 +1960,7 @@ const HRPage = () => {
                 <table className="w-full">
                   <thead>
                     <tr>
-                      {['Employee', 'ID / Passport', 'CV', 'Photo'].map(h => (
+                      {['Employee', 'ID / Passport', 'CV', 'Photo', 'Next of Kin', 'Secondary Contact'].map(h => (
                         <th key={h} className={S.th}>{h}</th>
                       ))}
                     </tr>
@@ -1902,10 +1968,10 @@ const HRPage = () => {
                   <tbody>
                     {loading ? (
                       Array(5).fill(0).map((_, i) => (
-                        <tr key={i}>{Array(4).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>
+                        <tr key={i}>{Array(6).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>
                       ))
                     ) : filtered.length === 0 ? (
-                      <tr><td colSpan={4}>
+                      <tr><td colSpan={6}>
                         <div className="flex flex-col items-center justify-center py-16">
                           <Icon name="FileText" size={28} color="var(--muted-foreground)" />
                           <p className="text-sm font-medium text-foreground mt-3">No employees found</p>
@@ -1928,6 +1994,12 @@ const HRPage = () => {
                         <td className={S.td} onClick={e => e.stopPropagation()}><DocLink url={emp.id_document_url} label="View ID" /></td>
                         <td className={S.td} onClick={e => e.stopPropagation()}><DocLink url={emp.cv_url} label="View CV" /></td>
                         <td className={S.td} onClick={e => e.stopPropagation()}><DocThumb url={emp.photo_url} /></td>
+                        <td className={S.td} onClick={e => e.stopPropagation()}>
+                          <ContactDocs idUrl={emp.next_of_kin_id_document_url} photoUrl={emp.next_of_kin_photo_url} who="Next of kin" />
+                        </td>
+                        <td className={S.td} onClick={e => e.stopPropagation()}>
+                          <ContactDocs idUrl={emp.secondary_contact_id_document_url} photoUrl={emp.secondary_contact_photo_url} who="Secondary contact" />
+                        </td>
                       </tr>
                     ))}
                   </tbody>

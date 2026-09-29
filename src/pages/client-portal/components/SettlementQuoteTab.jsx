@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
-import { html } from '../../../utils/htmlEscape';
+import { html, rawHtml } from '../../../utils/htmlEscape';
+import { LETTERHEAD_STYLES, letterheadContactLine, letterheadHtml } from '../../../utils/letterhead';
+import { useLetterhead } from '../../../hooks/useLetterhead';
 
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
 const SettlementQuoteTab = ({ installmentPlans, clientProfile }) => {
+  // The quote is the company's offer, so it goes out on the company's letterhead.
+  const { letterhead } = useLetterhead();
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [quote,          setQuote]          = useState(null);
   const [generating,     setGenerating]     = useState(false);
@@ -63,7 +67,10 @@ const SettlementQuoteTab = ({ installmentPlans, clientProfile }) => {
         .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
         .total { font-weight: bold; font-size: 18px; color: #1A56DB; }
         .note { font-size: 12px; color: #666; margin-top: 20px; }
+        ${rawHtml(LETTERHEAD_STYLES)}
+        .lh { border-bottom: 3px solid #1A56DB; padding-bottom: 14px; margin-bottom: 18px; }
       </style></head><body>
+      ${letterhead ? rawHtml(letterheadHtml(letterhead)) : ''}
       <h1>${clientProfile?.full_name || 'Client'} — Settlement Quote</h1>
       <p>Quote Ref: <strong>${quote.quoteRef}</strong> &nbsp;|&nbsp; Valid Until: <strong>${fmtDate(quote.validUntil)}</strong></p>
       <h2>Plan: ${quote.plan.plan_name}</h2>
@@ -72,7 +79,7 @@ const SettlementQuoteTab = ({ installmentPlans, clientProfile }) => {
       <div class="row"><span>Outstanding Capital</span><span>${fmt(quote.outstandingCapital)}</span></div>
       <div class="row"><span>Early Settlement Discount (${quote.discountRate}%)</span><span>(${fmt(quote.discountAmount)})</span></div>
       <div class="row total"><span>SETTLEMENT AMOUNT DUE</span><span>${fmt(quote.settlementAmount)}</span></div>
-      <p class="note">This quote is valid for 7 days from the date of generation. Payment must be received in full by ${fmtDate(quote.validUntil)} to qualify for the discount. Contact us to arrange payment.</p>
+      <p class="note">This quote is valid for 7 days from the date of generation. Payment must be received in full by ${fmtDate(quote.validUntil)} to qualify for the discount. Contact us to arrange payment${letterheadContactLine(letterhead) ? `: ${letterheadContactLine(letterhead)}` : ''}.</p>
       </body></html>
     `);
     w.document.close();

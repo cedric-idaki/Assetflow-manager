@@ -1,11 +1,18 @@
 import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { html, rawHtml } from '../../../utils/htmlEscape';
+import {
+  LETTERHEAD_STYLES, letterheadContactLine, letterheadFromRecord, letterheadHtml, mergeLetterhead,
+} from '../../../utils/letterhead';
+import { useLetterhead } from '../../../hooks/useLetterhead';
 
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
 const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, companyProfile }) => {
+  // A client cannot read company_profiles, so `companyProfile` is usually
+  // empty here; the tenant letterhead is what names the company to them.
+  const { letterhead: tenantLetterhead } = useLetterhead();
   const [fromDate, setFromDate] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 3);
@@ -26,7 +33,8 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
   const generateStatement = () => {
     setGenerating(true);
     setTimeout(() => {
-      const co = companyProfile || {};
+      const lh = mergeLetterhead(tenantLetterhead, letterheadFromRecord(companyProfile));
+      const contact = letterheadContactLine(lh);
       const cl = clientProfile  || {};
 
       const rows = filteredPayments.map(p => html`
@@ -62,15 +70,13 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
             tr:hover td { background:#f8fafc; }
             tfoot td { background:#f1f5f9; font-weight:bold; border-top:2px solid #1A56DB; }
             .footer { margin-top:30px; padding-top:16px; border-top:1px solid #e2e8f0; font-size:11px; color:#64748b; }
+            ${rawHtml(LETTERHEAD_STYLES)}
+            .lh-line { color:#64748b; }
           </style>
         </head>
         <body>
           <div class="header">
-            <div>
-              <div class="company-name">${co.company_name || 'Ararat'}</div>
-              <div style="font-size:11px; color:#64748b; margin-top:4px">${co.physical_address || ''}</div>
-              <div style="font-size:11px; color:#64748b">KRA PIN: ${co.kra_pin || 'N/A'}</div>
-            </div>
+            ${rawHtml(letterheadHtml(lh, { accent: '#1A56DB' }))}
             <div style="text-align:right">
               <div class="title">Account Statement</div>
               <div style="color:#64748b; font-size:12px">Period: ${fmtDate(fromDate)} — ${fmtDate(toDate)}</div>
@@ -123,7 +129,7 @@ const StatementDownloadTab = ({ payments, installmentPlans, clientProfile, compa
 
           <div class="footer">
             <p>This is a computer-generated statement and does not require a signature.</p>
-            <p style="margin-top:4px">For queries, contact us at ${co.email || ''} | ${co.phone || ''}</p>
+            ${contact ? rawHtml(html`<p style="margin-top:4px">For queries, contact ${lh?.name || 'us'}: ${contact}</p>`) : ''}
           </div>
         </body>
         </html>

@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
-import { html } from '../../../utils/htmlEscape';
+import { html, rawHtml } from '../../../utils/htmlEscape';
+import {
+  LETTERHEAD_STYLES, letterheadContactLine, letterheadFromRecord, letterheadHtml, mergeLetterhead,
+} from '../../../utils/letterhead';
+import { useLetterhead } from '../../../hooks/useLetterhead';
 import SigningStatusChip from '../../../components/signing/SigningStatusChip';
 import SendForSignatureModal from '../../../components/signing/SendForSignatureModal';
 import SigningRequestDrawer from '../../../components/signing/SigningRequestDrawer';
@@ -26,6 +30,9 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
   const [letterRef, setLetterRef] = useState(null);
   const [serialErr, setSerialErr] = useState('');
   const [minting,   setMinting]   = useState(true);
+  // The issuing company's letterhead — looked up by its own id, so a super
+  // admin printing a tenant's letter gets that tenant's logo, not nothing.
+  const { letterhead } = useLetterhead(companyProfile?.admin_id || null);
 
   // Signing, where the tenant has turned it on for settlement certificates.
   // A settled plan is often the only proof a buyer ever gets that the asset is
@@ -86,7 +93,9 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
 
   const handlePrint = () => {
     if (!letterRef) return;
-    const co = companyProfile || {};
+    const lh = mergeLetterhead(letterhead, letterheadFromRecord(companyProfile));
+    const coName = lh?.name || 'Ararat';
+    const contact = letterheadContactLine(lh);
     // `html` tagged template: every ${...} below is escaped, so a tenant-supplied
     // name or address cannot inject script into the print window (which shares
     // this app's origin). See src/utils/htmlEscape.js.
@@ -116,17 +125,15 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
           .signature-block { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 50px; }
           .sig-line { border-top: 1px solid #111; padding-top: 8px; font-size: 12px; }
           .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #888; text-align: center; }
+          ${rawHtml(LETTERHEAD_STYLES)}
+          .lh-name { font-size: 22px; }
+          .lh-line { color: #555; }
           .stamp { display: inline-block; border: 3px solid #10b981; border-radius: 50%; padding: 12px 16px; color: #10b981; font-weight: 900; font-size: 14px; transform: rotate(-15deg); margin: 10px; letter-spacing: 1px; }
         </style>
       </head>
       <body>
         <div class="header">
-          <div>
-            <div class="company-name">${co.company_name || 'Ararat'}</div>
-            <div style="font-size:11px; color:#555; margin-top:4px">${co.physical_address || ''}</div>
-            <div style="font-size:11px; color:#555">Tel: ${co.phone || ''} | Email: ${co.email || ''}</div>
-            <div style="font-size:11px; color:#555">KRA PIN: ${co.kra_pin || 'N/A'}</div>
-          </div>
+          ${rawHtml(letterheadHtml(lh, { accent: '#1A56DB', fallbackName: coName }))}
           <div style="text-align:right">
             <div style="font-size:11px; color:#555">Date: ${fmtDate(new Date().toISOString())}</div>
             <div style="font-size:11px; color:#555">Certificate Serial</div>
@@ -181,18 +188,18 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
         <div class="section">
           <div class="body-text">
             This is to certify that <strong>${client?.full_name || 'the above-named client'}</strong> has fully and finally settled all hire purchase obligations 
-            under Plan Reference <strong>${plan?.plan_name}</strong> with <strong>${co.company_name || 'Ararat'}</strong>. 
+            under Plan Reference <strong>${plan?.plan_name}</strong> with <strong>${coName}</strong>. 
             A total of <strong>${plan?.total_installments} installments</strong> amounting to <strong>${fmt(plan?.total_amount)}</strong> 
             have been received in full.
           </div>
           <div class="body-text">
             With effect from <strong>${fmtDate(new Date().toISOString())}</strong>, full legal title and ownership of the above-described asset 
             is hereby transferred unconditionally to <strong>${client?.full_name || 'the client'}</strong>. 
-            ${co.company_name || 'The company'} relinquishes all rights, encumbrances, and claims over the said asset with immediate effect.
+            ${lh?.name || 'The company'} relinquishes all rights, encumbrances, and claims over the said asset with immediate effect.
           </div>
           <div class="body-text">
             The client is hereby authorized to effect the transfer of registration documents and to deal with the asset 
-            in any manner they deem fit without any further reference to ${co.company_name || 'the company'}.
+            in any manner they deem fit without any further reference to ${lh?.name || 'the company'}.
           </div>
         </div>
 
@@ -204,7 +211,7 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
           <div>
             <div class="sig-line">
               <strong>Authorized Signatory</strong><br>
-              ${co.company_name || 'Ararat'}<br>
+              ${coName}<br>
               <span style="color:#555">Name: ________________________</span><br>
               <span style="color:#555">Designation: ________________________</span><br>
               <span style="color:#555">Date: ________________________</span>
@@ -222,9 +229,9 @@ const SettlementLetterModal = ({ plan, client, asset, companyProfile, onClose })
         </div>
 
         <div class="footer">
-          <p>This is an official document issued by ${co.company_name || 'Ararat'}.</p>
+          <p>This is an official document issued by ${coName}.</p>
           <p>Certificate Serial <strong>${letterRef}</strong> — verify it against the Ararat certificate register to confirm this document is genuine.</p>
-          <p>Generated on ${fmtDate(new Date().toISOString())} | ${co.email || ''} | ${co.phone || ''}</p>
+          <p>Generated on ${fmtDate(new Date().toISOString())}${contact ? ` | ${contact}` : ''}</p>
         </div>
       </body>
       </html>

@@ -21,7 +21,12 @@ import { S, Sk, Empty, toast, fmt } from './components/_shared';
 import RecordTransactionTab from './components/RecordTransactionTab';
 import ClientsTab from './components/ClientsTab';
 import ClientRecordModal from '../../components/clients/ClientRecordModal';
+import InvoiceWhatsAppModal from './components/InvoiceWhatsAppModal';
 import { html, rawHtml } from '../../utils/htmlEscape';
+import {
+  LETTERHEAD_STYLES, letterheadFromRecord, letterheadHtml, mergeLetterhead,
+} from '../../utils/letterhead';
+import { currentLetterhead } from '../../lib/letterhead';
 import { fetchEmployeePii } from '../../services/employeePiiService';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,6 +42,9 @@ const fmtPct   = (n) => `${parseFloat(n || 0).toFixed(1)}%`;
 export const invoiceSeller = (inv, companyProfile) => {
   const co = inv?.seller || companyProfile || null;
   return {
+    // Whose letterhead this is: the voucher painter looks the tenant's logo up
+    // by it, and refuses to lay one tenant's branding over another's.
+    admin_id: co?.admin_id || null,
     name:    co?.company_name || 'Ararat Company',
     kra_pin: co?.kra_pin || '',
     // Registration captures location + city; physical_address is filled in later
@@ -210,8 +218,11 @@ const openPrintWindow = (markup, what) => {
 export const printInvoice = ({ company, invoice: inv }) => {
   const w = window.open('', '_blank');
   if (!w) { toast('Allow pop-ups to print the invoice', 'error'); return; }
-  const seller = invoiceSeller(inv, company);
-  const coName = seller.name;
+  // The selling company's own record, under the tenant's letterhead (logo,
+  // motto, contact details) when the seller IS the signed-in tenant.
+  // mergeLetterhead never lays one tenant's branding over another's.
+  const letterhead = mergeLetterhead(currentLetterhead(), letterheadFromRecord(inv?.seller || company || null));
+  const coName = letterhead?.name || 'Ararat Company';
   const total  = (inv.amount || 0) + (inv.vat_amount || 0);
   const assetDesc = inv.asset && inv.asset !== '—' ? inv.asset : 'Asset payment';
   const assetRef  = [inv.asset_code, inv.plate_number].filter(Boolean).join(' · ');
@@ -285,17 +296,11 @@ export const printInvoice = ({ company, invoice: inv }) => {
       table.plan-t td.r { text-align: right; font-family: monospace; }
       .note { margin-top: 16px; font-size: 12px; color: #666; font-style: italic; }
       .foot { margin-top: 28px; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 12px; }
+      ${rawHtml(LETTERHEAD_STYLES)}
+      .lh-name { font-size: 18px; }
     </style></head><body>
       <div class="head">
-        <div>
-          <div class="co">${coName}</div>
-          ${seller.reg_no  ? rawHtml(html`<div class="muted">Reg No: ${seller.reg_no}</div>`) : ''}
-          ${seller.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${seller.kra_pin}</div>`) : ''}
-          ${seller.address ? rawHtml(html`<div class="muted">${seller.address}</div>`) : ''}
-          ${seller.phone || seller.email
-            ? rawHtml(html`<div class="muted">${[seller.phone, seller.email].filter(Boolean).join(' · ')}</div>`)
-            : ''}
-        </div>
+        ${rawHtml(letterheadHtml(letterhead, { fallbackName: coName }))}
         <div>
           <div class="title">INVOICE</div>
           <div class="muted" style="text-align:right;font-family:monospace;font-weight:700;">${inv.invoice_no}</div>
@@ -385,7 +390,19 @@ const InvoicesTab = ({
   const [busyRow,  setBusyRow]  = useState(null);
   const [form,     setForm]     = useState(blankInvoiceForm);
   const [newClient, setNewClient] = useState(false);
+  const [whatsAppFor, setWhatsAppFor] = useState(null);
+  const closeWhatsApp = useCallback(() => setWhatsAppFor(null), []);
   const { downloading, download } = useDocumentDownload();
+
+  // Sent from the list or from an open invoice; headed by the same seller as
+  // the printed and downloaded copies.
+  const whatsAppModal = whatsAppFor && (
+    <InvoiceWhatsAppModal
+      invoice={whatsAppFor}
+      company={invoiceSeller(whatsAppFor, companyProfile)}
+      onClose={closeWhatsApp}
+    />
+  );
 
   // A pending invoice downloads as a TAX INVOICE and a settled one as an
   // OFFICIAL RECEIPT — headed by the company the asset came from, exactly like
@@ -709,7 +726,7 @@ const InvoicesTab = ({
             </div>
           )}
           {inv.notes && <p className="mt-4 text-xs text-gray-500 italic">Note: {inv.notes}</p>}
-          <div className="mt-6 flex gap-3">
+          <div className="mt-6 flex flex-wrap gap-3">
             <button className={S.btnPri} onClick={() => printInvoice({ company: co, invoice: inv })}>
               <Icon name="Printer" size={14} color="currentColor" /> Print
             </button>
@@ -730,6 +747,15 @@ const InvoicesTab = ({
                 ? <><Icon name="Loader" size={14} color="currentColor" className="animate-spin" /> Sending…</>
                 : <><Icon name="Mail" size={14} color="currentColor" /> Email</>}
             </button>
+            <button
+              className={S.btnSec}
+              onClick={() => setWhatsAppFor(inv)}
+              title={inv.client_phone
+                ? `Send to ${inv.client_phone} on WhatsApp`
+                : 'Send on WhatsApp — no number on file, you will be asked for one'}
+            >
+              <Icon name="MessageCircle" size={14} color="currentColor" /> Send via WhatsApp
+            </button>
             {/* Only hand-raised invoices are editable — the rest mirror payments. */}
             {inv.source === 'manual' && (
               <>
@@ -749,6 +775,7 @@ const InvoicesTab = ({
             )}
           </div>
         </div>
+        {whatsAppModal}
       </div>
     );
   }
@@ -994,6 +1021,14 @@ const InvoicesTab = ({
                           ? `Download receipt ${inv.invoice_no}`
                           : `Download invoice ${inv.invoice_no}`}
                       />
+                      <button
+                        className={S.btnGhost}
+                        onClick={() => setWhatsAppFor(inv)}
+                        title={`Send ${inv.invoice_no} via WhatsApp`}
+                        aria-label={`Send ${inv.invoice_no} via WhatsApp`}
+                      >
+                        <Icon name="MessageCircle" size={13} color="currentColor" />
+                      </button>
                       {inv.source === 'manual' && inv.status !== 'paid' && (
                         <button className={S.btnGhost} title="Mark as paid"
                           onClick={() => handleStatus(inv, 'paid')} disabled={busyRow === inv.id}>
@@ -1023,6 +1058,7 @@ const InvoicesTab = ({
             : `${client.full_name} added · ${client.account_number}`, 'success');
         }}
       />
+      {whatsAppModal}
     </div>
   );
 };

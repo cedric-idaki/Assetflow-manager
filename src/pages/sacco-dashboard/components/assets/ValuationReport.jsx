@@ -22,6 +22,7 @@
  * disagree, the one to believe is the one Postgres computed over everything.
  */
 import React, { useMemo } from 'react';
+import PrintLetterhead from '../../../../components/documents/PrintLetterhead';
 import Icon from '../../../../components/AppIcon';
 import { useToast } from '../../../../components/Toast';
 import { downloadCSV } from '../../../../utils/exportUtils';
@@ -94,6 +95,7 @@ const ValuationReport = () => {
 
   return (
     <div className="space-y-5">
+      <PrintLetterhead />
       {error && (
         <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-red-50 border border-red-200">
           <span className="flex items-center gap-2">

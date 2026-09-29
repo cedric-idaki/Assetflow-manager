@@ -31,7 +31,8 @@ import { downloadCSVText, toCSVGrid, saveBlob } from './exportUtils';
 import { formatCell, cellLabel } from './reportQuery';
 import { buildWorkbook, XLSX_MIME } from './xlsxWriter';
 import { loadJsPDF, pdfSafeText } from './jsPdfLoader';
-import { normaliseIssuer } from './accountingDocument';
+import { brandIssuer, normaliseIssuer } from './accountingDocument';
+import { drawLogo, fitText } from './pdfLetterhead';
 
 /**
  * How many rows a PDF will paint before it refuses.
@@ -300,7 +301,10 @@ export const renderReportPDF = async (model) => {
     );
   }
 
-  const JsPDF = await loadJsPDF();
+  // The tenant's letterhead — logo and motto — over the record the model
+  // was built from. brandIssuer never throws; without one the band prints the
+  // issuer as built.
+  const [JsPDF, issuer] = await Promise.all([loadJsPDF(), brandIssuer(model.issuer)]);
   const doc = new JsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
@@ -320,13 +324,32 @@ export const renderReportPDF = async (model) => {
   // ── Header band ────────────────────────────────────────────────────────────
   const band = () => {
     fill(0, 0, W, 22, BLUE);
-    font('bold', 13); color(WHITE);
-    text(model.issuer?.name || 'Ararat', M, 10);
-    font('normal', 7); color([185, 212, 255]);
-    text((model.issuer?.lines || []).slice(0, 2).join('  ·  '), M, 15.5);
 
-    font('bold', 12); color(WHITE);
-    text(model.title, W - M, 10, { align: 'right' });
+    // Right: what the report is. Left: whose — logo on a white tile, then the
+    // name (shrunk, then clipped, so it never runs under the title), the motto
+    // and one line of contact details.
+    const titleText = fitText(doc, model.title, CW * 0.45, { style: 'bold', size: 12, minSize: 9 });
+    const titleSize = doc.getFontSize();
+    const titleW = doc.getTextWidth(titleText);
+    let headX = M;
+    if (issuer.logo && drawLogo(doc, issuer.logo, { x: M, y: 3, w: 16, h: 16, tile: WHITE, radius: 1.5, padding: 1.2 })) {
+      headX = M + 20;
+    }
+    const headW = Math.max(40, W - M - titleW - 10 - headX);
+    const nameText = fitText(doc, issuer.name || 'Ararat', headW, { style: 'bold', size: 13, minSize: 9 });
+    color(WHITE);
+    doc.text(nameText, headX, issuer.motto ? 9 : 10);
+    if (issuer.motto) {
+      const mottoText = fitText(doc, issuer.motto, headW, { style: 'italic', size: 7, minSize: 6 });
+      color([214, 228, 255]);
+      doc.text(mottoText, headX, 13.5);
+    }
+    const lineText = fitText(doc, (issuer.lines || []).slice(0, 2).join('  ·  '), headW, { size: 7, minSize: 6 });
+    color([185, 212, 255]);
+    doc.text(lineText, headX, issuer.motto ? 18 : 15.5);
+
+    font('bold', titleSize); color(WHITE);
+    text(titleText, W - M, 10, { align: 'right' });
     font('normal', 7.5); color([185, 212, 255]);
     text(`${model.rowCount.toLocaleString('en-KE')} record${model.rowCount === 1 ? '' : 's'}`
       + ` · ${model.generatedAt.toLocaleString('en-GB')}`, W - M, 15.5, { align: 'right' });

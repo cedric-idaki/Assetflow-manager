@@ -17,6 +17,8 @@
  */
 
 import { html, rawHtml } from './htmlEscape';
+import { LETTERHEAD_STYLES, letterheadFromRecord, letterheadHtml, mergeLetterhead } from './letterhead';
+import { currentLetterhead } from '../lib/letterhead';
 
 const fmt = (n) =>
   `KES ${parseFloat(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -53,9 +55,19 @@ export const PAYSLIP_STYLES = `
   @media print { body { margin: 0 auto; } }
 `;
 
-/** One payslip, as an escaped HTML fragment. */
-export const payslipBody = ({ company, employee = {}, month, data = {} }) => {
-  const coName = company?.company_name || 'Ararat Company';
+/**
+ * One payslip, as an escaped HTML fragment.
+ *
+ * `letterhead` is the tenant's (logo, motto, contact details); when omitted the
+ * signed-in user's cached one is used, and `company` fills any gap — an HR
+ * officer cannot read company_profiles, so on their screen it is usually empty.
+ */
+export const payslipBody = ({ company, letterhead, employee = {}, month, data = {} }) => {
+  const lh = mergeLetterhead(
+    letterhead === undefined ? currentLetterhead() : letterhead,
+    letterheadFromRecord(company),
+  );
+  const coName = lh?.name || 'Ararat Company';
 
   // These return pre-marked raw fragments, so `${earn(...)}` inside the escaped
   // template below renders as markup while its label/value stay escaped.
@@ -71,11 +83,7 @@ export const payslipBody = ({ company, employee = {}, month, data = {} }) => {
   return html`
     <div class="payslip">
       <div class="head">
-        <div>
-          <div class="co">${coName}</div>
-          ${company?.kra_pin ? rawHtml(html`<div class="muted">KRA PIN: ${company.kra_pin}</div>`) : ''}
-          ${company?.physical_address ? rawHtml(html`<div class="muted">${company.physical_address}</div>`) : ''}
-        </div>
+        ${rawHtml(letterheadHtml(lh, { fallbackName: coName }))}
         <div>
           <div class="title">PAYSLIP</div>
           <div class="muted" style="text-align:right;">${fmtMonth(month)}</div>
@@ -168,7 +176,7 @@ export const payslipDocument = (payslips = []) => {
 
   return html`
     <html><head><title>${title}</title>
-    <style>${rawHtml(PAYSLIP_STYLES)}</style></head><body>
+    <style>${rawHtml(PAYSLIP_STYLES + LETTERHEAD_STYLES)}</style></head><body>
     ${rawHtml(list.map(p => payslipBody(p)).join(''))}
     </body></html>
   `;

@@ -16,6 +16,10 @@ import {
   fmtPlain,
 } from '../../../../utils/saccoAccounting';
 import { societyType } from '../../../../config/saccoAccountingConfig';
+import {
+  LETTERHEAD_STYLES, letterheadFromRecord, letterheadHtml, mergeLetterhead,
+} from '../../../../utils/letterhead';
+import { useLetterhead } from '../../../../hooks/useLetterhead';
 
 const StatementRow = ({ label, value, prior, emphasis, strong, indent, currency }) => (
   <tr className={`${strong ? 'border-t-2 border-foreground/20' : 'border-b border-border'} ${emphasis ? 'font-semibold' : ''}`}>
@@ -37,7 +41,9 @@ const IntegrityBanner = ({ ok, okText, badText }) => (
 );
 
 /** Opens a clean, print-ready window for whichever statement is on screen. */
-const printStatement = ({ title, saccoName, subtitle, sections, currency }) => {
+const printStatement = ({ title, saccoName, subtitle, sections, currency, letterhead = null }) => {
+  // The society's letterhead — logo, motto, contact details — over its name.
+  const lh = mergeLetterhead(letterhead, letterheadFromRecord({ name: saccoName }));
   // Account labels and headings come from the tenant's own chart of accounts,
   // so they are escaped; only the assembled row fragments are marked raw.
   const rowsHtml = sections.map((sec) => html`
@@ -65,8 +71,10 @@ const printStatement = ({ title, saccoName, subtitle, sections, currency }) => {
       tr.emph td { font-weight:bold; }
       tr.strong td { font-weight:bold; border-top:2px solid #333; border-bottom:2px solid #333; }
       footer { margin-top:36px; font-size:10px; color:#999; border-top:1px solid #eee; padding-top:10px; }
+      ${rawHtml(LETTERHEAD_STYLES)}
+      .lh { margin-bottom:14px; padding-bottom:12px; border-bottom:2px solid #333; }
     </style></head><body>
-      <h1>${saccoName}</h1>
+      ${rawHtml(letterheadHtml(lh, { fallbackName: saccoName || 'Society' }))}
       <h2>${title}</h2>
       <p class="sub">${subtitle} · all amounts in ${currency}</p>
       <table>${rawHtml(rowsHtml)}</table>
@@ -83,6 +91,7 @@ const StatementsTab = ({ fin, periodTb, openingTb, closingTb, priorTb, range, sa
   const type = societyType(config?.society_type);
 
   const [view, setView] = useState('income');
+  const { letterhead } = useLetterhead();
 
   const income  = useMemo(() => buildIncomeStatement(periodTb, priorTb), [periodTb, priorTb]);
   const balance = useMemo(() => buildBalanceSheet(closingTb), [closingTb]);
@@ -100,6 +109,7 @@ const StatementsTab = ({ fin, periodTb, openingTb, closingTb, priorTb, range, sa
   const doPrint = () => {
     if (view === 'income') {
       printStatement({
+        letterhead,
         title: 'Income Statement (Statement of Comprehensive Income)', saccoName, subtitle, currency: cur,
         sections: [
           { rows: income.rows },
@@ -112,6 +122,7 @@ const StatementsTab = ({ fin, periodTb, openingTb, closingTb, priorTb, range, sa
       });
     } else if (view === 'balance') {
       printStatement({
+        letterhead,
         title: 'Balance Sheet (Statement of Financial Position)', saccoName, subtitle, currency: cur,
         sections: [
           { heading: 'Assets', rows: balance.assets },
@@ -122,6 +133,7 @@ const StatementsTab = ({ fin, periodTb, openingTb, closingTb, priorTb, range, sa
       });
     } else {
       printStatement({
+        letterhead,
         title: 'Cash Flow Statement (Indirect Method)', saccoName, subtitle, currency: cur,
         sections: [
           { heading: 'Operating activities', rows: [...cash.operating.rows, { label: 'Net Cash from Operating Activities', value: cash.operating.total, emphasis: true }] },

@@ -95,7 +95,7 @@ var Sidebar = function(props) {
 
   var adminItems = [
     { label: 'Dashboard',        path: '/admin-dashboard',               icon: 'LayoutDashboard' },
-    { label: 'Assets & Clients', path: '/asset-client-management',       icon: 'Briefcase',   modules: ['assets', 'clients'] },
+    { label: 'Inventory & Clients', path: '/asset-client-management',       icon: 'Briefcase',   modules: ['assets', 'clients'] },
     { label: 'CRM',              path: '/crm',                           icon: 'Contact',     modules: ['crm'] },
     { label: 'POS / New Sale',   path: '/pos',                           icon: 'ShoppingCart',modules: ['pos'] },
     { label: 'E-Signature',       path: '/e-signature',                   icon: 'PenTool',     modules: ['esign'] },
@@ -109,7 +109,7 @@ var Sidebar = function(props) {
 
   var staffItems = [
     { label: 'Dashboard',        path: '/role-based-dashboard',    icon: 'LayoutDashboard' },
-    { label: 'Assets & Clients', path: '/asset-client-management', icon: 'Briefcase',   modules: ['assets', 'clients'] },
+    { label: 'Inventory & Clients', path: '/asset-client-management', icon: 'Briefcase',   modules: ['assets', 'clients'] },
     // Directors and managers share the tenant's customer book with the admin
     // (public.is_crm_supervisor); the other four staff roles do not.
     { label: 'CRM',              path: '/crm',                     icon: 'Contact',     modules: ['crm'], roles: ['director', 'manager'] },

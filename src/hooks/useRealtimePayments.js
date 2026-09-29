@@ -65,6 +65,7 @@ export const useRealtimePayments = () => {
         time: new Date(p.payment_date)?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         reference: p?.reference_number,
         notes: p?.notes || '',
+        adminId: p?.admin_id || null,
       }));
       setTransactions(mapped);
 

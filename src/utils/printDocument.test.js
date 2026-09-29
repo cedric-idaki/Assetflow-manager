@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { printDocument } from './printDocument';
+import { printDocument, printPdf } from './printDocument';
 
 const MARKUP = '<html><head><title>Receipt</title></head><body>RCP-1</body></html>';
 
@@ -48,5 +48,46 @@ describe('printDocument', () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
 
     expect(printDocument(MARKUP)).toBe(false);
+  });
+});
+
+describe('printPdf', () => {
+  const pdf = () => new Blob(['%PDF-1.3'], { type: 'application/pdf' });
+
+  it('prints the rendered PDF itself through the same off-screen frame', () => {
+    // The page that prints must be the page that downloads — same render.
+    URL.createObjectURL = vi.fn(() => 'blob:receipt-1');
+    URL.revokeObjectURL = vi.fn();
+    const opened = vi.spyOn(window, 'open');
+
+    expect(printPdf(pdf())).toBe(true);
+    const frame = document.querySelector('iframe[data-print-frame]');
+    expect(frame.getAttribute('src')).toBe('blob:receipt-1');
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it('gives the previous object URL back when the next document prints', () => {
+    URL.createObjectURL = vi.fn()
+      .mockReturnValueOnce('blob:first')
+      .mockReturnValueOnce('blob:second');
+    URL.revokeObjectURL = vi.fn();
+
+    printPdf(pdf());
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();   // still being printed
+    printPdf(pdf());
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first');
+    expect(document.querySelectorAll('iframe').length).toBe(1);
+  });
+
+  it('opens the PDF in a tab when no frame can be made, and says when that fails too', () => {
+    URL.createObjectURL = vi.fn(() => 'blob:receipt-2');
+    vi.spyOn(document, 'createElement').mockImplementation(() => { throw new Error('blocked'); });
+    const open = vi.spyOn(window, 'open').mockReturnValue({});
+    expect(printPdf(pdf())).toBe(true);
+    expect(open).toHaveBeenCalledWith('blob:receipt-2', '_blank');
+
+    open.mockReturnValue(null);
+    expect(printPdf(pdf())).toBe(false);
+    expect(printPdf(null)).toBe(false);
   });
 });

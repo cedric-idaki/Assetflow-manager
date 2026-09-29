@@ -3,6 +3,10 @@ import { supabase } from '../lib/supabase';
 import { auditLogsService } from '../services/supabaseService';
 import { vatRateOn } from '../config/taxRegulations';
 
+const isServiceItem = (item) => ['service', 'services'].includes(
+  String(item?.asset_type || '').trim().toLowerCase()
+);
+
 // ── Kenya Tax (VAT) ───────────────────────────────────────────────────────────
 /**
  * The VAT rate on a sale, as a FRACTION, resolved from the date of supply.
@@ -235,7 +239,7 @@ export const usePOS = () => {
 
       // Filter quantity client-side — handles null, undefined, or 0
       const available = (data || []).filter(a =>
-        !a.quantity_available || a.quantity_available > 0
+        isServiceItem(a) || !a.quantity_available || a.quantity_available > 0
       );
       setAssets(available);
     } catch (err) {
@@ -267,6 +271,15 @@ export const usePOS = () => {
         financeBalance, interestRate, tenureMonths, startDate,
         paymentMethod, mpesaRef, bankRef, notes, schedule, buyerKraPin,
       } = saleData;
+      const saleClientId = clientId || null;
+      const serviceSale = isServiceItem(asset);
+
+      if (serviceSale && pricingModel !== 'cash') {
+        throw new Error('Services must be paid in full at point of sale.');
+      }
+      if (!saleClientId && pricingModel !== 'cash') {
+        throw new Error('A sale without customer details must be paid in full.');
+      }
 
       const invoiceNo = genInvoiceNo();
       const receiptNo = genReceiptNo();
@@ -288,7 +301,7 @@ export const usePOS = () => {
         .from('payments')
         .insert({
           transaction_id:   invoiceNo,
-          client_id:        clientId,
+          client_id:        saleClientId,
           asset_id:         asset.id,
           agent_id:         agentId || null,
           amount:           paymentAmount,
@@ -310,7 +323,7 @@ export const usePOS = () => {
       // 2. Create sale/contract record
       const saleRow = {
           invoice_number:   invoiceNo,
-          client_id:        clientId,
+          client_id:        saleClientId,
           asset_id:         asset.id,
           agent_id:         agentId || null,
           admin_id:         adminId,
@@ -371,11 +384,11 @@ export const usePOS = () => {
       // silently replace the customer's real number on every future document.
       // Failure here is not a failed sale — the receipt already carries the PIN
       // it was issued with, which is the copy that matters.
-      if (buyerKraPin && clientId) {
+      if (buyerKraPin && saleClientId) {
         const { error: pinErr } = await supabase
           .from('clients')
           .update({ kra_pin: buyerKraPin })
-          .eq('id', clientId)
+          .eq('id', saleClientId)
           .is('kra_pin', null)
           .select('id');
         if (pinErr) console.warn('Could not save the customer KRA PIN for next time:', pinErr.message);
@@ -385,7 +398,7 @@ export const usePOS = () => {
       if (pricingModel !== 'cash' && schedule?.length > 0) {
         const scheduleRows = schedule.map(row => ({
           sale_id:            saleRecord.id,
-          client_id:          clientId,
+          client_id:          saleClientId,
           asset_id:           asset.id,
           installment_no:     row.installmentNo,
           due_date:           row.dueDate,
@@ -416,60 +429,69 @@ export const usePOS = () => {
       // from these migrations alone has none of them, and there the update
       // fails outright. The link the customer actually sees must not go down
       // with it.
-      const { error: linkErr } = await supabase
-        .from('assets')
-        .update({ linked_client_id: clientId })
-        .eq('id', asset.id);
-      if (linkErr) console.error('Asset owner link failed:', linkErr.message);
+      if (saleClientId && !serviceSale) {
+        const { error: linkErr } = await supabase
+          .from('assets')
+          .update({ linked_client_id: saleClientId })
+          .eq('id', asset.id);
+        if (linkErr) console.error('Asset owner link failed:', linkErr.message);
+      }
 
-      // Cash sale → sold immediately on payment confirmation
-      // Installment → on_installment (transitions to sold on final payment via DB trigger)
-      const newStatus    = pricingModel === 'cash' ? 'sold' : 'on_installment';
+      // A cash sale leaves a product available while counted stock remains;
+      // the last unit marks it sold. Installments stay on_installment.
+      const remainingQuantity = Math.max(0, (asset.quantity_available || 1) - 1);
+      const newStatus = pricingModel === 'cash'
+        ? (remainingQuantity > 0 ? 'available' : 'sold')
+        : 'on_installment';
       const statusReason = pricingModel === 'cash'
         ? 'Cash sale confirmed — Invoice ' + invoiceNo
         : 'Hire purchase deposit confirmed — Invoice ' + invoiceNo + ' — ' + tenureMonths + ' month installment plan';
 
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
-
-      // Update asset status — BRS 9.2
-      // Note: last_status_change_by excluded to avoid FK constraint issues
-      const { error: assetUpdateErr } = await supabase
-        .from('assets')
-        .update({
-          asset_status:       newStatus,
-          quantity_available: Math.max(0, (asset.quantity_available || 1) - 1),
-          last_status_reason: statusReason,
-          updated_at:         new Date().toISOString(),
-        })
-        .eq('id', asset.id);
-
-      if (assetUpdateErr) {
-        // Fallback: update only core fields if new columns cause issues
-        console.warn('Asset update warning:', assetUpdateErr.message);
-        const { error: fallbackErr } = await supabase
+      // Service entries are reusable offerings: record each sale, but do not
+      // consume their stock, change availability, or assign them to a buyer.
+      if (!serviceSale) {
+        // Update asset status — BRS 9.2
+        // Note: last_status_change_by excluded to avoid FK constraint issues
+        const { error: assetUpdateErr } = await supabase
           .from('assets')
           .update({
             asset_status:       newStatus,
-            quantity_available: Math.max(0, (asset.quantity_available || 1) - 1),
+            quantity_available: remainingQuantity,
+            last_status_reason: statusReason,
             updated_at:         new Date().toISOString(),
           })
           .eq('id', asset.id);
-        if (fallbackErr) console.error('Asset fallback update failed:', fallbackErr.message);
+
+        if (assetUpdateErr) {
+          // Fallback: update only core fields if new columns cause issues
+          console.warn('Asset update warning:', assetUpdateErr.message);
+          const { error: fallbackErr } = await supabase
+            .from('assets')
+            .update({
+              asset_status:       newStatus,
+              quantity_available: remainingQuantity,
+              updated_at:         new Date().toISOString(),
+            })
+            .eq('id', asset.id);
+          if (fallbackErr) console.error('Asset fallback update failed:', fallbackErr.message);
+        }
       }
 
-      // 5. Update client status to active
-      await supabase
-        .from('clients')
-        .update({ client_status: 'active' })
-        .eq('id', clientId);
+      // 5. Update client status when this sale is linked to an existing client.
+      if (saleClientId) {
+        await supabase
+          .from('clients')
+          .update({ client_status: 'active' })
+          .eq('id', saleClientId);
+      }
 
       // 6. Audit log
       try {
         await auditLogsService.log(
           'create', 'sales',
-          `POS Sale: ${pricingModel.toUpperCase()} — ${asset.description} → Client ${clientId} — Invoice ${invoiceNo} — ${pricingModel === 'cash' ? `KES ${totalAmount.toLocaleString()} full payment` : `KES ${depositAmount.toLocaleString()} deposit, ${tenureMonths}mo installment`}`,
+          `POS ${serviceSale ? 'Service' : 'Inventory'} Sale: ${pricingModel.toUpperCase()} — ${asset.description} → ${saleClientId ? `Client ${saleClientId}` : 'Walk-in sale'} — Invoice ${invoiceNo} — ${pricingModel === 'cash' ? `KES ${totalAmount.toLocaleString()} full payment` : `KES ${depositAmount.toLocaleString()} deposit, ${tenureMonths}mo installment`}`,
           saleRecord.id, (await supabase.auth.getUser()).data.user?.id,
-          { invoiceNo, clientId, assetId: asset.id, pricingModel, totalAmount, depositAmount }
+          { invoiceNo, clientId: saleClientId, assetId: asset.id, pricingModel, totalAmount, depositAmount }
         );
       } catch {}
 

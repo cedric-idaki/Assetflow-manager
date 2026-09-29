@@ -17,6 +17,10 @@
  */
 
 import { AMORTIZATION_METHODS } from './saccoAmortization';
+import { loadJsPDF } from './jsPdfLoader';
+import { letterheadContactLine, letterheadFromRecord, mergeLetterhead } from './letterhead';
+import { drawLogo, fitText } from './pdfLetterhead';
+import { fetchLetterhead } from '../lib/letterhead';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (n) =>
@@ -48,28 +52,18 @@ const FALLBACK_CLAUSES = {
   governing_law_clause: 'This Agreement is governed by the laws of Kenya, the Co-operative Societies Act (Cap. 490) and the by-laws of the Sacco. Disputes shall first be referred to the Sacco\'s dispute resolution process, then to the Commissioner for Co-operative Development or arbitration.',
 };
 
-// ── Load jsPDF dynamically (same CDN copy the company generator uses) ─────────
-const loadJsPDF = () => new Promise((resolve, reject) => {
-  if (window.jspdf?.jsPDF) return resolve(window.jspdf.jsPDF);
-  if (document.getElementById('jspdf-script')) {
-    const wait = setInterval(() => {
-      if (window.jspdf?.jsPDF) { clearInterval(wait); resolve(window.jspdf.jsPDF); }
-    }, 100);
-    return;
-  }
-  const script = document.createElement('script');
-  script.id = 'jspdf-script';
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-  script.onload = () => resolve(window.jspdf.jsPDF);
-  script.onerror = () => reject(new Error('Failed to load jsPDF'));
-  document.head.appendChild(script);
-});
-
 // ── Main generator ────────────────────────────────────────────────────────────
 export const generateSaccoLoanContractPDF = async ({
-  loan, member, sacco, product, schedule = [], template, download = true,
+  loan, member, sacco, product, schedule = [], template, download = true, letterhead,
 }) => {
-  const JsPDF = await loadJsPDF();
+  // The society's letterhead — logo, motto, contact details — over its row.
+  const [JsPDF, tenantLetterhead] = await Promise.all([
+    loadJsPDF(),
+    letterhead !== undefined
+      ? Promise.resolve(letterhead)
+      : fetchLetterhead({ tenantId: sacco?.admin_id || null }),
+  ]);
+  const lh = mergeLetterhead(tenantLetterhead, letterheadFromRecord(sacco));
   const doc   = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
   const W  = 210;
@@ -160,16 +154,31 @@ export const generateSaccoLoanContractPDF = async ({
   // ════════════════════════════════════════════════════════════
   rect(0, 0, W, 48, TEAL, 'F');
 
-  setFont('bold', 16);
+  // The society: logo on a white tile, name, motto, then its address,
+  // contact line and registration — each fitted to the room the title leaves.
+  setFont('bold', 13);
+  const titleW = doc.getTextWidth('LOAN AGREEMENT');
+  let headX = M;
+  if (lh?.logo && drawLogo(doc, lh.logo, { x: M, y: 8, w: 30, h: 30, tile: WHITE, radius: 2, padding: 2 })) {
+    headX = M + 35;
+  }
+  const headW = Math.max(30, W - M - titleW - 8 - headX);
+  const nameText = fitText(doc, lh?.name || sacco?.name || 'Sacco Society', headW, { style: 'bold', size: 16, minSize: 11 });
   setColor(WHITE);
-  txt(sacco?.name || 'Sacco Society', M, 16);
+  doc.text(nameText, headX, 16);
 
-  setFont('normal', 8);
-  setColor([210, 245, 252]);
-  txt(`${sacco?.location || ''}${sacco?.city ? `, ${sacco.city}` : ''}`, M, 22);
-  txt(`Tel: ${sacco?.phone || ''}`, M, 27);
-  txt(`Email: ${sacco?.email || ''}`, M, 32);
-  txt(`Reg No: ${sacco?.registration_no || '—'}${sacco?.sasra_licence_no ? `  ·  SASRA: ${sacco.sasra_licence_no}` : ''}`, M, 37);
+  const headLines = [
+    lh?.motto ? { italic: true, text: lh.motto } : null,
+    [lh?.physicalAddress, lh?.postalAddress].filter(Boolean).join(' · '),
+    letterheadContactLine(lh),
+    `Reg No: ${sacco?.registration_no || lh?.registrationNo || '—'}${sacco?.sasra_licence_no ? `  ·  SASRA: ${sacco.sasra_licence_no}` : ''}`,
+  ].filter(Boolean).slice(0, 5);
+  headLines.forEach((l, i) => {
+    const line = typeof l === 'string' ? { italic: false, text: l } : l;
+    const lineText = fitText(doc, line.text, headW, { style: line.italic ? 'italic' : 'normal', size: 8, minSize: 6.5 });
+    setColor(line.italic ? [235, 250, 253] : [210, 245, 252]);
+    doc.text(lineText, headX, 22 + i * 5);
+  });
 
   setFont('bold', 13);
   setColor(WHITE);

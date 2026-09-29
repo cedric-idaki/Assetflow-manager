@@ -14,6 +14,17 @@ import { StaffDashboardProvider } from './contexts/StaffDashboardContext';
 import { SaccoDashboardProvider } from './contexts/SaccoDashboardContext';
 import { SaccoMemberProvider } from './contexts/SaccoMemberContext';
 import { TenantModulesProvider } from './contexts/TenantModulesContext';
+import { useLetterhead } from './hooks/useLetterhead';
+
+/**
+ * Loads the signed-in user's letterhead (logo, motto, contact details) once,
+ * at sign-in. Print buttons build their page synchronously on the click, so
+ * the letterhead has to be in the cache before anybody presses one.
+ */
+const LetterheadPrefetch = () => {
+  useLetterhead();
+  return null;
+};
 
 function App() {
   return (
@@ -29,6 +40,7 @@ function App() {
           so it has to be resolved before anything renders navigation.
         */}
         <TenantModulesProvider>
+        <LetterheadPrefetch />
         <AdminDashboardProvider>
           <SalesAgentProvider>
             <FinanceHubProvider>

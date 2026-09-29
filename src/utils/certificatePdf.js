@@ -29,6 +29,9 @@
 
 import { signatureBlocks, A4, SIG_BLOCK, fieldsForSigners } from './certificateSigning';
 import { loadJsPDF } from './jsPdfLoader';
+import { letterheadContactLine, letterheadFromRecord, mergeLetterhead } from './letterhead';
+import { drawLogo, fitText } from './pdfLetterhead';
+import { fetchLetterhead } from '../lib/letterhead';
 
 const KES = (n) => 'KES ' + (parseFloat(n) || 0).toLocaleString('en-KE', {
   minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -46,6 +49,55 @@ const TEAL = [29, 168, 197];
 const INK = [15, 39, 51];
 const SLATE = [92, 124, 136];
 const BLUE = [26, 86, 219];
+
+/**
+ * The issuer's letterhead for a certificate: the tenant's own (logo, motto,
+ * contact details), over the record the caller passed. `letterhead` given
+ * explicitly wins; otherwise it is looked up — never throws, so a certificate
+ * without branding still prints exactly as before.
+ */
+const resolveLetterhead = async (letterhead, record, tenantId = null) => {
+  let tenant = letterhead;
+  if (tenant === undefined) {
+    try { tenant = await fetchLetterhead({ tenantId: tenantId || record?.admin_id || null }); } catch { tenant = null; }
+  }
+  return mergeLetterhead(tenant, letterheadFromRecord(record));
+};
+
+/**
+ * The masthead of the portrait certificates: the logo at the left margin, the
+ * name beside it, then the motto and one line of contact details — all above
+ * `rule`, the y each certificate draws its masthead rule at. Nothing below the
+ * rule moves, so the signature rows (placed from the foot of the page, where
+ * SignNow's boxes are) are exactly where they were.
+ */
+const drawMasthead = (doc, lh, { M, W, rule, fallbackName, nameColor = INK }) => {
+  const name = lh?.name || fallbackName;
+  const subs = [];
+  if (lh?.motto) subs.push({ style: 'italic', size: 8.5, text: lh.motto });
+  const contact = [lh?.physicalAddress, letterheadContactLine(lh)].filter(Boolean).join('  ·  ');
+  if (contact) subs.push({ style: 'normal', size: 8, text: contact });
+
+  let x = M;
+  if (lh?.logo) {
+    const box = drawLogo(doc, lh.logo, { x: M, y: rule - 48, w: 100, h: 40, align: 'left' });
+    if (box) x = box.x + box.w + 12;
+  }
+  const maxW = W - M - x;
+
+  // Stack upward from the rule: the last sub-line sits just above it.
+  const nameY = rule - 12 - subs.length * 11;
+  const nameText = fitText(doc, name, maxW, { style: 'bold', size: 16, minSize: 11 });
+  doc.setTextColor(...nameColor);
+  doc.text(nameText, x, nameY);
+  subs.forEach((l, i) => {
+    const t = fitText(doc, l.text, maxW, { style: l.style, size: l.size, minSize: 6.5 });
+    doc.setTextColor(...SLATE);
+    doc.text(t, x, nameY + 13 + i * 11);
+  });
+  doc.setTextColor(...INK);
+  return name;
+};
 
 /** Draw the DRAFT stamp. Big, angled, and unmistakably not a finished thing. */
 const drawDraftStamp = (doc, { width, height }) => {
@@ -122,9 +174,12 @@ const finish = (doc, { filename, geometry, signers, page, bottomOffset }) => ({
 // ===========================================================================
 
 export const buildShareCertificatePdf = async ({
-  cert, saccoName, memberName, memberNo, marketValue, serial, signers = [], draft = true,
+  cert, saccoName, memberName, memberNo, marketValue, serial, signers = [], draft = true, letterhead,
 }) => {
-  const JsPDF = await loadJsPDF();
+  const [JsPDF, lh] = await Promise.all([
+    loadJsPDF(),
+    resolveLetterhead(letterhead, { name: saccoName }),
+  ]);
   const geometry = A4.landscape;
   const doc = new JsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const { width: W, height: H } = geometry;
@@ -142,16 +197,29 @@ export const buildShareCertificatePdf = async ({
   doc.setLineWidth(0.8);
   doc.rect(M + 6, M + 6, W - M * 2 - 12, H - M * 2 - 12);
 
-  // Society, and the certificate numbers.
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(20);
+  // Society — its logo beside the name, its motto under it — and the
+  // certificate numbers.
+  let brandX = M + 26;
+  if (lh?.logo) {
+    const box = drawLogo(doc, lh.logo, { x: M + 26, y: M + 20, w: 110, h: 50, align: 'left' });
+    if (box) brandX = box.x + box.w + 14;
+  }
+  const brandW = W - M - 26 - 150 - brandX;
+  const societyText = fitText(doc, lh?.name || saccoName || 'Sacco Society', brandW, { style: 'bold', size: 20, minSize: 12 });
   doc.setTextColor(...INK);
-  doc.text(String(saccoName || 'Sacco Society'), M + 26, M + 44);
+  doc.text(societyText, brandX, M + 44);
 
+  let subY = M + 58;
+  if (lh?.motto) {
+    const mottoText = fitText(doc, lh.motto, brandW, { style: 'italic', size: 9, minSize: 7 });
+    doc.setTextColor(...SLATE);
+    doc.text(mottoText, brandX, subY);
+    subY += 12;
+  }
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(...SLATE);
-  doc.text('SHARE CERTIFICATE', M + 26, M + 58, { charSpace: 2 });
+  doc.text('SHARE CERTIFICATE', brandX, subY, { charSpace: 2 });
 
   doc.setFontSize(8);
   doc.text('Certificate No.', W - M - 26, M + 34, { align: 'right' });
@@ -257,26 +325,15 @@ export const buildShareCertificatePdf = async ({
 // ===========================================================================
 
 export const buildSettlementCertificatePdf = async ({
-  plan, client, asset, company, serial, signers = [], draft = true,
+  plan, client, asset, company, serial, signers = [], draft = true, letterhead,
 }) => {
-  const JsPDF = await loadJsPDF();
+  const [JsPDF, lh] = await Promise.all([loadJsPDF(), resolveLetterhead(letterhead, company)]);
   const geometry = A4.portrait;
   const doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
   const { width: W } = geometry;
   const M = 48;
-  const co = company || {};
-
-  // Masthead.
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.setTextColor(...BLUE);
-  doc.text(String(co.company_name || 'Ararat'), M, 60);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(...SLATE);
-  const contact = [co.email, co.phone, co.address].filter(Boolean).join('  ·  ');
-  if (contact) doc.text(contact, M, 74, { maxWidth: W - M * 2 });
+  // Masthead: the issuing company's letterhead.
+  const coName = drawMasthead(doc, lh, { M, W, rule: 84, fallbackName: 'Ararat', nameColor: BLUE });
 
   doc.setDrawColor(...BLUE);
   doc.setLineWidth(2);
@@ -365,9 +422,9 @@ export const buildSettlementCertificatePdf = async ({
   doc.setFontSize(9.5);
   doc.setTextColor(17, 17, 17);
   const paras = [
-    `This is to certify that ${client?.full_name || 'the above-named client'} has fully and finally settled all obligations under plan reference ${plan?.plan_name || '—'} with ${co.company_name || 'the company'}. A total of ${plan?.total_installments || 0} installments amounting to ${KES0(plan?.total_amount)} have been received in full.`,
-    `With effect from ${longDate(plan?.end_date)}, full legal title and ownership of the asset described above is transferred unconditionally to ${client?.full_name || 'the client'}. ${co.company_name || 'The company'} relinquishes all rights, encumbrances and claims over the said asset with immediate effect.`,
-    `The client is authorised to effect the transfer of registration documents and to deal with the asset in any manner they see fit without further reference to ${co.company_name || 'the company'}.`,
+    `This is to certify that ${client?.full_name || 'the above-named client'} has fully and finally settled all obligations under plan reference ${plan?.plan_name || '—'} with ${lh?.name || 'the company'}. A total of ${plan?.total_installments || 0} installments amounting to ${KES0(plan?.total_amount)} have been received in full.`,
+    `With effect from ${longDate(plan?.end_date)}, full legal title and ownership of the asset described above is transferred unconditionally to ${client?.full_name || 'the client'}. ${lh?.name || 'The company'} relinquishes all rights, encumbrances and claims over the said asset with immediate effect.`,
+    `The client is authorised to effect the transfer of registration documents and to deal with the asset in any manner they see fit without further reference to ${lh?.name || 'the company'}.`,
   ];
   paras.forEach((p) => {
     const lines = doc.splitTextToSize(p, W - M * 2);
@@ -377,7 +434,7 @@ export const buildSettlementCertificatePdf = async ({
 
   const bottomOffset = 110;
   drawSignatureRow(doc, signers, geometry, bottomOffset);
-  drawFooter(doc, geometry, serial, `Issued by ${co.company_name || 'Ararat'} on ${longDate(new Date())}.`);
+  drawFooter(doc, geometry, serial, `Issued by ${coName} on ${longDate(new Date())}.`);
   if (draft) drawDraftStamp(doc, geometry);
 
   return finish(doc, {
@@ -391,18 +448,15 @@ export const buildSettlementCertificatePdf = async ({
 // ===========================================================================
 
 export const buildAssetValuationPdf = async ({
-  asset, saccoName, serial, signers = [], draft = true,
+  asset, saccoName, serial, signers = [], draft = true, letterhead,
 }) => {
-  const JsPDF = await loadJsPDF();
+  const [JsPDF, lh] = await Promise.all([loadJsPDF(), resolveLetterhead(letterhead, { name: saccoName })]);
   const geometry = A4.portrait;
   const doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
   const { width: W } = geometry;
   const M = 48;
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.setTextColor(...INK);
-  doc.text(String(saccoName || 'Sacco Society'), M, 60);
+  drawMasthead(doc, lh, { M, W, rule: 74, fallbackName: saccoName || 'Sacco Society' });
 
   doc.setDrawColor(...TEAL);
   doc.setLineWidth(2);
@@ -514,9 +568,12 @@ export const buildAssetValuationPdf = async ({
 // ===========================================================================
 
 export const buildGuaranteeAgreementPdf = async ({
-  terms, saccoName, signatureName, serial, signers = [], draft = true,
+  terms, saccoName, signatureName, serial, signers = [], draft = true, letterhead,
 }) => {
-  const JsPDF = await loadJsPDF();
+  const [JsPDF, lh] = await Promise.all([
+    loadJsPDF(),
+    resolveLetterhead(letterhead, { name: saccoName || terms?.sacco_name }),
+  ]);
   const geometry = A4.portrait;
   const doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
   const { width: W, height: H } = geometry;
@@ -542,10 +599,7 @@ export const buildGuaranteeAgreementPdf = async ({
   const room = (need) => { if (y + need > FLOOR) newPage(); };
 
   // ── Page 1 masthead ──────────────────────────────────────────────────────
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.setTextColor(...INK);
-  doc.text(String(society), M, 60);
+  drawMasthead(doc, lh, { M, W, rule: 74, fallbackName: society });
 
   doc.setDrawColor(...TEAL);
   doc.setLineWidth(2);

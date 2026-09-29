@@ -17,6 +17,8 @@ import { formatSerial } from '../../../utils/certificateSerial';
 import {
   buildShareTransactionReceipt, buildDividendStatement, downloadAccountingDocument,
 } from '../../../utils/accountingDocument';
+import { useMemberReceiptLinks } from '../../../hooks/useMemberReceiptLinks';
+import { downloadSaccoReceipt } from '../../sacco-dashboard/components/receipts/receiptActions';
 
 const SUB_TABS = [
   { id: 'portfolio', label: 'Portfolio',    icon: 'PieChart' },
@@ -81,9 +83,24 @@ const SharesTab = ({ ctx }) => {
     }
   };
 
-  const downloadTxn = (t) => withDoc(t.id, () => buildShareTransactionReceipt({
-    txn: t, member: me, sacco,
-  }));
+  // A purchase the society has receipted hands over that official receipt —
+  // numbered, with how and when it was paid — rather than the movement slip.
+  const receiptLinks = useMemberReceiptLinks(me?.id, shareTxns.length);
+  const downloadTxn = async (t) => {
+    const official = receiptLinks.byShareTxn.get(t.id);
+    if (!official) {
+      withDoc(t.id, () => buildShareTransactionReceipt({ txn: t, member: me, sacco }));
+      return;
+    }
+    setDocBusy(t.id);
+    try {
+      toast.success(await downloadSaccoReceipt(official.id, sacco), 'Downloaded');
+    } catch (e) {
+      toast.error(e.message, 'Could not generate the receipt');
+    } finally {
+      setDocBusy(null);
+    }
+  };
 
   const downloadDividend = (a) => withDoc(a.id, () => buildDividendStatement({
     allocation: a, declaration: a.declaration, member: me, sacco,
@@ -630,7 +647,9 @@ const SharesTab = ({ ctx }) => {
                     <button
                       onClick={() => downloadTxn(t)}
                       disabled={docBusy === t.id}
-                      title={`Download the document for ${t.txn_no || 'this movement'}`}
+                      title={receiptLinks.byShareTxn.get(t.id)
+                        ? `Download receipt ${receiptLinks.byShareTxn.get(t.id).receipt_no}`
+                        : `Download the document for ${t.txn_no || 'this movement'}`}
                       className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
                     >
                       <Icon name={docBusy === t.id ? 'Loader' : 'Download'} size={14} color="currentColor"

@@ -6,6 +6,9 @@ import { fetchAllRows } from '../../../lib/fetchAllRows';
 import Pagination from '../../../components/ui/Pagination';
 import { usePagedQuery, sanitizeSearchTerm } from '../../../hooks/usePagedQuery';
 import { buildContributionReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
+import { listPaymentProofs, uploadPaymentProof } from '../../../utils/paymentProofs';
+import PaymentProofPicker from '../../../components/payments/PaymentProofPicker';
+import PaymentProofList from '../../../components/payments/PaymentProofList';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
   TextInput, NumberInput, Select, EmptyState, ProgressBar, ContributionChart,
@@ -96,6 +99,12 @@ const ContributionsTab = ({ ctx }) => {
   const [approveForm, setApproveForm] = useState({ payment_method: '', reference: '', paid_at: '' });
   const [approving, setApproving]   = useState(false);
 
+  // Proof of payment: the file picked while recording, the entry whose
+  // documents are open, and a count per visible row for the paperclip.
+  const [proofFile, setProofFile]     = useState(null);
+  const [proofFor, setProofFor]       = useState(null);
+  const [proofCounts, setProofCounts] = useState({});
+
   // ── Contribution types ─────────────────────────────────────────────────────
   const [typesOpen, setTypesOpen]   = useState(false);
   const [savingType, setSavingType] = useState(false);
@@ -160,6 +169,18 @@ const ContributionsTab = ({ ctx }) => {
     deps: [fStatus, fMethod, fMember, fFrom, fTo, fMin, fMax],
   });
   const filtered = ledger.rows;
+
+  useEffect(() => {
+    let alive = true;
+    listPaymentProofs('sacco', filtered.map((c) => c.id))
+      .then((map) => {
+        if (alive) setProofCounts(Object.fromEntries(Object.entries(map).map(([k, v]) => [k, v.length])));
+      })
+      .catch(() => { /* the paperclip is a hint; the modal loads its own list */ });
+    return () => { alive = false; };
+  }, [filtered]);
+
+  const bumpProofCount = (id, list) => setProofCounts((p) => ({ ...p, [id]: list.length }));
 
   // ── Headline figures ───────────────────────────────────────────────────────
   // All from the whole-book aggregate. These used to reduce over the capped
@@ -235,7 +256,7 @@ const ContributionsTab = ({ ctx }) => {
   };
 
   // ── Save (record new / correct pending) ────────────────────────────────────
-  const openNew = () => { setEditing(null); setForm(emptyRecordForm()); setOpen(true); };
+  const openNew = () => { setEditing(null); setForm(emptyRecordForm()); setProofFile(null); setOpen(true); };
 
   const openEdit = (c) => {
     setEditing(c);
@@ -271,9 +292,21 @@ const ContributionsTab = ({ ctx }) => {
         ledger.refresh();
         toast.success(`${editing.txn_no} corrected.`);
       } else {
-        await recordContribution(form);
+        const row = await recordContribution(form);
+        let proofNote = '';
+        if (proofFile) {
+          // The contribution stands either way; a failed slip can be added
+          // from the ledger's paperclip.
+          try {
+            if (!row?.id) throw new Error('The new entry could not be read back.');
+            await uploadPaymentProof({ module: 'sacco', recordId: row.id, adminId: row.admin_id, file: proofFile });
+            proofNote = ' Proof of payment attached.';
+          } catch (e) {
+            toast.error(`${e.message} Attach it from the ledger.`, 'Recorded, but the slip was not attached');
+          }
+        }
         ledger.refresh();
-        toast.success('Contribution recorded.');
+        toast.success(`Contribution recorded.${proofNote}`);
       }
       setOpen(false);
       setEditing(null);
@@ -502,6 +535,14 @@ const ContributionsTab = ({ ctx }) => {
                     )}
                   </td>
                   <td className="py-2.5 pr-0 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => setProofFor(c)}
+                      title={proofCounts[c.id] ? `${proofCounts[c.id]} proof-of-payment document(s)` : 'Proof of payment'}
+                      className={`mr-3 inline-flex items-center gap-0.5 align-middle text-xs ${proofCounts[c.id] ? 'text-primary font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      <Icon name="Paperclip" size={13} color="currentColor" />
+                      {proofCounts[c.id] > 0 && proofCounts[c.id]}
+                    </button>
                     {c.status === 'pending' && (
                       <button
                         onClick={() => {
@@ -648,6 +689,16 @@ const ContributionsTab = ({ ctx }) => {
           <div className="sm:col-span-2">
             <Field label="Notes"><TextInput value={form.notes} onChange={(e) => set('notes', e.target.value)} /></Field>
           </div>
+          {editing ? (
+            <div className="sm:col-span-2">
+              <PaymentProofList module="sacco" recordId={editing.id} adminId={editing.admin_id}
+                canAttach={editing.status !== 'reversed'} onChange={(list) => bumpProofCount(editing.id, list)} />
+            </div>
+          ) : (
+            <div className="sm:col-span-2">
+              <PaymentProofPicker file={proofFile} onChange={setProofFile} />
+            </div>
+          )}
         </div>
 
         <p className="text-xs text-muted-foreground mt-4">
@@ -690,7 +741,31 @@ const ContributionsTab = ({ ctx }) => {
               </Field>
             </div>
           </div>
+          {approveFor && (
+            <div className="pt-3 border-t border-border">
+              <PaymentProofList module="sacco" recordId={approveFor.id} adminId={approveFor.admin_id}
+                onChange={(list) => bumpProofCount(approveFor.id, list)} />
+              {approveFor.payment_method !== 'mpesa' && !proofCounts[approveFor.id] && (
+                <p className="text-xs text-amber-700 mt-2">
+                  No slip was attached to this declaration — check the bank statement before confirming.
+                </p>
+              )}
+            </div>
+          )}
         </div>
+      </Modal>
+
+      {/* ── Proof of payment ───────────────────────────────────────────────── */}
+      <Modal
+        open={!!proofFor} onClose={() => setProofFor(null)}
+        title={`Proof of payment — ${proofFor?.txn_no || ''}`}
+        footer={<GhostButton onClick={() => setProofFor(null)}>Close</GhostButton>}
+      >
+        {proofFor && (
+          <PaymentProofList module="sacco" recordId={proofFor.id} adminId={proofFor.admin_id}
+            canAttach={proofFor.status !== 'reversed'} compact
+            onChange={(list) => bumpProofCount(proofFor.id, list)} />
+        )}
       </Modal>
 
       {/* ── Reverse ────────────────────────────────────────────────────────── */}

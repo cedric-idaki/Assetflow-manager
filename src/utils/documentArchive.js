@@ -64,6 +64,9 @@ export const resetArchiveTenant = () => { tenantPromise = null; };
 const KINDS = {
   journal_voucher:     { docType: 'voucher',     module: 'accounting' },
   invoice:             { docType: 'invoice',     module: 'accounting' },
+  // What buildInvoiceDocument actually calls an unpaid invoice. Without it
+  // every tax invoice filed as "other" and the Invoices filter found none.
+  tax_invoice:         { docType: 'invoice',     module: 'accounting' },
   receipt:             { docType: 'receipt',     module: 'accounting' },
   payment_receipt:     { docType: 'receipt',     module: 'payments' },
   contribution_receipt:{ docType: 'receipt',     module: 'sacco' },
@@ -185,6 +188,49 @@ export const archivedDocumentUrl = async (filePath, seconds = 300) => {
     .createSignedUrl(filePath, seconds);
   if (error) throw new Error(error.message || 'Could not open that document.');
   return data?.signedUrl || null;
+};
+
+/**
+ * How long a link handed to a client keeps opening. Long enough to open it
+ * when they sit down to pay; short enough that a forwarded message does not
+ * expose the document for good. A signed URL cannot be revoked one at a time,
+ * so this expiry is the only limit there is.
+ */
+export const SHARE_LINK_DAYS = 30;
+
+/**
+ * File a document and return a link the OTHER PARTY can open — no account, no
+ * login — until it expires.
+ *
+ * This is not the "every receipt at a guessable address" that ReceiptShare
+ * refuses. The URL carries a signed token for this one object: it cannot be
+ * derived from the invoice number, it opens nothing else in the bucket, and it
+ * dies after `days`. Until then whoever holds the message can open the file —
+ * the same exposure as a PDF attached to an email.
+ *
+ * Unlike archiveDocument this THROWS. A caller about to send a link cannot go
+ * ahead without the filed copy it points at, and a link that silently went
+ * missing is a client told "see attached" with nothing attached.
+ *
+ * @returns {Promise<{ url: string, filePath: string, expiresAt: string }>}
+ */
+export const shareArchivedDocument = async (blob, meta = {}, { days = SHARE_LINK_DAYS } = {}) => {
+  const filed = await archiveDocument(blob, meta);
+  // PostgREST hands a composite back as the row or a one-element array.
+  const row = Array.isArray(filed) ? filed[0] : filed;
+  if (!row?.file_path) {
+    throw new Error('The PDF could not be saved for sharing. Check your connection and try again.');
+  }
+
+  const seconds = Math.round(days * 24 * 60 * 60);
+  const url = await archivedDocumentUrl(row.file_path, seconds);
+  if (!url) throw new Error('The PDF was saved, but no link could be made for it. Try again.');
+
+  return {
+    url,
+    filePath:  row.file_path,
+    expiresAt: new Date(Date.now() + seconds * 1000).toISOString(),
+  };
 };
 
 export default archiveDocument;

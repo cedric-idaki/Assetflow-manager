@@ -11,6 +11,8 @@ import LinkAssetClientModal from './components/LinkAssetClientModal';
 import AssetDetailsModal from './components/AssetDetailsModal';
 import ClientDetailsModal from './components/ClientDetailsModal';
 import WebsiteSyncModal from './components/WebsiteSyncModal';
+import ServicesTab from './components/services/ServicesTab';
+import { useConsultancyServices } from '../../hooks/useConsultancyServices';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { auditLogsService } from '../../services/supabaseService';
@@ -71,6 +73,11 @@ const AssetClientManagement = () => {
     };
     fetchAdmin();
   }, []);
+
+  // ── Consultancy services: catalogue, price options, client mappings ───────
+  // Loaded with the page, not the tab, so the tab's count is right before it
+  // is opened.
+  const consultancy = useConsultancyServices(adminId);
 
   // ── Load assets filtered by admin ─────────────────────────────────────────
   const loadAssets = useCallback(async (isRealtime = false) => {
@@ -624,6 +631,7 @@ const AssetClientManagement = () => {
     'Electronics': 'electronics',
     'Furnitures': 'furnitures',
     'Heavy Equipment': 'heavy_equipment',
+    'Services': 'services',
   };
 
   const assetTypeOptions = [
@@ -634,6 +642,7 @@ const AssetClientManagement = () => {
           { value: 'property', label: 'Property' },
           { value: 'vehicle', label: 'Vehicle' },
           { value: 'equipment', label: 'Equipment' },
+          { value: 'services', label: 'Services' },
         ]
     ),
   ];
@@ -660,7 +669,7 @@ const AssetClientManagement = () => {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Assets & Clients</h1>
+            <h1 className="text-2xl font-bold text-foreground">Inventory & Clients</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
               {companyProfile?.company_name
                 ? `${companyProfile.company_name} · Your assets and clients only`
@@ -696,15 +705,18 @@ const AssetClientManagement = () => {
                 Website Sync
               </Button>
             )}
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => activeTab === 'assets' ? setShowAssetForm(true) : setShowClientForm(true)}
-            >
-              <Icon name="Plus" size={16} color="white" />
-              {activeTab === 'assets' ? 'Add Asset' : 'Add Client'}
-            </Button>
-            <ClosePageButton label="Close Assets & Clients" />
+            {/* The Services tab carries its own Add Service / Map Client. */}
+            {activeTab !== 'services' && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => activeTab === 'assets' ? setShowAssetForm(true) : setShowClientForm(true)}
+              >
+                <Icon name="Plus" size={16} color="white" />
+                {activeTab === 'assets' ? 'Add Inventory' : 'Add Client'}
+              </Button>
+            )}
+            <ClosePageButton label="Close Inventory & Clients" />
           </div>
         </div>
 
@@ -720,7 +732,7 @@ const AssetClientManagement = () => {
 
         {/* Tabs */}
         <div className="flex gap-1 p-1 bg-muted rounded-xl w-fit">
-          {['assets', 'clients'].map(tab => (
+          {['assets', 'clients', 'services'].map(tab => (
             <button
               key={tab}
               onClick={() => { setActiveTab(tab); setSearchQuery(''); setFilterType('all'); setFilterStatus('all'); }}
@@ -728,12 +740,15 @@ const AssetClientManagement = () => {
                 activeTab === tab ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {tab === 'assets' ? `Assets (${assets.length})` : `Clients (${clients.length})`}
+              {tab === 'assets' ? `Inventory (${assets.length})`
+                : tab === 'clients' ? `Clients (${clients.length})`
+                : `Services (${consultancy.services.length})`}
             </button>
           ))}
         </div>
 
-        {/* Filters */}
+        {/* Filters — the Services tab has its own */}
+        {activeTab !== 'services' && (
         <div className="flex flex-wrap gap-3">
           <div className="flex-1 min-w-48">
             <Input
@@ -758,9 +773,12 @@ const AssetClientManagement = () => {
             className="w-36"
           />
         </div>
+        )}
 
         {/* Content */}
-        {loading ? (
+        {activeTab === 'services' ? (
+          <ServicesTab consultancy={consultancy} clients={clients} />
+        ) : loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {[1,2,3,4,5,6].map(i => (
               <div key={i} className="h-48 rounded-xl bg-muted animate-pulse" />

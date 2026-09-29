@@ -2,8 +2,13 @@ import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import { sendStatementEmail } from '../../../services/emailService';
 import { html, rawHtml } from '../../../utils/htmlEscape';
+import { LETTERHEAD_STYLES, letterheadContactLine, letterheadHtml } from '../../../utils/letterhead';
+import { useLetterhead } from '../../../hooks/useLetterhead';
 
 const Statements = ({ assets, payments, clientInfo }) => {
+  // The client's own company heads the statement — its logo, motto and
+  // contact details — not the platform it happens to run on.
+  const { letterhead } = useLetterhead();
   const [generating, setGenerating] = useState(null);
   const [emailSent, setEmailSent] = useState({});
   const [emailSending, setEmailSending] = useState({});
@@ -42,10 +47,12 @@ const Statements = ({ assets, payments, clientInfo }) => {
           tr:nth-child(even) td { background: #fafafa; }
           .footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #eee; font-size: 11px; color: #888; }
           @media print { body { margin: 20px; } }
+          ${rawHtml(LETTERHEAD_STYLES)}
+          .lh { margin-bottom: 10px; }
         </style>
       </head>
       <body>
-        <h1>Ararat</h1>
+        ${rawHtml(letterheadHtml(letterhead, { accent: '#7c3aed' }))}
         <div class="subtitle">${title}</div>
         <div class="meta">
           <div class="meta-item"><label>Client Name</label><span>${clientInfo?.full_name || 'N/A'}</span></div>
@@ -58,7 +65,7 @@ const Statements = ({ assets, payments, clientInfo }) => {
           <thead><tr>${rawHtml(rows?.headers?.map(h => html`<th>${h}</th>`)?.join('') || '')}</tr></thead>
           <tbody>${rawHtml(rows?.data?.map(row => html`<tr>${rawHtml(row?.map(cell => html`<td>${cell}</td>`)?.join('') || '')}</tr>`)?.join('') || '')}</tbody>
         </table>
-        <div class="footer">This statement was generated automatically by Ararat. For queries, contact your account manager.</div>
+        <div class="footer">This statement was generated automatically by ${letterhead?.name || 'Ararat'}. For queries, contact your account manager${letterheadContactLine(letterhead) ? ` — ${letterheadContactLine(letterhead)}` : ''}.</div>
       </body>
       </html>
     `;

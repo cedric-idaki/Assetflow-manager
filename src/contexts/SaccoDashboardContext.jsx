@@ -695,7 +695,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     const adminId = await getAdminId();
     // txn_no, paid_at, period_month and the receiving officer are stamped by
     // the sacco_contribution_defaults trigger — never sent from the browser.
-    const { error } = await supabase.from('sacco_contributions').insert({
+    const { data, error } = await supabase.from('sacco_contributions').insert({
       admin_id: adminId, sacco_id: saccoId, member_id: form.member_id,
       amount: parseFloat(form.amount) || 0,
       contribution_type: form.contribution_type || 'monthly',
@@ -709,9 +709,11 @@ export const SaccoDashboardProvider = ({ children }) => {
       received_by: form.received_by || null,
       penalty_amount: parseFloat(form.penalty_amount) || 0,
       reference: form.reference || '', notes: form.notes || '',
-    });
+    // The row comes back so a proof-of-payment document can be attached to it.
+    }).select('id, admin_id, txn_no').maybeSingle();
     if (error) throw error;
     await Promise.all([fetchContributions(), fetchContributionAudit()]);
+    return data;
   }, [saccoId, fetchContributions, fetchContributionAudit]);
 
   /** Confirm a member's declared payment actually arrived. */
@@ -859,19 +861,9 @@ export const SaccoDashboardProvider = ({ children }) => {
     await fetchLoans();
   }, [fetchLoans]);
 
-  const recordRepayment = useCallback(async (scheduleRow) => {
-    const { error } = await supabase.from('sacco_loan_schedule')
-      .update({ paid: true, paid_date: new Date().toISOString().slice(0, 10) })
-      .eq('id', scheduleRow.id);
-    if (error) throw error;
-    // If every row is now paid, close the loan.
-    const remaining = schedules.filter((s) => s.loan_id === scheduleRow.loan_id && !s.paid && s.id !== scheduleRow.id);
-    if (remaining.length === 0) {
-      await supabase.from('sacco_loans').update({ status: 'closed' }).eq('id', scheduleRow.loan_id);
-      await fetchLoans();
-    }
-    await fetchSchedules();
-  }, [schedules, fetchSchedules, fetchLoans]);
+  // Repayments are no longer written from here. They go through the receipt
+  // desk (sacco_receipt_loan_repayment), which marks the instalments paid and
+  // issues the receipt in one transaction — see components/receipts.
 
   const saveShares = useCallback(async (form) => {
     const adminId = await getAdminId();
@@ -1736,7 +1728,7 @@ export const SaccoDashboardProvider = ({ children }) => {
     approveContribution, reverseContribution, editContribution,
     getCollections, getDefaulters, getMemberContributionStats,
     createContributionType, updateContributionType,
-    createLoanProduct, createLoan, approveLoan, rejectLoan, recordRepayment,
+    createLoanProduct, createLoan, approveLoan, rejectLoan,
     saveShares, setMarketValue, createListing, requestTransfer, approveTransfer,
     saveTreasury, treasuryBuyBack,
     // Share engine

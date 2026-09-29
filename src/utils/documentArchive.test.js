@@ -87,6 +87,13 @@ describe('archiveMetaFor', () => {
       .toMatchObject({ docType: 'other', module: 'other' });
   });
 
+  it('files an unpaid invoice as an invoice — the kind its builder actually uses', () => {
+    // buildInvoiceDocument names it 'tax_invoice'. Missing from the map, every
+    // tax invoice went in as "other" and the Invoices filter showed none.
+    expect(archiveMetaFor({ kind: 'tax_invoice', docNo: 'INV-0012', filename: 'Invoice_INV-0012.pdf' }))
+      .toMatchObject({ docType: 'invoice', module: 'accounting', reference: 'INV-0012' });
+  });
+
   it('lets a builder override anything it knows better', () => {
     expect(archiveMetaFor({
       kind: 'receipt',

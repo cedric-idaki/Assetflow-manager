@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useToast } from '../../../components/Toast';
 import Icon from '../../../components/AppIcon';
 import { buildContributionReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
+import { uploadPaymentProof } from '../../../utils/paymentProofs';
+import PaymentProofPicker from '../../../components/payments/PaymentProofPicker';
+import PaymentProofList from '../../../components/payments/PaymentProofList';
 import {
   Card, StatCard, Badge, Table, EmptyState, GhostButton, PrimaryButton, Modal,
   Field, TextInput, NumberInput, Select, ProgressBar, ContributionChart,
@@ -67,6 +70,9 @@ const ContributionsTab = ({ ctx }) => {
   const [open, setOpen]     = useState(false);
   const [form, setForm]     = useState(EMPTY);
   const [saving, setSaving] = useState(false);
+  const [proofFile, setProofFile] = useState(null);
+  // The contribution whose proof-of-payment documents are open.
+  const [proofFor, setProofFor] = useState(null);
   // null | 'waiting' | 'done' | 'failed'
   const [mpesa, setMpesa]   = useState(null);
   const pollRef  = useRef(null);
@@ -125,6 +131,7 @@ const ContributionsTab = ({ ctx }) => {
       phone: me?.phone || '',
     });
     setMpesa(null);
+    setProofFile(null);
     setOpen(true);
   };
 
@@ -180,7 +187,19 @@ const ContributionsTab = ({ ctx }) => {
       const row = await submitContribution({ ...form, amount });
 
       if (form.payment_method !== 'mpesa') {
-        toast.success(`Recorded as ${row.txn_no}. Your treasurer will confirm it.`);
+        // The slip is attached to the declaration it proves, so it goes up
+        // once the row exists. A failed upload leaves the declaration standing
+        // and the member can add the slip from their history.
+        if (proofFile) {
+          try {
+            await uploadPaymentProof({ module: 'sacco', recordId: row.id, adminId: row.admin_id, file: proofFile });
+          } catch (e) {
+            toast.error(`${e.message} Add it from "My contributions" while the entry is pending.`, `${row.txn_no} recorded, but the slip was not attached`);
+            setOpen(false);
+            return;
+          }
+        }
+        toast.success(`Recorded as ${row.txn_no}${proofFile ? ' with your proof of payment' : ''}. Your treasurer will confirm it.`);
         setOpen(false);
         return;
       }
@@ -372,7 +391,16 @@ const ContributionsTab = ({ ctx }) => {
                     <span className="block text-[11px] text-muted-foreground mt-0.5 max-w-[180px]">{c.failure_reason}</span>
                   )}
                 </td>
-                <td className="py-2.5 pr-0 text-right">
+                <td className="py-2.5 pr-0 text-right whitespace-nowrap">
+                  {c.payment_method !== 'mpesa' && (
+                    <button
+                      onClick={() => setProofFor(c)}
+                      title="Proof of payment"
+                      className="align-middle mr-2 text-muted-foreground hover:text-foreground"
+                    >
+                      <Icon name="Paperclip" size={14} color="currentColor" />
+                    </button>
+                  )}
                   <button
                     onClick={() => downloadReceipt(c)}
                     disabled={receipting === c.id}
@@ -390,6 +418,31 @@ const ContributionsTab = ({ ctx }) => {
           </Table>
         )}
       </Card>
+
+      {/* ── Proof of payment on an existing entry ──────────────────────────── */}
+      <Modal
+        open={!!proofFor}
+        onClose={() => setProofFor(null)}
+        title={`Proof of payment — ${proofFor?.txn_no || ''}`}
+        footer={<GhostButton onClick={() => setProofFor(null)}>Close</GhostButton>}
+      >
+        {proofFor && (
+          <div className="space-y-3">
+            <PaymentProofList
+              module="sacco"
+              recordId={proofFor.id}
+              adminId={proofFor.admin_id}
+              canAttach={proofFor.status === 'pending'}
+              compact
+            />
+            {proofFor.status !== 'pending' && (
+              <p className="text-xs text-muted-foreground">
+                This entry has been reviewed, so its documents can no longer be changed.
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
 
       {/* ── Make a contribution ────────────────────────────────────────────── */}
       <Modal
@@ -457,6 +510,11 @@ const ContributionsTab = ({ ctx }) => {
                 <Field label="Note (optional)">
                   <TextInput value={form.notes} onChange={(e) => set('notes', e.target.value)} placeholder="Anything your treasurer should know" />
                 </Field>
+                <PaymentProofPicker
+                  file={proofFile}
+                  onChange={setProofFile}
+                  hint="A photo or PDF of the bank deposit / transfer slip helps your treasurer confirm this faster. Up to 10 MB."
+                />
                 <div className="flex items-start gap-3 p-3 rounded-xl bg-amber-50 border border-amber-200">
                   <Icon name="Clock" size={18} color="#ca8a04" />
                   <p className="text-xs text-foreground">

@@ -18,7 +18,7 @@ const PLANS = [
 
 const ASSET_TYPES = [
   'Vehicles', 'Property/Land', 'Construction Dealers',
-  'Electronics', 'Furnitures', 'Heavy Equipment',
+  'Electronics', 'Furnitures', 'Heavy Equipment', 'Services',
 ];
 
 // Commission the acting agent earns for registering an admin, keyed by their

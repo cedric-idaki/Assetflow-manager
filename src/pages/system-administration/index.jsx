@@ -7,6 +7,7 @@ import AuditTrailTab from './components/AuditTrailTab';
 import UserDevicesTab from './components/UserDevicesTab';
 import ModulesTab from './components/ModulesTab';
 import EtimsTab from './components/EtimsTab';
+import BrandingTab from './components/BrandingTab';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import { useAuth } from '../../contexts/AuthContext';
@@ -32,10 +33,13 @@ const SystemAdministration = () => {
     // when the module is frozen, rather than being hidden — a business that
     // needs eTIMS has to be able to find it.
     { id: 'etims',        label: 'KRA eTIMS',           icon: 'Receipt',        count: null,               superOnly: false },
+    // Tenant-only: the logo and contact details on the tenant's own documents.
+    // The platform operator has no tenant, so there is nothing for them to brand.
+    { id: 'branding',     label: 'Branding',            icon: 'Palette',        count: null,               superOnly: false, tenantOnly: true },
     { id: 'audit',        label: 'Audit Trail',         icon: 'FileText',       count: null,               superOnly: false },
   ];
 
-  const tabs = allTabs.filter(t => !t.superOnly || isSuperAdmin);
+  const tabs = allTabs.filter(t => (!t.superOnly || isSuperAdmin) && (!t.tenantOnly || !isSuperAdmin));
 
   // If current activeTab was hidden (e.g. roles for admin), reset to users
   const visibleIds = tabs.map(t => t.id);
@@ -49,6 +53,7 @@ const SystemAdministration = () => {
       case 'devices':       return <UserDevicesTab />;
       case 'modules':       return <ModulesTab />;
       case 'etims':         return <EtimsTab />;
+      case 'branding':      return <BrandingTab />;
       case 'audit':         return <AuditTrailTab />;
       default:              return <UserManagementTab />;
     }

@@ -46,15 +46,20 @@ const StepDot = ({ n, active, done, label }) => (
   </div>
 );
 
-const StepBar = ({ step }) => (
+const StepBar = ({ step, directSale }) => (
   <div className="flex items-center gap-1 px-6 py-3 bg-muted/20 border-b border-border overflow-x-auto">
-    {[
-      [1, 'Client'],
-      [2, 'Asset'],
+    {(directSale ? [
+      [2, 'Items'],
       [3, 'Pricing'],
       [4, 'Payment'],
       [5, 'Review'],
-    ].map(([n, label], i, arr) => (
+    ] : [
+      [1, 'Client'],
+      [2, 'Items'],
+      [3, 'Pricing'],
+      [4, 'Payment'],
+      [5, 'Review'],
+    ]).map(([n, label], i, arr) => (
       <React.Fragment key={n}>
         <StepDot n={n} active={step === n} done={step > n} label={label} />
         {i < arr.length - 1 && <div className={`flex-1 h-0.5 min-w-4 ${step > n ? 'bg-emerald-600' : 'bg-border'}`} />}
@@ -129,12 +134,12 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier
 
         <div className="bg-muted/30 rounded-xl p-4 space-y-2 text-sm">
           {[
-            { label: 'Client',        value: client?.full_name },
-            { label: 'Account No.',   value: client?.account_number },
-            { label: 'Asset',         value: asset?.description },
+            { label: 'Customer',      value: client?.full_name || 'Walk-in customer' },
+            client?.account_number && { label: 'Account No.', value: client.account_number },
+            { label: ['service', 'services'].includes(String(asset?.asset_type || '').toLowerCase()) ? 'Service' : 'Inventory', value: asset?.description },
             { label: 'Pricing Model', value: PRICING_MODELS.find(m => m.value === saleData.pricingModel)?.label },
             { label: 'Date',          value: fmtD(new Date().toISOString()) },
-          ].map(r => (
+          ].filter(Boolean).map(r => (
             <div key={r.label} className="flex justify-between">
               <span className="text-muted-foreground">{r.label}</span>
               <span className="font-medium text-foreground text-right max-w-[60%]">{r.value}</span>
@@ -174,8 +179,12 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier
           <span>Method: {PAYMENT_METHODS.find(m => m.value === saleData.paymentMethod)?.label}</span>
         </div>
 
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-          ⚠️ A contract will be generated and sent to the client for e-signature.
+        <div className={`rounded-xl p-3 text-xs ${client && saleData.pricingModel !== 'cash' ? 'bg-amber-50 border border-amber-200 text-amber-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800'}`}>
+          {client && saleData.pricingModel !== 'cash'
+            ? 'A contract will be generated and sent to the client for e-signature.'
+            : client
+              ? 'Cash sale complete. The receipt is ready to print or download.'
+              : 'Direct sale complete. The receipt is ready to print or download.'}
         </div>
       </div>
 
@@ -240,6 +249,7 @@ const POSModule = () => {
   // already taken. Both belong to whoever is standing at the counter.
   const [view, setView]               = useState('sale');
   const [step, setStep]               = useState(1);
+  const [directSale, setDirectSale]   = useState(false);
   const [errors, setErrors]           = useState({});
   const [globalError, setGlobalError] = useState('');
   const [receipt, setReceipt]         = useState(null);
@@ -266,6 +276,7 @@ const POSModule = () => {
 
   const [assetSearch, setAssetSearch]   = useState('');
   const [selectedAsset, setSelectedAsset] = useState(null);
+  const selectedIsService = ['service', 'services'].includes(String(selectedAsset?.asset_type || '').toLowerCase());
   const [quantity, setQuantity]           = useState(1);
 
   const [pricingModel, setPricingModel]   = useState('installment');
@@ -292,6 +303,8 @@ const POSModule = () => {
 
   useEffect(() => {
     if (selectedAsset) {
+      const serviceSale = ['service', 'services'].includes(String(selectedAsset.asset_type || '').toLowerCase());
+      if (serviceSale) setPricingModel('cash');
       setSellingPrice(String(selectedAsset.selling_price || ''));
       setInterestRate(String(selectedAsset.installment_interest_rate || '12'));
       setVatApplicable(selectedAsset.vat_applicable !== false);
@@ -366,12 +379,12 @@ const POSModule = () => {
 
   const validateStep = (s) => {
     const e = {};
-    if (s === 1) {
+    if (s === 1 && !directSale) {
       if (!selectedClient) e.client = 'Please select a client';
       else if (selectedClient.kyc_status !== 'verified') e.client = 'Client KYC must be verified before a sale';
     }
     if (s === 2) {
-      if (!selectedAsset) e.asset = 'Please select an asset';
+      if (!selectedAsset) e.asset = 'Please select inventory or a service';
     }
     if (s === 3) {
       if (!sellingPrice || parseFloat(sellingPrice) <= 0) e.sellingPrice = 'Selling price is required';
@@ -399,7 +412,27 @@ const POSModule = () => {
   };
 
   const goNext = () => { if (validateStep(step)) setStep(s => s + 1); };
-  const goBack = () => { setErrors({}); setGlobalError(''); setStep(s => s - 1); };
+  const goBack = () => {
+    setErrors({});
+    setGlobalError('');
+    if (directSale && step === 2) {
+      setDirectSale(false);
+      setPricingModel('installment');
+      setStep(1);
+      return;
+    }
+    setStep(s => s - 1);
+  };
+  const startDirectSale = () => {
+    setDirectSale(true);
+    setSelectedClient(null);
+    setBuyerKraPin('');
+    setPricingModel('cash');
+    setQuickOpen(false);
+    setErrors({});
+    setGlobalError('');
+    setStep(2);
+  };
 
   const handleSubmit = async () => {
     setGlobalError('');
@@ -416,7 +449,7 @@ const POSModule = () => {
         // 22P02. See migration 20260909120000.
         const { error: qErr } = await supabase.from('maker_checker_queue').insert({
           action_type:     'high_value_transaction',
-          title:           `Large Transaction — ${fmt(totalAmount)} for ${selectedClient?.full_name}`,
+          title:           `Large Transaction — ${fmt(totalAmount)} for ${selectedClient?.full_name || 'walk-in sale'}`,
           description:     `Sales agent requesting approval for ${pricingModel === 'cash' ? 'cash sale' : 'hire purchase'} of ${selectedAsset?.description} valued at ${fmt(totalAmount)}. Exceeds ${fmt(LARGE_TXN_THRESHOLD)} threshold.`,
           initiator_id:    currentUser.id,
           initiator_name:  currentProfile?.full_name || currentUser.email,
@@ -468,7 +501,7 @@ const POSModule = () => {
           const { error: qErr } = await supabase.from('maker_checker_queue').insert({
             action_type:      'discount_approval',
             title:            `Discount Approval — ${discPct}% on ${selectedAsset?.description}`,
-            description:      `Sales agent requesting ${discPct}% discount (${fmt(discountAmount)}) on ${selectedAsset?.description} for client ${selectedClient?.full_name}. Reason: ${discountReason || 'Not provided'}`,
+            description:      `Sales agent requesting ${discPct}% discount (${fmt(discountAmount)}) on ${selectedAsset?.description} for ${selectedClient?.full_name || 'walk-in sale'}. Reason: ${discountReason || 'Not provided'}`,
             initiator_id:     user.id,
             initiator_name:   profile?.full_name || user.email,
             initiator_role:   profile?.role || 'sales_agent',
@@ -505,7 +538,7 @@ const POSModule = () => {
       }
 
       const result = await submitSale({
-        clientId:        selectedClient.id,
+        clientId:        selectedClient?.id || null,
         asset:           selectedAsset,
         pricingModel,
         sellingPrice:    parseFloat(sellingPrice),
@@ -536,7 +569,7 @@ const POSModule = () => {
   };
 
   const resetForm = () => {
-    setStep(1); setReceipt(null);
+    setStep(1); setReceipt(null); setDirectSale(false);
     setSelectedClient(null); setClientSearch(''); setBuyerKraPin('');
     setSelectedAsset(null); setAssetSearch('');
     setQuantity(1); setPricingModel('installment');
@@ -599,7 +632,7 @@ const POSModule = () => {
             <div>
               <h1 className="text-2xl font-bold text-foreground">Point of Sale</h1>
               <p className="text-xs text-muted-foreground">
-                {view === 'sale' ? 'New asset sale transaction' : 'Reprint a receipt for a past sale'}
+                {view === 'sale' ? 'New inventory or service sale' : 'Reprint a receipt for a past sale'}
               </p>
             </div>
           </div>
@@ -631,7 +664,7 @@ const POSModule = () => {
         )}
 
         <div className={`bg-card border border-border rounded-2xl overflow-hidden ${view === 'sale' ? '' : 'hidden'}`}>
-          <StepBar step={step} />
+          <StepBar step={step} directSale={directSale} />
 
           <div className="p-5 min-h-[400px]">
 
@@ -641,7 +674,7 @@ const POSModule = () => {
                   <div>
                     <h2 className="text-base font-semibold text-foreground mb-1">Select Customer</h2>
                     <p className="text-xs text-muted-foreground">
-                      Account customers need KYC for credit terms. A cash customer can buy outright straight away.
+                      Account customers need KYC for credit terms. You can also sell directly without recording customer details.
                     </p>
                   </div>
                   <button type="button" onClick={() => setQuickOpen(o => !o)}
@@ -650,6 +683,15 @@ const POSModule = () => {
                     {quickOpen ? 'Cancel' : 'New walk-in'}
                   </button>
                 </div>
+
+                <button type="button" onClick={startDirectSale}
+                  className="w-full flex items-center justify-between gap-3 p-4 rounded-xl border-2 border-primary/30 bg-primary/5 text-left hover:border-primary/60 hover:bg-primary/10 transition-colors">
+                  <span>
+                    <span className="block text-sm font-semibold text-foreground">Direct sale — no customer details</span>
+                    <span className="block text-xs text-muted-foreground mt-0.5">Select inventory or a service, take full payment, and issue the receipt here.</span>
+                  </span>
+                  <Icon name="ArrowRight" size={16} color="currentColor" />
+                </button>
 
                 {/* Quick creation. A name and nothing else is required: the
                     point of this customer type is that it takes seconds, and a
@@ -805,15 +847,15 @@ const POSModule = () => {
             {step === 2 && (
               <div className="space-y-4 max-w-3xl mx-auto">
                 <div>
-                  <h2 className="text-base font-semibold text-foreground mb-1">Select Asset</h2>
-                  <p className="text-xs text-muted-foreground">Only available assets with stock are shown</p>
+                  <h2 className="text-base font-semibold text-foreground mb-1">Select Inventory or Service</h2>
+                  <p className="text-xs text-muted-foreground">Available inventory and service offerings are shown</p>
                 </div>
                 <div className="relative max-w-md">
                   <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
                     <Icon name="Search" size={15} color="var(--color-muted-foreground)" />
                   </div>
                   <input type="text" value={assetSearch} onChange={e => setAssetSearch(e.target.value)}
-                    placeholder="Search assets..."
+                    placeholder="Search inventory and services..."
                     className="w-full pl-9 pr-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground placeholder:text-muted-foreground" />
                 </div>
                 {errors.asset && (
@@ -825,7 +867,7 @@ const POSModule = () => {
                   {filteredAssets.length === 0 ? (
                     <div className="col-span-3 text-center py-10 text-muted-foreground">
                       <Icon name="Package" size={28} color="currentColor" />
-                      <p className="text-sm mt-2">No available assets</p>
+                      <p className="text-sm mt-2">No available inventory or services</p>
                     </div>
                   ) : filteredAssets.map(a => {
                     const isSelected = selectedAsset?.id === a.id;
@@ -837,9 +879,9 @@ const POSModule = () => {
                           {isSelected && <Icon name="CheckCircle" size={16} color="#1A56DB" />}
                         </div>
                         <p className="font-semibold text-sm text-foreground leading-snug">{a.description}</p>
-                        <p className="text-xs text-muted-foreground capitalize mt-0.5">{a.asset_type}</p>
+                        <p className="text-xs text-muted-foreground capitalize mt-0.5">{['service', 'services'].includes(String(a.asset_type || '').toLowerCase()) ? 'Service' : a.asset_type}</p>
                         <p className="text-base font-bold text-foreground mt-2">{fmt(a.selling_price)}</p>
-                        <p className="text-xs text-muted-foreground">Qty: {a.quantity_available || 1}</p>
+                        {!['service', 'services'].includes(String(a.asset_type || '').toLowerCase()) && <p className="text-xs text-muted-foreground">Qty: {a.quantity_available || 1}</p>}
                       </button>
                     );
                   })}
@@ -855,11 +897,14 @@ const POSModule = () => {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pricing Model *</label>
-                  {isCashCustomer && (
+                  {(directSale || isCashCustomer || selectedIsService) && (
                     <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
                       <Icon name="Info" size={12} color="currentColor" />
-                      {selectedClient?.full_name} is a cash customer — only an outright sale is available.
-                      Promote them to an account customer for terms.
+                      {directSale
+                        ? 'Direct sales are paid in full and do not create a client record.'
+                        : selectedIsService
+                          ? 'Services are paid in full; service offerings remain available after the sale.'
+                          : `${selectedClient?.full_name} is a cash customer — only an outright sale is available. Promote them to an account customer for terms.`}
                     </p>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -867,7 +912,7 @@ const POSModule = () => {
                       // Credit models are shown greyed rather than removed: the
                       // operator needs to see WHY the option they expected is
                       // not there, or they will assume the till is broken.
-                      const blocked = isCashCustomer && m.value !== 'cash';
+                      const blocked = (directSale || isCashCustomer || selectedIsService) && m.value !== 'cash';
                       return (
                         <button key={m.value} disabled={blocked}
                           title={blocked ? 'Not available to a cash customer' : undefined}
@@ -1022,7 +1067,7 @@ const POSModule = () => {
                     <label className="block text-xs font-semibold text-muted-foreground mb-1">M-Pesa Transaction Code *</label>
                     <input type="text" value={mpesaRef} onChange={e => setMpesaRef(e.target.value.toUpperCase())} placeholder="e.g. QHX2B3K4L5" className={ic(errors.mpesaRef)} />
                     {errors.mpesaRef && <p className="text-xs text-red-500 mt-0.5">{errors.mpesaRef}</p>}
-                    <p className="text-xs text-muted-foreground mt-1">Enter the M-Pesa confirmation code received by the client</p>
+                    <p className="text-xs text-muted-foreground mt-1">Enter the M-Pesa confirmation code received from the customer</p>
                   </div>
                 )}
                 {paymentMethod === 'bank_transfer' && (
@@ -1056,19 +1101,26 @@ const POSModule = () => {
                   <h2 className="text-base font-semibold text-foreground mb-1">Review & Confirm Sale</h2>
                   <p className="text-xs text-muted-foreground">Verify all details before completing the transaction</p>
                 </div>
-                <div className="bg-muted/30 border border-border rounded-xl p-4 space-y-2">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Client</p>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center font-bold text-primary">{selectedClient?.full_name?.[0]}</div>
-                    <div>
-                      <p className="font-semibold text-foreground">{selectedClient?.full_name}</p>
-                      <p className="text-xs text-muted-foreground">{selectedClient?.account_number} · {selectedClient?.phone}</p>
+                {selectedClient ? (
+                  <div className="bg-muted/30 border border-border rounded-xl p-4 space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Client</p>
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center font-bold text-primary">{selectedClient.full_name?.[0]}</div>
+                      <div>
+                        <p className="font-semibold text-foreground">{selectedClient.full_name}</p>
+                        <p className="text-xs text-muted-foreground">{selectedClient.account_number} · {selectedClient.phone}</p>
+                      </div>
+                      {selectedClient.kyc_status === 'verified' && <span className="ml-auto text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold">✓ KYC Verified</span>}
                     </div>
-                    <span className="ml-auto text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold">✓ KYC Verified</span>
                   </div>
-                </div>
+                ) : (
+                  <div className="bg-muted/30 border border-border rounded-xl p-4">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Customer</p>
+                    <p className="font-semibold text-foreground mt-1">Walk-in sale — no customer details recorded</p>
+                  </div>
+                )}
                 <div className="bg-muted/30 border border-border rounded-xl p-4 space-y-1">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Asset</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{['service', 'services'].includes(String(selectedAsset?.asset_type || '').toLowerCase()) ? 'Service' : 'Inventory'}</p>
                   <p className="font-semibold text-foreground">{selectedAsset?.description}</p>
                   <p className="text-xs text-muted-foreground">{selectedAsset?.asset_code} · {selectedAsset?.asset_type}</p>
                 </div>
@@ -1096,7 +1148,9 @@ const POSModule = () => {
                   ))}
                 </div>
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-                  ⚠️ By confirming, you acknowledge this transaction will be recorded, the asset status will be updated, and a contract will be generated for the client's e-signature.
+                  {pricingModel === 'cash'
+                    ? `By confirming, full payment will be recorded, ${selectedIsService ? 'the service will remain available' : 'inventory stock will be updated'}, and a receipt issued${directSale ? ' without customer details.' : '.'}`
+                    : 'By confirming, this transaction will be recorded, inventory status updated, and a contract sent to the client for e-signature.'}
                 </div>
                 {globalError && (
                   <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">

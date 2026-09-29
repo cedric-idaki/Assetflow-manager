@@ -10,6 +10,9 @@
  */
 
 import { loadJsPDF } from './jsPdfLoader';
+import { letterheadFromRecord, letterheadLines, mergeLetterhead } from './letterhead';
+import { drawLogo, fitText } from './pdfLetterhead';
+import { fetchLetterhead } from '../lib/letterhead';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (n) =>
@@ -36,8 +39,27 @@ const PRICING_LABELS = {
 };
 
 // ── Main generator ────────────────────────────────────────────────────────────
-export const generateContractPDF = async ({ sale, client, asset, company, schedule }) => {
-  const JsPDF = await loadJsPDF();
+export const generateContractPDF = async ({ sale, client, asset, company, schedule, letterhead }) => {
+  // The vendor's letterhead — logo, motto, contact details — over the company
+  // record the caller holds. The record is often empty (company_profiles is
+  // readable only by the tenant owner), so the letterhead also fills the
+  // vendor's particulars in the agreement itself.
+  const [JsPDF, tenantLetterhead] = await Promise.all([
+    loadJsPDF(),
+    letterhead !== undefined
+      ? Promise.resolve(letterhead)
+      : fetchLetterhead({ tenantId: company?.admin_id || null }),
+  ]);
+  const lh = mergeLetterhead(tenantLetterhead, letterheadFromRecord(company));
+  const vendor = {
+    ...(company || {}),
+    company_name:        lh?.name || company?.company_name,
+    registration_number: company?.registration_number || company?.business_registration_number || lh?.registrationNo,
+    address:             company?.address || company?.physical_address || lh?.physicalAddress,
+    kra_pin:             company?.kra_pin || lh?.kraPin,
+    phone:               company?.phone || lh?.phone,
+    email:               company?.email || lh?.email,
+  };
   const doc   = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
   const W  = 210;
@@ -121,22 +143,39 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
   // Top blue banner
   rect(0, 0, W, 48, BLUE, 'F');
 
-  // Company name
-  setFont('bold', 16);
-  setColor(WHITE);
-  txt(company?.company_name || 'Ararat Ltd', M, 16);
+  // Contract title on right — measured first, so the vendor block on the
+  // left knows how much room it has.
+  const titleText = fitText(doc, contractTitle.toUpperCase(), CW * 0.5, { style: 'bold', size: 13, minSize: 10 });
+  const titleSize = doc.getFontSize();
+  const titleW = doc.getTextWidth(titleText);
 
-  setFont('normal', 8);
-  setColor([180, 210, 255]);
-  txt(company?.address          || '', M, 22);
-  txt(`Tel: ${company?.phone   || ''}`, M, 27);
-  txt(`Email: ${company?.email || ''}`, M, 32);
-  txt(`KRA PIN: ${company?.kra_pin || ''}`, M, 37);
-
-  // Contract title on right
-  setFont('bold', 13);
+  // Vendor: logo on a white tile, name, motto, contact lines.
+  let headX = M;
+  if (lh?.logo && drawLogo(doc, lh.logo, { x: M, y: 8, w: 30, h: 30, tile: WHITE, radius: 2, padding: 2 })) {
+    headX = M + 35;
+  }
+  const headW = Math.max(30, W - M - titleW - 8 - headX);
+  const nameText = fitText(doc, vendor.company_name || 'Ararat Ltd', headW, { style: 'bold', size: 16, minSize: 11 });
   setColor(WHITE);
-  txt(contractTitle.toUpperCase(), W - M, 16, { align: 'right' });
+  doc.text(nameText, headX, 16);
+
+  let headY = 22;
+  if (lh?.motto) {
+    const mottoText = fitText(doc, lh.motto, headW, { style: 'italic', size: 8, minSize: 6.5 });
+    setColor([214, 228, 255]);
+    doc.text(mottoText, headX, headY);
+    headY += 5;
+  }
+  letterheadLines(lh, { layout: 'compact' }).slice(0, lh?.motto ? 4 : 5).forEach((l) => {
+    const lineText = fitText(doc, l, headW, { size: 8, minSize: 6.5 });
+    setColor([180, 210, 255]);
+    doc.text(lineText, headX, headY);
+    headY += 5;
+  });
+
+  setFont('bold', titleSize);
+  setColor(WHITE);
+  txt(titleText, W - M, 16, { align: 'right' });
 
   setFont('normal', 8);
   setColor([180, 210, 255]);
@@ -154,7 +193,7 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
 
   setFont('normal', 9);
   setColor(GRAY);
-  const preamble = `BETWEEN ${(company?.company_name || 'the Vendor').toUpperCase()} (hereinafter referred to as "the Vendor") AND ${(client?.full_name || '').toUpperCase()} (hereinafter referred to as "the Buyer"), collectively referred to as "the Parties".`;
+  const preamble = `BETWEEN ${(vendor?.company_name || 'the Vendor').toUpperCase()} (hereinafter referred to as "the Vendor") AND ${(client?.full_name || '').toUpperCase()} (hereinafter referred to as "the Buyer"), collectively referred to as "the Parties".`;
   const preambleLines = doc.splitTextToSize(preamble, CW);
   doc.text(preambleLines, M, Y);
   Y += preambleLines.length * 5 + 6;
@@ -173,12 +212,12 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
   txt('1.1 VENDOR / SELLER', M + 3, Y + 5);
   Y += 8;
 
-  Y = fieldRow('Company Legal Name',     company?.company_name        || '—', Y);
-  Y = fieldRow('Registration Number',    company?.registration_number || '—', Y);
-  Y = fieldRow('Physical Address',       company?.address             || '—', Y);
-  Y = fieldRow('KRA PIN',               company?.kra_pin             || '—', Y);
-  Y = fieldRow('Authorized Signatory',   company?.signatory_name      || 'Managing Director', Y);
-  Y = fieldRow('Signatory Title',        company?.signatory_title     || 'Authorized Officer', Y);
+  Y = fieldRow('Company Legal Name',     vendor?.company_name        || '—', Y);
+  Y = fieldRow('Registration Number',    vendor?.registration_number || '—', Y);
+  Y = fieldRow('Physical Address',       vendor?.address             || '—', Y);
+  Y = fieldRow('KRA PIN',               vendor?.kra_pin             || '—', Y);
+  Y = fieldRow('Authorized Signatory',   vendor?.signatory_name      || 'Managing Director', Y);
+  Y = fieldRow('Signatory Title',        vendor?.signatory_title     || 'Authorized Officer', Y);
   Y += 4;
 
   checkPage(50);
@@ -424,7 +463,7 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
   txt('FOR AND ON BEHALF OF THE VENDOR', M + 4, Y + 7);
   setFont('normal', 7.5);
   setColor(GRAY);
-  txt(company?.company_name || '—', M + 4, Y + 13);
+  txt(vendor?.company_name || '—', M + 4, Y + 13);
 
   // Signature line
   hline(Y + 30, [150, 180, 220]);
@@ -432,7 +471,7 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
   setColor(GRAY);
   txt('Authorized Signature', M + 4, Y + 34);
   hline(Y + 40, [150, 180, 220]);
-  txt(`Name: ${company?.signatory_name || ''}`, M + 4, Y + 43);
+  txt(`Name: ${vendor?.signatory_name || ''}`, M + 4, Y + 43);
 
   // Date
   txt('Date: ____________________', M + 4, Y + 50 > Y + sigBlockW ? Y + 43 : Y + 49);
@@ -481,7 +520,7 @@ export const generateContractPDF = async ({ sale, client, asset, company, schedu
     setFont('normal', 6.5);
     setColor([180, 210, 255]);
     txt(
-      `${company?.company_name || 'Ararat'} · ${contractTitle} · Ref: ${sale?.invoice_number || ''} · Page ${i} of ${totalPages}`,
+      `${vendor?.company_name || 'Ararat'} · ${contractTitle} · Ref: ${sale?.invoice_number || ''} · Page ${i} of ${totalPages}`,
       W / 2, 293, { align: 'center' }
     );
   }

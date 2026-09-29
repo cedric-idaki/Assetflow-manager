@@ -8,6 +8,8 @@ import { computePayroll, payrollInputForEmployee } from '../../../utils/kenyaPay
 import { computeVatReturn } from '../../../utils/vatLedger';
 import { buildCashFlow } from '../../../utils/financialStatements';
 import { fetchAllRows } from '../../../lib/fetchAllRows';
+import { LETTERHEAD_STYLES, letterheadHtml } from '../../../utils/letterhead';
+import { useLetterhead } from '../../../hooks/useLetterhead';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt     = (n) => `KES ${parseFloat(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -987,6 +989,8 @@ const filterByDate = (items, dateField, range, customFrom, customTo) => {
 
 // ─── MAIN REPORTS HUB ─────────────────────────────────────────────────────────
 const ReportsHub = ({ assets = [], payments = [], agents = [], clients = [], employees = [], payrollRecords = [] }) => {
+  // Printed reports go out under the business's own letterhead.
+  const { letterhead } = useLetterhead();
   const [activeReport, setActiveReport] = useState('vat');
   const [dateRange,    setDateRange]    = useState('all');
   const [customFrom,   setCustomFrom]   = useState('');
@@ -1145,7 +1149,7 @@ Nothing has been exported.`,
                 <!DOCTYPE html>
                 <html>
                   <head>
-                    <title>Ararat Report</title>
+                    <title>${(letterhead?.name || 'Ararat').replace(/[<>&"]/g, '')} Report</title>
                     <style>
                       body { font-family: sans-serif; padding: 24px; color: #111; }
                       table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -1159,12 +1163,14 @@ Nothing has been exported.`,
                       .card-label { font-size: 10px; text-transform: uppercase; color: #6b7280; margin-bottom: 4px; }
                       .card-value { font-size: 20px; font-weight: bold; color: #111; }
                       @media print { body { padding: 12px; } }
+                      ${LETTERHEAD_STYLES}
+                      .lh-name { font-size: 20px; }
                     </style>
                   </head>
                   <body>
                     <div style="margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e5e7eb;">
-                      <strong style="font-size:20px;">Ararat</strong>
-                      <span style="font-size:12px;color:#6b7280;margin-left:12px;">Report printed on ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                      ${letterheadHtml(letterhead)}
+                      <div style="font-size:12px;color:#6b7280;margin-top:6px;">Report printed on ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
                     </div>
                     ${reportEl.innerHTML}
                   </body>

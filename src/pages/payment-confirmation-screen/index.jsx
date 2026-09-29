@@ -10,6 +10,9 @@ import Icon from '../../components/AppIcon';
 import { supabase } from '../../lib/supabase';
 import { sendPaymentConfirmation } from '../../services/emailService';
 import { sendPaymentConfirmationSMS } from '../../services/smsService';
+import PrintLetterhead from '../../components/documents/PrintLetterhead';
+import { useLetterhead } from '../../hooks/useLetterhead';
+import { letterheadLines } from '../../utils/letterhead';
 
 // ── Skeleton loader ───────────────────────────────────────────────────────────
 const Sk = ({ className = '' }) => (
@@ -52,6 +55,8 @@ const PaymentConfirmationScreen = () => {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const printRef = useRef(null);
+  // The business's letterhead heads both the printed page and the text receipt.
+  const { letterhead } = useLetterhead();
 
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -211,10 +216,16 @@ const PaymentConfirmationScreen = () => {
   // ── Receipt text for download ──
   const generateReceiptText = () => {
     const t = transaction;
+    const centre = (s) => {
+      const text = String(s || '').slice(0, 40);
+      return ' '.repeat(Math.max(0, Math.floor((40 - text.length) / 2))) + text;
+    };
     const lines = [
       '========================================',
-      '         ARARAT MANAGEMENT           ',
-      '           PAYMENT RECEIPT              ',
+      centre((letterhead?.name || 'Ararat Management').toUpperCase()),
+      ...(letterhead?.motto ? [centre(letterhead.motto)] : []),
+      ...letterheadLines(letterhead, { layout: 'compact' }).map(centre),
+      centre('PAYMENT RECEIPT'),
       '========================================',
       '',
       `Transaction ID : ${t?.transactionId}`,
@@ -322,6 +333,7 @@ const PaymentConfirmationScreen = () => {
 
         {/* Confirmation Card */}
         <div ref={printRef} className="bg-background">
+          <PrintLetterhead />
           <div className="bg-card border border-border rounded-xl p-6 mb-5 shadow-sm">
             <ConfirmationHeader
               transactionId={transaction?.transactionId}

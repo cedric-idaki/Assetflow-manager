@@ -7,6 +7,10 @@ import { generateSchedule, AMORTIZATION_METHODS } from '../../../utils/saccoAmor
 import Pagination from '../../../components/ui/Pagination';
 import { usePagedQuery } from '../../../hooks/usePagedQuery';
 import { buildLoanRepaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
+import { fetchReceiptLinks } from '../../../services/saccoReceiptService';
+import IssueReceiptModal from './receipts/IssueReceiptModal';
+import ReceiptViewer from './receipts/ReceiptViewer';
+import { downloadSaccoReceipt } from './receipts/receiptActions';
 import BorrowingPolicyCard from './BorrowingPolicyCard';
 import GuaranteePolicyCard from './GuaranteePolicyCard';
 import GuaranteeRegisterCard from './GuaranteeRegisterCard';
@@ -27,7 +31,8 @@ const methodLabel = (id) => AMORTIZATION_METHODS.find((m) => m.id === id)?.label
 
 // Renders an amortization schedule table with overdue (red) / upcoming (amber)
 // highlighting per BRS AM1.5. Works for both a live preview and a saved loan.
-const ScheduleTable = ({ rows, onPay, onReceipt, receipting }) => {
+// `receiptFor(row)` is the receipt-book entry that paid a row, when it has one.
+const ScheduleTable = ({ rows, onPay, onReceipt, receipting, receiptFor, onViewReceipt }) => {
   const today = new Date().toISOString().slice(0, 10);
   return (
     <Table columns={['#', 'Due', 'Opening', 'Interest', 'Principal', 'Payment', 'Closing', onPay ? 'Status' : '']}>
@@ -37,6 +42,7 @@ const ScheduleTable = ({ rows, onPay, onReceipt, receipting }) => {
         const overdue = !paid && due && due < today;
         const upcoming = !paid && due && due >= today;
         const rowBg = paid ? 'bg-emerald-50/40' : overdue ? 'bg-red-50/50' : upcoming ? 'bg-amber-50/40' : '';
+        const receipt = paid && receiptFor ? receiptFor(r) : null;
         return (
           <tr key={r.period_no || r.periodNo} className={`border-b border-border/60 ${rowBg}`}>
             <td className="py-2 pr-4 text-muted-foreground">{r.period_no || r.periodNo}</td>
@@ -50,13 +56,23 @@ const ScheduleTable = ({ rows, onPay, onReceipt, receipting }) => {
               <td className="py-2 pr-0">
                 <div className="flex items-center gap-2">
                   {paid ? <Badge status="paid" />
-                    : <button onClick={() => onPay(r)} className="text-xs text-primary font-semibold hover:underline">Mark paid</button>}
+                    : <button onClick={() => onPay(r)} className="text-xs text-primary font-semibold hover:underline whitespace-nowrap">Record payment</button>}
+                  {receipt && (
+                    <button
+                      onClick={() => onViewReceipt?.(receipt)}
+                      title={`Open receipt ${receipt.receipt_no}`}
+                      className="text-xs font-mono text-primary hover:underline whitespace-nowrap"
+                    >
+                      {receipt.receipt_no}
+                    </button>
+                  )}
                   {onReceipt && (
                     <button
                       onClick={() => onReceipt(r)}
                       disabled={receipting === r.id}
-                      title={paid ? `Download the receipt for installment ${r.period_no || r.periodNo}`
-                                  : `Download the notice for installment ${r.period_no || r.periodNo}`}
+                      title={receipt ? `Download receipt ${receipt.receipt_no}`
+                        : paid ? `Download the receipt for installment ${r.period_no || r.periodNo}`
+                        : `Download the notice for installment ${r.period_no || r.periodNo}`}
                       aria-label={`Download installment ${r.period_no || r.periodNo}`}
                       className="text-muted-foreground hover:text-foreground disabled:opacity-60"
                     >
@@ -77,7 +93,7 @@ const ScheduleTable = ({ rows, onPay, onReceipt, receipting }) => {
 const LoansTab = ({ ctx }) => {
   const {
     sacco, loanProducts, members, stats,
-    createLoan, createLoanProduct, approveLoan, rejectLoan, recordRepayment, exportCSV,
+    createLoan, createLoanProduct, approveLoan, rejectLoan, exportCSV,
   } = ctx;
   const toast = useToast();
   const [receipting, setReceipting] = useState(null);
@@ -169,24 +185,46 @@ const LoansTab = ({ ctx }) => {
     try { await rejectLoan(loan.id); loanPage.refresh(); toast.success('Loan rejected.'); }
     catch (e) { toast.error(e.message || 'Could not reject.'); }
   };
-  const doPay = async (row) => {
-    try { await recordRepayment(row); await loadSchedule(scheduleLoan?.id); toast.success('Repayment recorded.'); }
-    catch (e) { toast.error(e.message || 'Could not record repayment.'); }
+  /**
+   * A repayment is taken at the receipt desk, never ticked off: the money's
+   * method, reference and date are recorded and the receipt is issued in the
+   * same transaction that marks the instalment paid.
+   */
+  const [issuing, setIssuing] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const doPay = (row) => setIssuing({
+    type: 'loan_repayment',
+    memberId: scheduleLoan?.member_id,
+    loanId: scheduleLoan?.id,
+    scheduleIds: [row.id],
+  });
+  const onIssued = async (receipt) => {
+    setIssuing(null);
+    setViewing(receipt.id);
+    await loadSchedule(scheduleLoan?.id);
+    loanPage.refresh();
   };
 
   /**
    * A borrower's proof that an installment was paid — with the interest and
    * principal split out, which is the only thing that explains why a payment
    * moved the balance as little as it did.
+   *
+   * An instalment paid through the receipt desk downloads its official
+   * receipt. One ticked off before the desk existed has no receipt-book entry,
+   * so it keeps the document drawn from the schedule row.
    */
   const doReceipt = async (row) => {
     setReceipting(row.id);
     try {
-      const filename = await downloadAccountingDocument(buildLoanRepaymentReceipt({
-        installment: row,
-        loan: scheduleLoan,
-        sacco,
-      }));
+      const official = receiptLinks.get(row.id);
+      const filename = official
+        ? await downloadSaccoReceipt(official.id, sacco)
+        : await downloadAccountingDocument(buildLoanRepaymentReceipt({
+          installment: row,
+          loan: scheduleLoan,
+          sacco,
+        }));
       toast.success(filename, 'Downloaded');
     } catch (e) {
       toast.error(e.message, 'Could not generate the receipt');
@@ -205,9 +243,11 @@ const LoansTab = ({ ctx }) => {
    */
   const [loanSchedule, setLoanSchedule] = useState([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
+  // schedule row id → the receipt that paid it
+  const [receiptLinks, setReceiptLinks] = useState(() => new Map());
 
   const loadSchedule = useCallback(async (loanId) => {
-    if (!loanId) { setLoanSchedule([]); return; }
+    if (!loanId) { setLoanSchedule([]); setReceiptLinks(new Map()); return; }
     setScheduleLoading(true);
     try {
       const { data, error } = await supabase
@@ -217,6 +257,13 @@ const LoansTab = ({ ctx }) => {
         .order('period_no', { ascending: true });
       if (error) throw error;
       setLoanSchedule(data || []);
+      // Best-effort: without the receipt book a paid row simply has no link.
+      try {
+        const paidIds = (data || []).filter((r) => r.paid).map((r) => r.id);
+        setReceiptLinks((await fetchReceiptLinks({ scheduleIds: paidIds })).bySchedule);
+      } catch {
+        setReceiptLinks(new Map());
+      }
     } catch (e) {
       setLoanSchedule([]);
       toast.error(e.message || 'Could not load the schedule.');
@@ -410,8 +457,13 @@ const LoansTab = ({ ctx }) => {
           ? <p className="text-sm text-muted-foreground py-6 text-center">Loading schedule…</p>
           : loanSchedule.length === 0
             ? <EmptyState icon="CalendarX" title="No schedule rows" hint="This loan has no generated schedule." />
-            : <ScheduleTable rows={loanSchedule} onPay={doPay} onReceipt={doReceipt} receipting={receipting} />}
+            : <ScheduleTable rows={loanSchedule} onPay={doPay} onReceipt={doReceipt} receipting={receipting}
+                receiptFor={(r) => receiptLinks.get(r.id)} onViewReceipt={(rc) => setViewing(rc.id)} />}
       </Modal>
+
+      {/* Rendered after the schedule so they stack above it. */}
+      <IssueReceiptModal open={!!issuing} preset={issuing} onClose={() => setIssuing(null)} onIssued={onIssued} />
+      <ReceiptViewer receiptId={viewing} sacco={sacco} onClose={() => setViewing(null)} />
     </div>
   );
 };

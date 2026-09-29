@@ -2,6 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Icon from '../../../components/AppIcon';
 import { supabase } from '../../../lib/supabase';
 import { processPayment, getWalletBalance } from '../../../utils/paymentAllocationEngine';
+import { uploadPaymentProof } from '../../../utils/paymentProofs';
+import PaymentProofPicker from '../../../components/payments/PaymentProofPicker';
+import PrintLetterhead from '../../../components/documents/PrintLetterhead';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (n) => `KES ${(parseFloat(n) || 0).toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -61,6 +64,7 @@ const PaymentResultModal = ({ result, onClose }) => {
 
         {/* Body */}
         <div className="px-6 py-5 space-y-3">
+          <PrintLetterhead />
           <p className="text-sm text-foreground">{result.message}</p>
 
           <div className="bg-muted/30 rounded-xl p-4 space-y-2 text-sm">
@@ -91,6 +95,23 @@ const PaymentResultModal = ({ result, onClose }) => {
           {result.underpaymentAmount > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
               ⚠️ Installment marked as PARTIAL. Remaining {fmt(result.underpaymentAmount)} must be paid before the grace period expires to avoid penalty.
+            </div>
+          )}
+
+          {/* Proof of payment */}
+          {result.proofStatus === 'attached' && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800">
+              📎 Proof of payment attached to this payment.
+            </div>
+          )}
+          {result.proofStatus === 'failed' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+              ⚠️ The payment was recorded, but the proof of payment could not be attached: {result.proofError} You can attach it from the transaction history.
+            </div>
+          )}
+          {result.proofStatus === 'skipped' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+              ⚠️ No payment was recorded, so the proof of payment was not uploaded.
             </div>
           )}
 
@@ -129,6 +150,7 @@ const PaymentEntryForm = ({ onSubmit, linkedAssets }) => {
   const [submitting, setSubmitting]         = useState(false);
   const [paymentResult, setPaymentResult]   = useState(null);
   const [errors, setErrors]                 = useState({});
+  const [proofFile, setProofFile]           = useState(null);
 
   const [form, setForm] = useState({
     clientId:       '',
@@ -299,6 +321,27 @@ const PaymentEntryForm = ({ onSubmit, linkedAssets }) => {
         penaltyRateMonthly: 2,
       });
 
+      // The slip needs the payment's id, so it goes up after the payment is
+      // recorded. A failed upload does not undo a payment that was received.
+      if (proofFile) {
+        if (!result.paymentId) {
+          result.proofStatus = 'skipped';
+        } else {
+          try {
+            await uploadPaymentProof({
+              module:   'company',
+              recordId: result.paymentId,
+              adminId:  result.paymentAdminId,
+              file:     proofFile,
+            });
+            result.proofStatus = 'attached';
+          } catch (e) {
+            result.proofStatus = 'failed';
+            result.proofError  = e.message;
+          }
+        }
+      }
+
       setPaymentResult(result);
 
       // Notify parent
@@ -315,7 +358,7 @@ const PaymentEntryForm = ({ onSubmit, linkedAssets }) => {
     setForm({ clientId: '', saleId: '', installmentId: '', amount: '', paymentMethod: 'mpesa', reference: '', notes: '' });
     setSelectedClient(null); setSelectedSale(null); setSelectedInstallment(null);
     setSales([]); setInstallments([]); setPreview(null); setWalletInfo(null);
-    setErrors({}); setPaymentResult(null);
+    setErrors({}); setPaymentResult(null); setProofFile(null);
   };
 
   return (
@@ -497,6 +540,15 @@ const PaymentEntryForm = ({ onSubmit, linkedAssets }) => {
             <p className="text-xs text-muted-foreground mt-0.5">Duplicate references are automatically detected and flagged</p>
           </div>
         )}
+
+        {/* Proof of payment */}
+        <PaymentProofPicker
+          file={proofFile}
+          onChange={setProofFile}
+          hint={form.paymentMethod === 'bank_transfer' || form.paymentMethod === 'cheque'
+            ? 'Attach the bank deposit / transfer slip so the payment can be verified. PDF or photo, up to 10 MB.'
+            : undefined}
+        />
 
         {/* Notes */}
         <div>

@@ -80,8 +80,8 @@ const ReprintModal = ({ loading, loadError, receipt, companyProfile, onClose }) 
             <>
               <div className="bg-muted/30 rounded-xl p-4 space-y-2 text-sm">
                 {[
-                  { label: 'Customer',      value: receipt.client?.full_name || '—' },
-                  { label: 'Asset',         value: receipt.asset?.description || '—' },
+                  { label: 'Customer',      value: receipt.client?.full_name || 'Walk-in sale' },
+                  { label: 'Inventory',    value: receipt.asset?.description || '—' },
                   { label: 'Date',          value: fmtD(receipt.payment?.payment_date || sale.sale_date) },
                   { label: 'Terms',         value: PRICING_LABELS[sale.pricing_model] || sale.pricing_model },
                   { label: 'Paid by',       value: PAYMENT_LABELS[sale.payment_method] || sale.payment_method },
@@ -290,7 +290,7 @@ const SalesHistory = ({ adminId, clients = [], companyProfile }) => {
                     <th className="py-2 pr-3 font-medium">Receipt</th>
                     <th className="py-2 pr-3 font-medium">Date</th>
                     <th className="py-2 pr-3 font-medium">Customer</th>
-                    <th className="py-2 pr-3 font-medium">Asset</th>
+                    <th className="py-2 pr-3 font-medium">Inventory</th>
                     <th className="py-2 pr-3 font-medium text-right">Paid</th>
                     <th className="py-2 font-medium text-right">Reprint</th>
                   </tr>
@@ -305,7 +305,7 @@ const SalesHistory = ({ adminId, clients = [], companyProfile }) => {
                         )}
                       </td>
                       <td className="py-2.5 pr-3 text-muted-foreground whitespace-nowrap">{fmtD(s.sale_date)}</td>
-                      <td className="py-2.5 pr-3 text-foreground">{s.client?.full_name || '—'}</td>
+                      <td className="py-2.5 pr-3 text-foreground">{s.client?.full_name || 'Walk-in sale'}</td>
                       <td className="py-2.5 pr-3 text-muted-foreground">{s.asset?.description || '—'}</td>
                       <td className="py-2.5 pr-3 text-right font-medium text-foreground whitespace-nowrap">
                         {/* What the customer actually paid — the whole total on

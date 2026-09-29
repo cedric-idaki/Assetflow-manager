@@ -108,7 +108,7 @@ const ReceiptShare = ({
               kraPin:  buyerKraPin || client?.kra_pin || '',
             },
             item: {
-              description: asset?.description || 'Asset',
+              description: asset?.description || 'Inventory or service',
               code:        asset?.asset_code || '',
             },
             amounts: {

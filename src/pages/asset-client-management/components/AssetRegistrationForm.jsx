@@ -578,6 +578,7 @@ const AssetRegistrationForm = ({ onClose, onSubmit, editData, allowedAssetTypes 
     { value: 'electronics',          label: 'Electronics' },
     { value: 'furnitures',           label: 'Furniture' },
     { value: 'heavy_equipment',      label: 'Heavy Equipment' },
+    { value: 'services',             label: 'Services' },
     { value: 'other',                label: 'Other' },
   ];
 

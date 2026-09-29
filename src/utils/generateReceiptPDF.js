@@ -11,6 +11,9 @@
 
 import { vatRateOn } from '../config/taxRegulations';
 import { loadJsPDF } from './jsPdfLoader';
+import { letterheadFromRecord, letterheadLines, mergeLetterhead } from './letterhead';
+import { drawLogo, fitText } from './pdfLetterhead';
+import { fetchLetterhead } from '../lib/letterhead';
 
 /** The standard rate today — the fallback for a sale that stored none. */
 const vatPercentOn = (asOf = null) => vatRateOn(asOf);
@@ -57,8 +60,21 @@ export const generateReceiptPDF = async ({
   schedule,
   invoiceNo,
   receiptNo,
+  /**
+   * The tenant's letterhead. Omitted, it is looked up — the POS's own company
+   * row is usually empty at a cashier's till (company_profiles is readable only
+   * by the tenant owner). Pass null to print from `companyProfile` alone.
+   */
+  letterhead,
 }) => {
-  const JsPDF = await loadJsPDF();
+  const [JsPDF, tenantLetterhead] = await Promise.all([
+    loadJsPDF(),
+    letterhead !== undefined
+      ? Promise.resolve(letterhead)
+      : fetchLetterhead({ tenantId: companyProfile?.admin_id || null }),
+  ]);
+  const lh = mergeLetterhead(tenantLetterhead, letterheadFromRecord(companyProfile));
+  const sellerName = lh?.name || 'Ararat';
   const doc   = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
   const W  = 210; // A4 width mm
@@ -100,19 +116,46 @@ export const generateReceiptPDF = async ({
   // ════════════════════════════════════════════════════════════
   // HEADER BANNER
   // ════════════════════════════════════════════════════════════
-  rect(0, 0, W, 42, BLUE);
+  // The business on the left — logo on a white tile, name, motto, contact
+  // lines — and the document on the right. Empty lines are left out rather
+  // than printed as dashes, and a long name shrinks instead of running under
+  // the RECEIPT label.
+  const headLines = letterheadLines(lh, { layout: 'compact' }).slice(0, 4);
+  const bandH = Math.max(42, 25 + (lh?.motto ? 5 : 0) + Math.max(0, headLines.length - 1) * 5 + 4);
+  rect(0, 0, W, bandH, BLUE);
+
+  const dateLine = `Date: ${fmtDate(new Date())}`;
+  setFont('bold', 22);
+  let rightW = doc.getTextWidth('RECEIPT');
+  setFont('normal', 9);
+  rightW = Math.max(rightW, doc.getTextWidth(String(invoiceNo || '')), doc.getTextWidth(dateLine),
+    receiptNo ? doc.getTextWidth(`Ref: ${receiptNo}`) : 0);
+
+  let headX = M;
+  if (lh?.logo && drawLogo(doc, lh.logo, { x: M, y: 7, w: 28, h: 28, tile: WHITE, radius: 2, padding: 2 })) {
+    headX = M + 33;
+  }
+  const headW = Math.max(30, W - M - rightW - 8 - headX);
 
   // Company name
-  setFont('bold', 18);
+  const nameText = fitText(doc, sellerName, headW, { style: 'bold', size: 18, minSize: 12 });
   setColor(WHITE);
-  text(companyProfile?.company_name || 'Ararat', M, 18);
+  doc.text(nameText, headX, 18);
 
-  // Tagline
-  setFont('normal', 9);
-  setColor([180, 210, 255]);
-  text(companyProfile?.address || '', M, 25);
-  text(companyProfile?.email   || '', M, 30);
-  text(companyProfile?.phone   || '', M, 35);
+  // Motto and contact lines
+  let headY = 25;
+  if (lh?.motto) {
+    const mottoText = fitText(doc, lh.motto, headW, { style: 'italic', size: 9, minSize: 7 });
+    setColor([214, 228, 255]);
+    doc.text(mottoText, headX, headY);
+    headY += 5;
+  }
+  headLines.forEach((l) => {
+    const lineText = fitText(doc, l, headW, { size: 9, minSize: 7 });
+    setColor([180, 210, 255]);
+    doc.text(lineText, headX, headY);
+    headY += 5;
+  });
 
   // RECEIPT label on right
   setFont('bold', 22);
@@ -122,10 +165,10 @@ export const generateReceiptPDF = async ({
   setFont('normal', 9);
   setColor([180, 210, 255]);
   text(invoiceNo || '', W - M, 25, { align: 'right' });
-  text(`Date: ${fmtDate(new Date())}`, W - M, 30, { align: 'right' });
+  text(dateLine, W - M, 30, { align: 'right' });
   if (receiptNo) text(`Ref: ${receiptNo}`, W - M, 35, { align: 'right' });
 
-  Y = 50;
+  Y = bandH + 8;
 
   // ════════════════════════════════════════════════════════════
   // STATUS BADGE
@@ -146,25 +189,26 @@ export const generateReceiptPDF = async ({
   rect(M, Y, colW, 36, LIGHT, 2);
   setFont('bold', 8);
   setColor(GRAY);
-  text('CLIENT DETAILS', M + 4, Y + 7);
+  text(client ? 'CLIENT DETAILS' : 'WALK-IN SALE', M + 4, Y + 7);
   line(M + 4, Y + 9, M + colW - 4, Y + 9, [200, 214, 230]);
 
   setFont('bold', 10);
   setColor(DARK);
-  text(client?.full_name || '—', M + 4, Y + 16);
+  text(client?.full_name || 'Walk-in customer', M + 4, Y + 16);
 
   setFont('normal', 8);
   setColor(GRAY);
-  text(`Account: ${client?.account_number || '—'}`, M + 4, Y + 22);
-  text(`Phone:   ${client?.phone || '—'}`, M + 4, Y + 27);
-  text(`Email:   ${client?.email || '—'}`, M + 4, Y + 32);
+  if (client?.account_number) text(`Account: ${client.account_number}`, M + 4, Y + 22);
+  if (client?.phone) text(`Phone: ${client.phone}`, M + 4, Y + 27);
+  if (client?.email) text(`Email: ${client.email}`, M + 4, Y + 32);
 
   // Asset box
   const col2X = M + colW + 5;
   rect(col2X, Y, colW, 36, LIGHT, 2);
   setFont('bold', 8);
   setColor(GRAY);
-  text('ASSET DETAILS', col2X + 4, Y + 7);
+  const isService = ['service', 'services'].includes(String(asset?.asset_type || '').toLowerCase());
+  text(isService ? 'SERVICE DETAILS' : 'INVENTORY DETAILS', col2X + 4, Y + 7);
   line(col2X + 4, Y + 9, col2X + colW - 4, Y + 9, [200, 214, 230]);
 
   setFont('bold', 10);
@@ -394,12 +438,12 @@ export const generateReceiptPDF = async ({
   setFont('normal', 7);
   setColor([180, 210, 255]);
   text(
-    `${companyProfile?.company_name || 'Ararat'} · Generated ${fmtDate(new Date())} · ${invoiceNo}`,
+    fitText(doc, `${sellerName} · Generated ${fmtDate(new Date())} · ${invoiceNo}`, CW, { size: 7, minSize: 5.5 }),
     W / 2, 293, { align: 'center' }
   );
 
   // ── Save ──────────────────────────────────────────────────────────────────
-  const filename = `Receipt_${invoiceNo}_${client?.full_name?.replace(/\s+/g, '_') || 'Client'}.pdf`;
+  const filename = `Receipt_${invoiceNo}_${client?.full_name?.replace(/\s+/g, '_') || 'WalkIn'}.pdf`;
   doc.save(filename);
 
   return filename;

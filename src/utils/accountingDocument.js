@@ -25,6 +25,10 @@
 
 import { loadJsPDF } from './jsPdfLoader';
 import { archiveDocument, archiveMetaFor } from './documentArchive';
+import { printPdf } from './printDocument';
+import { letterheadFromRecord, letterheadLines, mergeLetterhead } from './letterhead';
+import { drawLogo, fitText } from './pdfLetterhead';
+import { fetchLetterhead } from '../lib/letterhead';
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 export const money = (n, currency = 'KES') =>
@@ -51,21 +55,57 @@ const safeName = (s, fallback = 'Document') =>
  * already-resolved seller — the finance hub resolves an invoice's seller from
  * the asset, which is not always the tenant reading the screen — so both shapes
  * are accepted rather than forcing one on every call site.
+ *
+ * The record the caller holds is only the starting point. The painter looks up
+ * the tenant's own letterhead (logo, motto, contact details) before drawing —
+ * see brandIssuer() — which is how a document produced by a cashier or a client,
+ * who cannot read company_profiles at all, is still headed with the business's
+ * name rather than falling through to "Ararat".
  */
 export const normaliseIssuer = (co) => {
-  const name = co?.name || co?.company_name || co?.sacco_name || 'Ararat';
-  const address = co?.address
-    || co?.physical_address
-    || [co?.location, co?.city].filter(Boolean).join(', ')
-    || '';
-  const regNo = co?.reg_no || co?.business_registration_number || co?.registration_no || '';
-  const lines = [
-    regNo ? `Reg No: ${regNo}` : '',
-    co?.kra_pin ? `KRA PIN: ${co.kra_pin}` : '',
-    address,
-    [co?.phone, co?.email].filter(Boolean).join(' · '),
-  ].filter(Boolean);
-  return { name, lines: lines.slice(0, 4) };
+  const letterhead = letterheadFromRecord(co);
+  return issuerFromLetterhead(letterhead);
+};
+
+/** The issuer block a document model carries, from a letterhead. */
+export const issuerFromLetterhead = (letterhead) => ({
+  tenantId: letterhead?.tenantId || null,
+  name:     letterhead?.name || 'Ararat',
+  motto:    letterhead?.motto || '',
+  logo:     letterhead?.logo || null,
+  lines:    letterheadLines(letterhead).slice(0, 4),
+  contact:  letterhead
+    ? [letterhead.phone ? `Tel: ${letterhead.phone}` : '', letterhead.email, letterhead.website]
+        .filter(Boolean).join(' · ')
+    : '',
+  letterhead,
+});
+
+/**
+ * The tenant's letterhead laid over a built model's issuer.
+ *
+ * `letterhead` may be passed explicitly (the branding screen's sample, or a
+ * caller that already holds it); otherwise it is fetched for the issuer's own
+ * tenant, falling back to the caller's tenant when the issuer names none. The
+ * two are never merged across tenants — see mergeLetterhead().
+ *
+ * Never throws: without a letterhead the document prints exactly as its
+ * builder described it.
+ */
+export const brandIssuer = async (issuer, { letterhead } = {}) => {
+  const own = issuer?.letterhead || letterheadFromRecord(issuer?.name ? { name: issuer.name } : null);
+  let tenant = letterhead;
+  if (tenant === undefined) {
+    try {
+      tenant = await fetchLetterhead({ tenantId: issuer?.tenantId || null });
+    } catch {
+      tenant = null;
+    }
+  }
+  // A builder's placeholder name must not outrank the tenant's real one.
+  const fallback = own && own.name === 'Ararat' && !issuer?.letterhead ? null : own;
+  const merged = mergeLetterhead(tenant, fallback);
+  return merged ? issuerFromLetterhead(merged) : (issuer || issuerFromLetterhead(null));
 };
 
 // ── Journal entries ──────────────────────────────────────────────────────────
@@ -618,6 +658,171 @@ export const buildShareTransactionReceipt = ({ txn, member, sacco, currency = 'K
   };
 };
 
+// ── The sacco receipt book ───────────────────────────────────────────────────
+const WORDS_ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+  'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+const WORDS_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+const WORDS_SCALES = ['', 'Thousand', 'Million', 'Billion', 'Trillion'];
+
+/** 0–999 in words, the British way: "Seven Hundred and Five". */
+const wordsBelowThousand = (n) => {
+  const hundreds = Math.floor(n / 100);
+  const rest = n % 100;
+  const restWords = rest < 20
+    ? WORDS_ONES[rest]
+    : `${WORDS_TENS[Math.floor(rest / 10)]}${rest % 10 ? `-${WORDS_ONES[rest % 10]}` : ''}`;
+  if (!hundreds) return restWords;
+  return rest ? `${WORDS_ONES[hundreds]} Hundred and ${restWords}` : `${WORDS_ONES[hundreds]} Hundred`;
+};
+
+/**
+ * An amount the way a receipt book writes it out:
+ * "Kenya Shillings Eight Thousand Seven Hundred and Fifty Cents Only".
+ *
+ * A figure can be altered with one stroke of a pen; the words beside it are
+ * what make the alteration show.
+ */
+export const amountInWords = (value, { currency = 'Kenya Shillings', minor = 'Cents' } = {}) => {
+  const totalCents = Math.round(Math.abs(parseFloat(value) || 0) * 100);
+  let whole = Math.floor(totalCents / 100);
+  const cents = totalCents % 100;
+  if (whole >= 1e15) return `${currency} ${money(value, '').trim()} Only`;
+
+  const groups = [];
+  for (let scale = 0; whole > 0; scale += 1) {
+    if (whole % 1000) groups.unshift({ group: whole % 1000, scale });
+    whole = Math.floor(whole / 1000);
+  }
+  const words = groups.map(({ group, scale }, i) => {
+    const named = WORDS_SCALES[scale] ? `${wordsBelowThousand(group)} ${WORDS_SCALES[scale]}` : wordsBelowThousand(group);
+    // "One Thousand and Five", not "One Thousand Five".
+    return i > 0 && scale === 0 && group < 100 ? `and ${named}` : named;
+  }).join(' ') || 'Zero';
+
+  return `${currency} ${words}${cents ? ` and ${wordsBelowThousand(cents)} ${minor}` : ''} Only`;
+};
+
+const RECEIPT_METHOD_LABELS = {
+  cash: 'Cash', mpesa: 'M-Pesa', bank: 'Bank deposit / transfer',
+  cheque: 'Cheque', card: 'Card', other: 'Other',
+};
+
+const figure = (n) => round2(n).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const stamped = (ts) => {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
+  return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+/**
+ * An official receipt from the sacco receipt book (sacco_receipts): a loan
+ * repayment, or payment for shares.
+ *
+ * Every other builder here decides what its document says from the row it is
+ * given. This one does not get to: the database issued the receipt — its
+ * number, the amount, what it settled and the balance left — in the same
+ * transaction as the payment (20260925163000_sacco_payment_receipts.sql). The
+ * builder lays those stored facts out and adds only the words for the amount,
+ * so a reprint a year later says exactly what the original said.
+ */
+export const buildSaccoPaymentReceipt = ({ receipt, lines, sacco, currency = 'KES' } = {}) => {
+  const r = receipt || {};
+  const items = [...(lines || r.lines || [])].sort((a, b) => (a.line_no || 0) - (b.line_no || 0));
+  const loan = r.receipt_type === 'loan_repayment';
+  const amount = round2(r.amount);
+  const what = String(r.description || (loan ? 'Loan repayment' : 'Share purchase'));
+  const lowerFirst = what.charAt(0).toLowerCase() + what.slice(1);
+
+  const table = loan
+    ? {
+        columns: [
+          { key: 'description', label: 'Instalment',                width: 0.26, align: 'left'  },
+          { key: 'due',         label: 'Due date',                  width: 0.18, align: 'left'  },
+          { key: 'interest',    label: `Interest (${currency})`,    width: 0.18, align: 'right' },
+          { key: 'principal',   label: `Principal (${currency})`,   width: 0.19, align: 'right' },
+          { key: 'amount',      label: `Amount (${currency})`,      width: 0.19, align: 'right' },
+        ],
+        rows: items.map((l) => ({
+          description: l.description || `Instalment ${l.period_no ?? '—'}`,
+          due:         fmtDate(l.due_date),
+          interest:    figure(l.interest),
+          principal:   figure(l.principal),
+          amount:      figure(l.amount),
+        })),
+        footer: {
+          description: 'TOTAL RECEIVED',
+          due:         '',
+          interest:    figure(items.reduce((s, l) => s + round2(l.interest), 0)),
+          principal:   figure(items.reduce((s, l) => s + round2(l.principal), 0)),
+          amount:      figure(amount),
+        },
+      }
+    : {
+        columns: [
+          { key: 'description', label: 'Description', width: 0.70, align: 'left'  },
+          { key: 'amount',      label: 'Amount',      width: 0.30, align: 'right' },
+        ],
+        rows: items.flatMap((l) => [
+          { description: l.description || 'Share purchase', amount: money(l.consideration, currency) },
+          ...(round2(l.fee) > 0 ? [{ description: 'Trading fee', amount: money(l.fee, currency) }] : []),
+        ]),
+        footer: { description: 'TOTAL RECEIVED', amount: money(amount, currency) },
+      };
+
+  const summary = [{ label: 'AMOUNT RECEIVED', value: money(amount, currency), emphasis: true }];
+  if (loan && r.balance_after != null) {
+    summary.push({ label: 'Loan balance after this payment', value: money(r.balance_after, currency) });
+  }
+  if (loan && r.instalments_left != null) {
+    summary.push({ label: 'Instalments still to pay', value: String(r.instalments_left) });
+  }
+  if (!loan && r.shares_after != null) {
+    summary.push({
+      label: 'Shareholding after this purchase',
+      value: `${(parseInt(r.shares_after, 10) || 0).toLocaleString()} shares`,
+    });
+  }
+
+  const notes = [];
+  if (loan && r.instalments_left === 0) notes.push('This payment clears the loan in full.');
+  if (r.notes) notes.push(r.notes);
+
+  return {
+    kind: loan ? 'loan_receipt' : 'share_receipt',
+    title: loan ? 'LOAN REPAYMENT RECEIPT' : 'SHARE PURCHASE RECEIPT',
+    docNo: r.receipt_no || '—',
+    dateLabel: fmtDate(r.paid_on),
+    status: 'paid',
+    issuer: normaliseIssuer(sacco),
+    party: {
+      heading: 'Received From',
+      name: r.member_name || '—',
+      lines: [r.member_no ? `Member No: ${r.member_no}` : ''].filter(Boolean),
+    },
+    subject: `Received with thanks the sum of ${amountInWords(amount)} (${money(amount, currency)}), being `
+      + `${loan ? lowerFirst : `payment for the ${lowerFirst}`}.`,
+    meta: [
+      { label: 'Receipt No',  value: r.receipt_no || '—' },
+      { label: 'Date Paid',   value: fmtDate(r.paid_on) },
+      { label: 'Payment For', value: loan ? 'Loan repayment' : 'Share purchase' },
+      loan && r.loan_id ? { label: 'Loan', value: `LN-${String(r.loan_id).slice(0, 8).toUpperCase()}` } : null,
+      { label: 'Method',      value: RECEIPT_METHOD_LABELS[r.payment_method] || String(r.payment_method || '—') },
+      { label: 'Reference',   value: r.payment_reference || '—' },
+      { label: 'Received By', value: r.received_by_name || '—' },
+      { label: 'Issued',      value: stamped(r.created_at) },
+    ].filter(Boolean),
+    table,
+    summary,
+    notes,
+    signatures: ['Received by', 'Member'],
+    footNote: 'Official receipt from the society’s receipt book. Keep it as proof of payment.',
+    filename: `Receipt_${safeName(r.receipt_no, 'Receipt')}_${safeName(r.member_name, 'Member')}.pdf`,
+    archive: { memberId: r.member_id || null, amount, issuedAt: r.created_at || r.paid_on || null },
+  };
+};
+
 /**
  * A member's dividend, with the withholding tax shown on its face.
  *
@@ -802,10 +1007,18 @@ const W = 210, M = 15, CW = W - M * 2, PAGE_BOTTOM = 272;
  *
  * Rendering is separate from saving so the same page can be previewed or
  * attached to an email later without a file having to land on a disk first.
+ *
+ * The header is the tenant's letterhead (brandIssuer): every caller — download,
+ * print, share — gets the logo and motto without having to fetch them itself.
+ * Pass `{ letterhead }` to supply one explicitly (null prints the builder's
+ * issuer as-is, without a lookup).
  */
-export const renderAccountingDocument = async (model) => {
+export const renderAccountingDocument = async (model, { letterhead } = {}) => {
   if (!model) throw new Error('There is nothing to generate for this transaction.');
-  const JsPDF = await loadJsPDF();
+  const [JsPDF, issuer] = await Promise.all([
+    loadJsPDF(),
+    brandIssuer(model.issuer, { letterhead }),
+  ]);
   const doc = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
   const font  = (style = 'normal', size = 10) => { doc.setFont('helvetica', style); doc.setFontSize(size); };
@@ -825,19 +1038,55 @@ export const renderAccountingDocument = async (model) => {
   };
 
   // ── Header band ────────────────────────────────────────────────────────────
-  fill(0, 0, W, 40, BLUE);
-  font('bold', 16); color(WHITE);
-  text(model.issuer?.name || 'Ararat', M, 15);
-  font('normal', 8); color([185, 212, 255]);
-  (model.issuer?.lines || []).forEach((l, i) => text(l, M, 21.5 + i * 4.5));
+  // The business on the left — its logo on a white tile, so a mark drawn for
+  // white paper still reads on the band — and the document on the right. The
+  // left block gets whatever width the title leaves it: a long name shrinks,
+  // then clips, instead of running under the title as it used to.
+  const headLines = issuer.lines || [];
+  const bandH = Math.max(40,
+    21.5 + (issuer.motto ? 4.5 : 0) + Math.max(0, headLines.length - 1) * 4.5 + 4);
+  fill(0, 0, W, bandH, BLUE);
 
-  font('bold', 18); color(WHITE);
-  text(model.title, W - M, 15, { align: 'right' });
+  const titleText = fitText(doc, model.title, CW * 0.5, { style: 'bold', size: 18, minSize: 12 });
+  const titleSize = doc.getFontSize();
+  const titleW = doc.getTextWidth(titleText);
+  font('normal', 9);
+  const dateText = `Date: ${model.dateLabel || '—'}`;
+  const rightW = Math.max(titleW, doc.getTextWidth(String(model.docNo ?? '')), doc.getTextWidth(dateText));
+
+  let headX = M;
+  if (issuer.logo) {
+    const tile = Math.min(26, bandH - 12);
+    if (drawLogo(doc, issuer.logo, { x: M, y: 7, w: tile, h: tile, tile: WHITE, radius: 2, padding: 2 })) {
+      headX = M + tile + 5;
+    }
+  }
+  const headW = Math.max(30, W - M - rightW - 8 - headX);
+
+  const nameText = fitText(doc, issuer.name, headW, { style: 'bold', size: 16, minSize: 11 });
+  color(WHITE);
+  text(nameText, headX, 15);
+  let headY = 21.5;
+  if (issuer.motto) {
+    const mottoText = fitText(doc, issuer.motto, headW, { style: 'italic', size: 8.5, minSize: 7 });
+    color([214, 228, 255]);
+    text(mottoText, headX, headY);
+    headY += 4.5;
+  }
+  headLines.forEach((l) => {
+    const lineText = fitText(doc, l, headW, { size: 8, minSize: 6.5 });
+    color([185, 212, 255]);
+    text(lineText, headX, headY);
+    headY += 4.5;
+  });
+
+  font('bold', titleSize); color(WHITE);
+  text(titleText, W - M, 15, { align: 'right' });
   font('normal', 9); color([185, 212, 255]);
   text(model.docNo, W - M, 21.5, { align: 'right' });
-  text(`Date: ${model.dateLabel || '—'}`, W - M, 26.5, { align: 'right' });
+  text(dateText, W - M, 26.5, { align: 'right' });
 
-  Y = 47;
+  Y = bandH + 7;
 
   // Status pill
   const label = String(model.status || '').toUpperCase();
@@ -1006,7 +1255,9 @@ export const renderAccountingDocument = async (model) => {
     fill(0, 287, W, 10, BLUE);
     font('normal', 7); color([200, 222, 255]);
     text(
-      `${model.issuer?.name || 'Ararat'} · ${model.title} ${model.docNo} · Generated ${fmtDate(new Date())} · Page ${p} of ${pages}`,
+      fitText(doc,
+        `${issuer.name} · ${model.title} ${model.docNo} · Generated ${fmtDate(new Date())} · Page ${p} of ${pages}`,
+        CW, { size: 7, minSize: 5.5 }),
       W / 2, 291.2, { align: 'center' }
     );
     if (model.footNote) {
@@ -1043,6 +1294,17 @@ export const downloadAccountingDocument = async (model) => {
   }
 
   return model.filename;
+};
+
+/**
+ * Renders the document and sends it to the printer — the counter's other
+ * button. It is the same render as the download, letterhead and all, so a
+ * printed receipt and a downloaded one cannot differ. Returns false when the
+ * browser refused to print, so the caller can say so.
+ */
+export const printAccountingDocument = async (model) => {
+  const doc = await renderAccountingDocument(model);
+  return printPdf(doc.output('blob'));
 };
 
 export default downloadAccountingDocument;

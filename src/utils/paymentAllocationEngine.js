@@ -305,6 +305,9 @@ export const processPayment = async ({
     .maybeSingle();
 
   if (payErr) throw new Error('Payment record failed: ' + payErr.message);
+  // The caller attaches proof of payment against this row.
+  result.paymentId      = paymentRecord?.id || null;
+  result.paymentAdminId = paymentRecord?.admin_id || adminId || null;
 
   // ── Step 7: Update installment status ────────────────────────────────────
   const newAmountPaid = round2(alreadyPaid + totalApplied);

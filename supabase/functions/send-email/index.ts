@@ -3,6 +3,10 @@ import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { authenticateCaller } from "../_shared/auth.ts";
 import { ApiError, callerIdentity, openRequest } from "../_shared/http.ts";
 import { EMAIL_FROM } from "../_shared/email.ts";
+import {
+  contactLine, escapeHtml, letterheadEmailBlock, letterheadForCaller,
+  type EmailLetterhead,
+} from "../_shared/letterhead.ts";
 
 const API_VERSIONS = ["2026-08-21"];
 
@@ -39,7 +43,7 @@ const headerStyle = `
   color: #ffffff;
 `;
 
-const buildPaymentConfirmationEmail = (data: any) => {
+const buildPaymentConfirmationEmail = (data: any, lh: EmailLetterhead | null = null) => {
   const { transaction, client, asset, allocations } = data;
   const total = parseFloat(transaction?.amount || 0);
   const allocationRows = (allocations || []).map((a: any) => `
@@ -53,6 +57,7 @@ const buildPaymentConfirmationEmail = (data: any) => {
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="${baseStyle}">
 <div style="${cardStyle}">
+  ${letterheadEmailBlock(lh)}
   <div style="${headerStyle}">
     <div style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">
       <span style="font-size:28px">✓</span>
@@ -92,7 +97,7 @@ const buildPaymentConfirmationEmail = (data: any) => {
     </table>` : ""}
 
     <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center;margin-top:8px">
-      <p style="margin:0;font-size:13px;color:#6b7280">Thank you for your payment. This is an automated receipt from <strong>Ararat Management</strong>.</p>
+      <p style="margin:0;font-size:13px;color:#6b7280">Thank you for your payment. This is an automated receipt from <strong>${lh ? escapeHtml(lh.name) : "Ararat Management"}</strong>.${contactLine(lh) ? ` Questions? ${escapeHtml(contactLine(lh))}` : ""}</p>
     </div>
   </div>
 </div>
@@ -114,7 +119,7 @@ const buildPaymentConfirmationEmail = (data: any) => {
  * receipt missing the buyer's is still valid — it is simply not claimable, and
  * saying nothing is better than printing a blank labelled "KRA PIN".
  */
-const buildPosReceiptEmail = (data: any) => {
+const buildPosReceiptEmail = (data: any, lh: EmailLetterhead | null = null) => {
   const { receiptNo, issuedAt, cashier, company, customer, item, amounts, paymentMethod, paymentRef } = data || {};
   const balance = Number(amounts?.balance || 0);
 
@@ -130,8 +135,9 @@ const buildPosReceiptEmail = (data: any) => {
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="${baseStyle}">
 <div style="${cardStyle}">
+  ${letterheadEmailBlock(lh)}
   <div style="${headerStyle}">
-    <h1 style="margin:0;font-size:22px;font-weight:700">${company?.name || "Receipt"}</h1>
+    <h1 style="margin:0;font-size:22px;font-weight:700">${lh ? escapeHtml(lh.name) : (company?.name || "Receipt")}</h1>
     <p style="margin:6px 0 0;opacity:0.85;font-size:14px">Receipt ${receiptNo || ""}</p>
   </div>
 
@@ -168,13 +174,13 @@ const buildPosReceiptEmail = (data: any) => {
       ${row("Customer", customer?.name || "")}
       ${row("Account", customer?.account || "")}
       ${row("Customer KRA PIN", customer?.kraPin || "")}
-      ${row("Seller", company?.name || "")}
-      ${row("Seller KRA PIN", company?.kraPin || "")}
+      ${row("Seller", lh ? escapeHtml(lh.name) : (company?.name || ""))}
+      ${row("Seller KRA PIN", lh?.kraPin ? escapeHtml(lh.kraPin) : (company?.kraPin || ""))}
     </table>
 
     <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center;margin-top:8px">
       <p style="margin:0;font-size:13px;color:#6b7280">
-        Thank you for your business.${company?.phone ? ` Questions? Call ${company.phone}.` : ""}
+        Thank you for your business.${contactLine(lh) ? ` Questions? ${escapeHtml(contactLine(lh))}` : (company?.phone ? ` Questions? Call ${company.phone}.` : "")}
       </p>
     </div>
   </div>
@@ -182,13 +188,15 @@ const buildPosReceiptEmail = (data: any) => {
 </body></html>`;
 };
 
-const buildInvoiceEmail = (data: any) => {
+const buildInvoiceEmail = (data: any, lh: EmailLetterhead | null = null) => {
   const { invoice, client, asset, lineItems, plan, company } = data;
   const total = parseFloat(invoice?.total || 0);
 
   // The selling company — the one the asset came from. Heads the invoice and
   // signs off the closing note.
-  const sellerName = company?.name || company?.company_name || "Ararat Management";
+  // The caller's own letterhead leads: it is resolved server-side, where the
+  // browser's copy of the company is often a placeholder.
+  const sellerName = lh ? escapeHtml(lh.name) : (company?.name || company?.company_name || "Ararat Management");
   const sellerLines = [
     company?.reg_no ? `Reg No: ${company.reg_no}` : "",
     company?.kra_pin ? `KRA PIN: ${company.kra_pin}` : "",
@@ -236,6 +244,7 @@ const buildInvoiceEmail = (data: any) => {
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="${baseStyle}">
 <div style="${cardStyle}">
+  ${letterheadEmailBlock(lh)}
   <div style="background:linear-gradient(135deg,#1e40af 0%,#3b82f6 100%);border-radius:12px 12px 0 0;padding:28px 32px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start">
       <div>
@@ -304,7 +313,7 @@ const buildInvoiceEmail = (data: any) => {
 </body></html>`;
 };
 
-const buildStatementEmail = (data: any) => {
+const buildStatementEmail = (data: any, lh: EmailLetterhead | null = null) => {
   const { client, assets, payments, period } = data;
   const totalPaid = (payments || []).filter((p: any) => p.payment_status === "completed").reduce((s: number, p: any) => s + (p.amount || 0), 0);
   const totalPending = (payments || []).filter((p: any) => p.payment_status === "pending").reduce((s: number, p: any) => s + (p.amount || 0), 0);
@@ -327,6 +336,7 @@ const buildStatementEmail = (data: any) => {
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="${baseStyle}">
 <div style="${cardStyle}">
+  ${letterheadEmailBlock(lh)}
   <div style="background:linear-gradient(135deg,#5b21b6 0%,#7c3aed 100%);border-radius:12px 12px 0 0;padding:28px 32px;">
     <h1 style="margin:0;font-size:22px;font-weight:800;color:#fff">Account Statement</h1>
     <p style="margin:6px 0 0;color:rgba(255,255,255,0.8);font-size:13px">${period || "All time"} · Generated ${new Date().toLocaleDateString("en-KE", { day: "numeric", month: "long", year: "numeric" })}</p>
@@ -374,7 +384,7 @@ const buildStatementEmail = (data: any) => {
     <p style="margin:0 0 16px;font-size:13px;color:#6b7280">${assets.length} asset(s) in portfolio</p>` : ""}
 
     <div style="background:#f8fafc;border-radius:8px;padding:16px;text-align:center">
-      <p style="margin:0;font-size:13px;color:#6b7280">This statement was generated automatically by <strong>Ararat Management</strong>.</p>
+      <p style="margin:0;font-size:13px;color:#6b7280">This statement was generated automatically by <strong>${lh ? escapeHtml(lh.name) : "Ararat Management"}</strong>.${contactLine(lh) ? ` Queries: ${escapeHtml(contactLine(lh))}` : ""}</p>
     </div>
   </div>
 </div>
@@ -1623,22 +1633,27 @@ serve(async (req) => {
     let subject = "";
     let html = "";
 
+    // Receipts, invoices, confirmations and statements carry the sending
+    // business's letterhead, looked up as the caller — see _shared/letterhead.ts.
+    const DOCUMENT_TYPES = ["payment_confirmation", "pos_receipt", "invoice", "statement"];
+    const lh = DOCUMENT_TYPES.includes(type) ? await letterheadForCaller(req, auth.caller) : null;
+
     switch (type) {
       case "payment_confirmation":
         subject = `Payment Confirmed – ${data?.transaction?.transactionId || data?.transaction?.transaction_id || "Receipt"}`;
-        html = buildPaymentConfirmationEmail(data);
+        html = buildPaymentConfirmationEmail(data, lh);
         break;
       case "pos_receipt":
-        subject = `Receipt ${data?.receiptNo || ""}${data?.company?.name ? ` – ${data.company.name}` : ""}`;
-        html = buildPosReceiptEmail(data);
+        subject = `Receipt ${data?.receiptNo || ""}${lh?.name ? ` – ${lh.name}` : data?.company?.name ? ` – ${data.company.name}` : ""}`;
+        html = buildPosReceiptEmail(data, lh);
         break;
       case "invoice":
-        subject = `Invoice ${data?.invoice?.invoiceNumber || data?.invoice?.invoice_number || ""} – Ararat Management`;
-        html = buildInvoiceEmail(data);
+        subject = `Invoice ${data?.invoice?.invoiceNumber || data?.invoice?.invoice_number || ""} – ${lh?.name || "Ararat Management"}`;
+        html = buildInvoiceEmail(data, lh);
         break;
       case "statement":
         subject = `Account Statement – ${data?.client?.full_name || data?.client?.name || "Your Account"}`;
-        html = buildStatementEmail(data);
+        html = buildStatementEmail(data, lh);
         break;
       case "payment_reminder":
         subject = data?.isOverdue

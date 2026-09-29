@@ -15,6 +15,7 @@
 import React, { useState } from 'react';
 import { posReceiptDocument, THERMAL, A4 } from '../../../utils/posReceiptDocument';
 import { printDocument } from '../../../utils/printDocument';
+import { useLetterhead } from '../../../hooks/useLetterhead';
 
 // The two papers a POS prints to. A till has an 80mm roll; the office printer
 // has A4, and only A4 carries the amortisation schedule and signature lines.
@@ -41,6 +42,9 @@ export const useReceiptPrinter = ({ buildArgs, printed = 0 } = {}) => {
   const [paper, setPaper]   = useState(THERMAL);
   const [copies, setCopies] = useState(printed);
   const [error, setError]   = useState('');
+  // Loaded before the button is pressed: the print has to be handed a finished
+  // page on the click, so the business's logo and details must already be here.
+  const { letterhead } = useLetterhead();
 
   const print = () => {
     setError('');
@@ -48,7 +52,7 @@ export const useReceiptPrinter = ({ buildArgs, printed = 0 } = {}) => {
     if (!args) { setError('This receipt is not ready to print yet.'); return; }
 
     const nextCopy = copies + 1;
-    const ok = printDocument(posReceiptDocument({ ...args, format: paper, copyNo: nextCopy }));
+    const ok = printDocument(posReceiptDocument({ letterhead, ...args, format: paper, copyNo: nextCopy }));
     if (!ok) {
       setError('The browser blocked the print window. Allow pop-ups for this site and try again.');
       return;

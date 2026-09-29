@@ -16,6 +16,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { clearTenantCache } from '../lib/tenant';
+import { clearLetterheadCache } from '../lib/letterhead';
 import { logger } from '../utils/logger';
 import { registerCurrentDevice } from '../services/deviceService';
 
@@ -160,6 +161,7 @@ export const AuthProvider = ({ children }) => {
     setUserProfile(null);
     setProfileLoading(false);
     clearTenantCache();
+    clearLetterheadCache();
   };
 
   // ── Device restriction ───────────────────────────────────────────────────────

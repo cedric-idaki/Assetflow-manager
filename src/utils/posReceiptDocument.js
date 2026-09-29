@@ -30,6 +30,9 @@
 
 import { html, rawHtml } from './htmlEscape';
 import { vatRateOn } from '../config/taxRegulations';
+import {
+  LETTERHEAD_STYLES, letterheadFromRecord, letterheadHtml, letterheadLines, mergeLetterhead,
+} from './letterhead';
 
 export const THERMAL = 'thermal';
 export const A4 = 'a4';
@@ -156,12 +159,22 @@ export const A4_STYLES = `
  * The seller block. A receipt for a VAT-charged supply has to name the supplier
  * and its PIN — without them the customer cannot claim the input tax the
  * receipt says they were charged.
+ *
+ * The tenant's letterhead (logo, motto, contact details — see
+ * src/utils/letterhead.js) leads; the company record the POS holds fills any
+ * gap. The record alone is not enough: company_profiles is readable only by the
+ * tenant owner, so at a cashier's till it is usually empty.
  */
-const issuerLines = (co) => [
-  co?.physical_address || co?.address || '',
-  [co?.phone, co?.email].filter(Boolean).join(' · '),
-  co?.kra_pin ? `KRA PIN: ${co.kra_pin}` : '',
-].filter(Boolean);
+const sellerOf = (letterhead, companyProfile) => {
+  const lh = mergeLetterhead(letterhead, letterheadFromRecord(companyProfile));
+  return {
+    name:   lh?.name || 'Ararat',
+    motto:  lh?.motto || '',
+    lines:  letterheadLines(lh, { layout: 'compact' }),
+    kraPin: lh?.kraPin || '',
+    letterhead: lh,
+  };
+};
 
 /**
  * What the receipt asserts, derived once from the sale as submitted.
@@ -176,6 +189,11 @@ export const buildPosReceipt = ({
   client,
   asset,
   companyProfile,
+  /**
+   * The tenant's letterhead (useLetterhead / fetchLetterhead). Optional — a
+   * receipt without one is headed from `companyProfile`, as it always was.
+   */
+  letterhead = null,
   schedule,
   invoiceNo,
   receiptNo,
@@ -222,11 +240,7 @@ export const buildPosReceipt = ({
     isDuplicate: copyNo > 1,
     // A receipt is a tax document only when tax was actually charged on it.
     isTaxReceipt: vat > 0,
-    issuer: {
-      name:   companyProfile?.company_name || companyProfile?.name || 'Ararat',
-      lines:  issuerLines(companyProfile),
-      kraPin: companyProfile?.kra_pin || '',
-    },
+    issuer: sellerOf(letterhead, companyProfile),
     receiptNo: receiptNo || '',
     invoiceNo: invoiceNo || '',
     // What names this document at the top of the page and in the footer. A sale
@@ -243,7 +257,7 @@ export const buildPosReceipt = ({
       kraPin:  buyerKraPin || client?.kra_pin || '',
     },
     item: {
-      description: asset?.description || 'Asset',
+      description: asset?.description || 'Inventory or service',
       code:        asset?.asset_code || '',
       type:        asset?.asset_type || '',
     },
@@ -440,8 +454,7 @@ const planBlock = (plan) => (plan ? rawHtml(html`
 /** 80mm roll — the till copy. */
 export const thermalBody = (r) => html`
   ${r.isDuplicate ? rawHtml(html`<div class="dup">DUPLICATE — COPY ${r.copyNo}</div>`) : ''}
-  <div class="co">${r.issuer.name}</div>
-  ${r.issuer.lines.map(l => rawHtml(html`<div class="co-line">${l}</div>`))}
+  ${rawHtml(letterheadHtml(r.issuer.letterhead, { variant: 'roll', fallbackName: r.issuer.name }))}
   <div class="title">${r.isTaxReceipt ? 'TAX RECEIPT' : 'OFFICIAL RECEIPT'}</div>
   <div class="rule"></div>
   ${optionalLine('Receipt', r.receiptNo, !!r.receiptNo)}
@@ -481,10 +494,7 @@ export const thermalBody = (r) => html`
 export const a4Body = (r) => html`
   ${r.isDuplicate ? rawHtml(html`<div class="dup">DUPLICATE — COPY ${r.copyNo}</div>`) : ''}
   <div class="head">
-    <div>
-      <div class="co">${r.issuer.name}</div>
-      ${r.issuer.lines.map(l => rawHtml(html`<div class="co-line">${l}</div>`))}
-    </div>
+    ${rawHtml(letterheadHtml(r.issuer.letterhead, { fallbackName: r.issuer.name }))}
     <div>
       <div class="title">${r.isTaxReceipt ? 'TAX RECEIPT' : 'OFFICIAL RECEIPT'}</div>
       <div class="co-line r">${r.docRef}</div>
@@ -549,7 +559,7 @@ export const posReceiptDocument = ({ format = THERMAL, ...sale } = {}) => {
 
   return html`<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><title>${title}</title>
-<style>${rawHtml(isA4 ? A4_STYLES : THERMAL_STYLES)}</style></head>
+<style>${rawHtml((isA4 ? A4_STYLES : THERMAL_STYLES) + LETTERHEAD_STYLES)}</style></head>
 <body>${rawHtml(body)}</body></html>`;
 };
 

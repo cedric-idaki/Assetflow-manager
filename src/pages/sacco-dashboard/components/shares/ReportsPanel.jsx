@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useToast } from '../../../../components/Toast';
 import Icon from '../../../../components/AppIcon';
 import { Card, Table, PrimaryButton, GhostButton, EmptyState, KES, fmtDate } from '../_shared';
+import PrintLetterhead from '../../../../components/documents/PrintLetterhead';
 import { KESshort, pct, int, num, memberPosition, TXN_LABELS } from './_util';
 
 /**
@@ -283,6 +284,7 @@ const ReportsPanel = ({ ctx, ov }) => {
 
   return (
     <div className="space-y-6">
+      <PrintLetterhead />
       <Card title="Reports" subtitle="Built from the share ledger — preview on screen, export as CSV">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           {Object.entries(reports).map(([id, r]) => (

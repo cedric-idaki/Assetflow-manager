@@ -3,6 +3,8 @@ import { useToast } from '../../../components/Toast';
 import Icon from '../../../components/AppIcon';
 import { generateSchedule } from '../../../utils/saccoAmortization';
 import { buildLoanRepaymentReceipt, downloadAccountingDocument } from '../../../utils/accountingDocument';
+import { useMemberReceiptLinks } from '../../../hooks/useMemberReceiptLinks';
+import { downloadSaccoReceipt } from '../../sacco-dashboard/components/receipts/receiptActions';
 import {
   Card, StatCard, Badge, Table, EmptyState, PrimaryButton, GhostButton,
   Modal, Field, TextInput, NumberInput, Select, KES, fmtDate,
@@ -174,15 +176,23 @@ const LoansTab = ({ ctx }) => {
    *
    * The loan row carries no member join here (every loan on this page is mine),
    * so `me` is attached for the borrower block.
+   *
+   * An instalment the society took through its receipt desk hands over the
+   * official receipt instead — the one with the number, method and reference
+   * the treasurer recorded.
    */
+  const receiptLinks = useMemberReceiptLinks(me?.id, schedules.filter((s) => s.paid).length);
   const downloadReceipt = async (loan, row) => {
     setReceipting(row.id);
     try {
-      const filename = await downloadAccountingDocument(buildLoanRepaymentReceipt({
-        installment: row,
-        loan: { ...loan, member: loan.member || me },
-        sacco,
-      }));
+      const official = receiptLinks.bySchedule.get(row.id);
+      const filename = official
+        ? await downloadSaccoReceipt(official.id, sacco)
+        : await downloadAccountingDocument(buildLoanRepaymentReceipt({
+          installment: row,
+          loan: { ...loan, member: loan.member || me },
+          sacco,
+        }));
       toast.success(filename, 'Downloaded');
     } catch (e) {
       toast.error(e.message, 'Could not generate the receipt');
@@ -365,9 +375,11 @@ const LoansTab = ({ ctx }) => {
                                   <button
                                     onClick={() => downloadReceipt(l, r)}
                                     disabled={receipting === r.id}
-                                    title={r.paid
-                                      ? `Download the receipt for installment ${r.period_no}`
-                                      : `Download the notice for installment ${r.period_no}`}
+                                    title={receiptLinks.bySchedule.get(r.id)
+                                      ? `Download receipt ${receiptLinks.bySchedule.get(r.id).receipt_no}`
+                                      : r.paid
+                                        ? `Download the receipt for installment ${r.period_no}`
+                                        : `Download the notice for installment ${r.period_no}`}
                                     className="align-middle text-muted-foreground hover:text-foreground disabled:opacity-60"
                                   >
                                     <Icon name={receipting === r.id ? 'Loader' : 'Download'} size={13} color="currentColor"

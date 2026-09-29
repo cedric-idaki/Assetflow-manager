@@ -9,6 +9,7 @@ import OverviewTab      from './components/OverviewTab';
 import MembersTab       from './components/MembersTab';
 import ContributionsTab from './components/ContributionsTab';
 import LoansTab         from './components/LoansTab';
+import ReceiptsTab      from './components/receipts/ReceiptsTab';
 import SharesTab        from './components/shares';
 import AssetRegisterTab from './components/assets';
 import VotingTab        from './components/VotingTab';
@@ -65,6 +66,7 @@ const SaccoDashboard = () => {
     { id: 'members',       label: 'Members',       icon: 'Users' },
     { id: 'contributions', label: 'Contributions', icon: 'PiggyBank', badge: stats.pendingContributions },
     { id: 'loans',         label: 'Loans',         icon: 'Banknote' },
+    { id: 'receipts',      label: 'Receipts',      icon: 'Receipt' },
     { id: 'collateral',    label: 'Collateral',    icon: 'ShieldCheck' },
     { id: 'assets',        label: 'Assets',        icon: 'Package' },
     // Shares lives in the left sidebar now (still rendered here via ?tab=shares).
@@ -140,6 +142,7 @@ const SaccoDashboard = () => {
             {activeTab === 'members'       && <MembersTab ctx={ctx} />}
             {activeTab === 'contributions' && <ContributionsTab ctx={ctx} />}
             {activeTab === 'loans'         && <LoansTab ctx={ctx} />}
+            {activeTab === 'receipts'      && <ReceiptsTab ctx={ctx} />}
             {activeTab === 'collateral'    && <CollateralReviewTab sacco={sacco} />}
             {activeTab === 'shares'        && <SharesTab ctx={ctx} />}
             {activeTab === 'assets'        && <AssetRegisterTab ctx={ctx} />}

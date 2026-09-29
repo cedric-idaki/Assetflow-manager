@@ -6,6 +6,8 @@
  * the ledger can never drift apart.
  */
 import { KES } from '../_shared';
+import { letterheadContactLine, letterheadFromRecord, mergeLetterhead } from '../../../../utils/letterhead';
+import { currentLetterhead } from '../../../../lib/letterhead';
 
 export const today = () => new Date().toISOString().slice(0, 10);
 
@@ -258,12 +260,19 @@ export const memberPosition = (holding, effectivePrice, totalIssued) => {
  * the browser's print dialog — the same approach as the sacco invoice, which
  * keeps certificates dependency-free and lets the member "print to PDF".
  */
-export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketValue }) => {
+export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketValue, letterhead }) => {
   const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const shares = int(cert.shares);
   const issued = cert.issue_date ? new Date(cert.issue_date) : new Date(cert.created_at);
   const value = shares * (num(marketValue) || num(cert.par_value));
+  // The society's letterhead: its logo beside the name, its motto under it.
+  const lh = mergeLetterhead(
+    letterhead === undefined ? currentLetterhead() : letterhead,
+    letterheadFromRecord({ name: saccoName }),
+  );
+  const society = lh?.name || saccoName || 'Sacco Society';
+  const contact = letterheadContactLine(lh);
 
   return `<!doctype html><html><head><meta charset="utf-8">
 <title>Share Certificate ${esc(cert.certificate_no)}</title>
@@ -277,7 +286,10 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
   .wm{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);
       font-size:120px;font-weight:800;color:rgba(29,168,197,.05);letter-spacing:8px;white-space:nowrap;}
   .top{display:flex;justify-content:space-between;align-items:flex-start;}
+  .brand{display:flex;align-items:center;gap:14px;}
+  .brand img{display:block;max-height:64px;max-width:140px;object-fit:contain;}
   .sacco{font-size:26px;font-weight:800;letter-spacing:.5px;}
+  .motto{font-size:12px;font-style:italic;color:#5c7c88;margin-top:2px;}
   .sub{font-size:11px;text-transform:uppercase;letter-spacing:3px;color:#5c7c88;margin-top:4px;}
   .certno{text-align:right;font-size:12px;color:#5c7c88;}
   .certno b{display:block;font-size:18px;color:#0f2733;letter-spacing:1px;}
@@ -301,12 +313,16 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
         color:rgba(220,38,38,.18);letter-spacing:14px;transform:rotate(-8deg);}
 </style></head><body>
   <div class="sheet"><div class="frame">
-    <div class="wm">${esc(saccoName || 'SACCO')}</div>
+    <div class="wm">${esc(society || 'SACCO')}</div>
     ${cert.status !== 'active' ? `<div class="void">${esc(cert.status).toUpperCase()}</div>` : ''}
     <div class="top">
-      <div>
-        <div class="sacco">${esc(saccoName || 'Sacco Society')}</div>
-        <div class="sub">Share Certificate</div>
+      <div class="brand">
+        ${lh?.logo ? `<img src="${esc(lh.logo.src)}" alt="">` : ''}
+        <div>
+          <div class="sacco">${esc(society)}</div>
+          ${lh?.motto ? `<div class="motto">${esc(lh.motto)}</div>` : ''}
+          <div class="sub">Share Certificate</div>
+        </div>
       </div>
       <div class="certno">
         Certificate No.<b>${esc(cert.certificate_no)}</b>
@@ -341,6 +357,7 @@ export const certificateHtml = (cert, { saccoName, memberName, memberNo, marketV
     </div>
 
     <div class="foot">
+      ${contact ? `${esc(society)} · ${esc(contact)}<br>` : ''}
       Generated ${new Date().toLocaleString('en-KE')}
       ${cert.serial
         ? `· Verify serial <strong>${esc(cert.serial)}</strong> in the Ararat certificate register to confirm this document is genuine.`

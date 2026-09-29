@@ -3,6 +3,9 @@ import {
   Card, Badge, Table, EmptyState, GhostButton, PrimaryButton,
   Field, TextInput, Select, KES, fmtDate,
 } from '../../sacco-dashboard/components/_shared';
+import { useLetterhead } from '../../../hooks/useLetterhead';
+import { memberStatementDocument } from '../../../utils/memberStatementDocument';
+import { printDocument } from '../../../utils/printDocument';
 
 const TYPES = [
   { id: 'contributions', label: 'Contribution statement' },
@@ -17,6 +20,10 @@ const StatementTab = ({ ctx }) => {
   const [type, setType] = useState('combined');
   const [from, setFrom] = useState('');
   const [to, setTo]     = useState('');
+  const [printError, setPrintError] = useState('');
+  // The society's letterhead — its logo, motto and contact details head the
+  // printed statement.
+  const { letterhead } = useLetterhead();
 
   const inRange = (d) => {
     if (!d) return true;
@@ -78,6 +85,24 @@ const StatementTab = ({ ctx }) => {
   const held = parseInt(shares?.shares_held, 10) || 0;
   const ref = `ST-${(me?.member_no || 'M').replace(/\s+/g, '')}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
 
+  // A statement is a document, so it prints as one: the society's letterhead,
+  // the member, the period and the rows — not the portal screen around them.
+  const printStatement = () => {
+    setPrintError('');
+    const ok = printDocument(memberStatementDocument({
+      letterhead,
+      sacco,
+      member: me || {},
+      title: TYPES.find((t) => t.id === type)?.label || 'Member statement',
+      from,
+      to,
+      reference: ref,
+      rows: data,
+      note: type === 'shares' ? `Current holding: ${held.toLocaleString()} shares` : '',
+    }));
+    if (!ok) setPrintError('The browser blocked printing. Allow pop-ups for this site and try again.');
+  };
+
   const exportRows = () => exportCSV(
     data.map((r) => ({
       date: String(r.date || '').slice(0, 10), reference: r.ref || '',
@@ -92,11 +117,13 @@ const StatementTab = ({ ctx }) => {
       subtitle={`${sacco?.name || 'Sacco'} · ${me?.full_name || ''} (${me?.member_no || '—'}) · Ref ${ref}`}
       actions={
         <div className="flex items-center gap-2">
-          <GhostButton icon="Printer" onClick={() => window.print()}>Print / PDF</GhostButton>
+          <GhostButton icon="Printer" onClick={printStatement}>Print / PDF</GhostButton>
           <PrimaryButton icon="Download" onClick={exportRows} disabled={data.length === 0}>Export CSV</PrimaryButton>
         </div>
       }
     >
+      {printError && <p className="text-sm text-red-600 mb-3">{printError}</p>}
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
         <Field label="Statement type">
           <Select value={type} onChange={(e) => setType(e.target.value)}>

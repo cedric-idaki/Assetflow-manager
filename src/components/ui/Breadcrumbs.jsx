@@ -9,7 +9,7 @@ const Breadcrumbs = () => {
 
   const breadcrumbMap = {
     'role-based-dashboard': 'Dashboard',
-    'asset-client-management': 'Assets & Clients',
+    'asset-client-management': 'Inventory & Clients',
     'payment-collections-hub': 'Payments & Collections',
     'sales-agent-portal': 'Sales Portal',
     'reports-analytics-center': 'Reports & Analytics',
