@@ -6,7 +6,7 @@
 // handled manually below by checking the caller's role against CAN_CREATE.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { openRequest } from '../_shared/http.ts';
+import { ApiError, openRequest } from '../_shared/http.ts';
 
 const API_VERSIONS = ['2026-08-21'];
 
@@ -298,7 +298,27 @@ Deno.serve(async (req) => {
       if (msg.includes('already registered') || msg.includes('already exists')) {
         return json({ error: 'A user with this email already exists.' }, 409);
       }
-      throw createErr;
+      // A 4xx from the auth server is about the request (bad email format,
+      // rejected password, blocked domain) and its message is written for the
+      // caller — pass it through instead of collapsing it into internal_error,
+      // which left the admin with nothing to act on.
+      const authStatus = (createErr as { status?: number }).status ?? 500;
+      if (authStatus >= 400 && authStatus < 500) {
+        throw new ApiError(createErr.message, authStatus, (createErr as { code?: string }).code || 'auth_rejected');
+      }
+      // A 5xx here is almost always a database trigger on auth.users failing.
+      // The detail still goes only to the log; the caller learns which step broke.
+      console.error('create-staff-user: auth.admin.createUser failed', {
+        requestId: api.requestId,
+        status: authStatus,
+        code: (createErr as { code?: string }).code,
+        message: createErr.message,
+      });
+      throw new ApiError(
+        `The login account could not be created (auth server error). Reference ${api.requestId}.`,
+        502,
+        'auth_create_failed',
+      );
     }
 
     const newUserId = newUser.user.id;

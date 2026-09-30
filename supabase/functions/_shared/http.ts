@@ -141,12 +141,20 @@ const EXPOSED = [
  * credentialed request browsers ignore the wildcard entirely, so being explicit
  * is also more correct. supabase-js sends apikey / authorization / x-client-info;
  * the rest are ours.
+ *
+ * The x-client-* and x-device-id headers are set globally on the app's client
+ * (src/lib/supabase.js), so they ride along on EVERY functions.invoke. Leave one
+ * out and the browser fails the preflight for every function at once, which
+ * supabase-js reports only as "Failed to send a request to the Edge Function".
  */
 const ALLOWED_REQUEST_HEADERS = [
   "authorization",
   "apikey",
   "content-type",
   "x-client-info",
+  "x-client-name",
+  "x-client-version",
+  "x-device-id",
   "x-api-key",
   "x-api-version",
   "x-request-id",
