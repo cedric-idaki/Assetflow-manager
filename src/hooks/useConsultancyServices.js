@@ -41,6 +41,10 @@ export const friendlyError = (err) => {
   if (said.includes('consultancy_engagements_service_id_fkey')) {
     return 'Clients are mapped to this service. Retire it instead, or remove its client mappings first.';
   }
+  // 20260930120000: a service sold at the POS keeps its sales on record.
+  if (said.includes('sales_consultancy_service_id_fkey')) {
+    return 'This service has been sold at the Point of Sale. Retire it instead, so its sales stay on record.';
+  }
   if (said.includes('consultancy_engagements_dates_chk')) return 'The end date cannot be before the start date.';
   return err?.message || 'Something went wrong. Please try again.';
 };

@@ -2,7 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import MainLayout from '../../layouts/MainLayout';
 import ClosePageButton from '../../components/ui/ClosePageButton';
 import Icon from '../../components/AppIcon';
-import { usePOS, buildInstallmentSchedule, vatFractionOn, vatPercentOn } from '../../hooks/usePOS';
+import {
+  usePOS, buildInstallmentSchedule, vatFractionOn, vatPercentOn,
+  isCatalogueLine, catalogueItemDescription,
+} from '../../hooks/usePOS';
 import { generateReceiptPDF } from '../../utils/generateReceiptPDF';
 import { useReceiptPrinter, PaperPicker } from './components/ReceiptPrinter';
 import ReceiptShare from './components/ReceiptShare';
@@ -31,6 +34,10 @@ const PAYMENT_METHODS = [
 ];
 
 const TENURE_OPTIONS = [3, 6, 12, 18, 24, 36, 48, 60].map(m => ({ value: m, label: `${m} months` }));
+
+// A Services-catalogue line, or an Inventory item registered as a service.
+const isServiceCard = (a) => isCatalogueLine(a)
+  || ['service', 'services'].includes(String(a?.asset_type || '').toLowerCase());
 
 const LARGE_TXN_THRESHOLD = 50000;
 const DISCOUNT_APPROVAL_THRESHOLD = 10;
@@ -241,7 +248,7 @@ const ReceiptModal = ({ result, client, asset, saleData, companyProfile, cashier
 // ══════════════════════════════════════════════════════════════════════════════
 const POSModule = () => {
   const {
-    adminId, clients, assets, companyProfile, loading, submitting, error: hookError,
+    adminId, clients, assets, serviceLines, companyProfile, loading, submitting, error: hookError,
     submitSale, createCashCustomer,
   } = usePOS();
 
@@ -275,8 +282,13 @@ const POSModule = () => {
   const isCashCustomer = selectedClient?.customer_type === 'cash';
 
   const [assetSearch, setAssetSearch]   = useState('');
+  // Which list the item picker shows: everything, stock, or services (the
+  // Services catalogue plus Inventory items registered as a service).
+  const [itemKind, setItemKind]         = useState('all');
   const [selectedAsset, setSelectedAsset] = useState(null);
   const selectedIsService = ['service', 'services'].includes(String(selectedAsset?.asset_type || '').toLowerCase());
+  const selectedIsCatalogue = isCatalogueLine(selectedAsset);
+  // Hours or units, for a catalogue price option charged per hour or per unit.
   const [quantity, setQuantity]           = useState(1);
 
   const [pricingModel, setPricingModel]   = useState('installment');
@@ -305,6 +317,7 @@ const POSModule = () => {
     if (selectedAsset) {
       const serviceSale = ['service', 'services'].includes(String(selectedAsset.asset_type || '').toLowerCase());
       if (serviceSale) setPricingModel('cash');
+      setQuantity(1);
       setSellingPrice(String(selectedAsset.selling_price || ''));
       setInterestRate(String(selectedAsset.installment_interest_rate || '12'));
       setVatApplicable(selectedAsset.vat_applicable !== false);
@@ -367,15 +380,54 @@ const POSModule = () => {
     ).slice(0, 10);
   }, [clients, clientSearch]);
 
+  // Services lead the full list: a firm has a handful, and behind a page of
+  // stock they would never be seen without a search.
+  const saleItems = useMemo(() => {
+    const services = [...serviceLines, ...assets.filter(isServiceCard)];
+    const stock    = assets.filter(a => !isServiceCard(a));
+    if (itemKind === 'services')  return services;
+    if (itemKind === 'inventory') return stock;
+    return [...services, ...stock];
+  }, [assets, serviceLines, itemKind]);
+  const itemCounts = useMemo(() => {
+    const inventoryServices = assets.filter(isServiceCard).length;
+    return {
+      all:       serviceLines.length + assets.length,
+      services:  serviceLines.length + inventoryServices,
+      inventory: assets.length - inventoryServices,
+    };
+  }, [assets, serviceLines]);
+
   const filteredAssets = useMemo(() => {
-    if (!assetSearch) return assets.slice(0, 12);
+    if (!assetSearch) return saleItems.slice(0, 12);
     const q = assetSearch.toLowerCase();
-    return assets.filter(a =>
+    return saleItems.filter(a =>
       a.description?.toLowerCase().includes(q) ||
       a.asset_code?.toLowerCase().includes(q) ||
-      a.asset_type?.toLowerCase().includes(q)
+      a.asset_type?.toLowerCase().includes(q) ||
+      a.option_label?.toLowerCase().includes(q) ||
+      a.category?.toLowerCase().includes(q)
     ).slice(0, 12);
-  }, [assets, assetSearch]);
+  }, [saleItems, assetSearch]);
+
+  // What the receipt, the PDF and the sale record say was sold. For a
+  // catalogue service that is the service, its price option and — per hour or
+  // per unit — how many; for Inventory it is the item's own description.
+  const itemDescription = useMemo(
+    () => (selectedIsCatalogue ? catalogueItemDescription(selectedAsset, quantity) : (selectedAsset?.description || '')),
+    [selectedAsset, selectedIsCatalogue, quantity]);
+  const saleItem = useMemo(
+    () => (selectedIsCatalogue ? { ...selectedAsset, description: itemDescription } : selectedAsset),
+    [selectedAsset, selectedIsCatalogue, itemDescription]);
+
+  // Per hour / per unit: the price follows the count, and stays editable.
+  const changeQuantity = (value) => {
+    setQuantity(value);
+    const n = parseFloat(value);
+    if (selectedAsset?.per_quantity && n > 0) {
+      setSellingPrice(String(Math.round((selectedAsset.unit_rate || 0) * n * 100) / 100));
+    }
+  };
 
   const validateStep = (s) => {
     const e = {};
@@ -387,6 +439,9 @@ const POSModule = () => {
       if (!selectedAsset) e.asset = 'Please select inventory or a service';
     }
     if (s === 3) {
+      if (selectedAsset?.per_quantity && !(parseFloat(quantity) > 0)) {
+        e.quantity = `Enter how many ${selectedAsset.quantity_unit}s`;
+      }
       if (!sellingPrice || parseFloat(sellingPrice) <= 0) e.sellingPrice = 'Selling price is required';
       const minPrice = selectedAsset?.min_selling_price;
       if (minPrice && parseFloat(sellingPrice) < minPrice) e.sellingPrice = `Minimum selling price is ${fmt(minPrice)}`;
@@ -442,6 +497,12 @@ const POSModule = () => {
       const isManagerRole = ['admin', 'manager', 'director'].includes(currentProfile?.role);
       setCashier(currentProfile?.full_name || currentUser.email || '');
 
+      // What an approver is being asked about. A catalogue line's id is the
+      // till's own key, not a row anywhere, so it names the service instead.
+      const approvalEntity   = selectedIsCatalogue ? 'consultancy_services' : 'assets';
+      const approvalEntityId = selectedIsCatalogue ? selectedAsset.consultancy_service_id : selectedAsset?.id;
+      const approvalAssetId  = selectedIsCatalogue ? null : selectedAsset?.id;
+
       if (totalAmount > LARGE_TXN_THRESHOLD && !isManagerRole) {
         const ref = `TXN-${Date.now().toString(36).toUpperCase()}`;
         // `high_value_transaction`, not `large_transaction` — the latter is not
@@ -450,20 +511,21 @@ const POSModule = () => {
         const { error: qErr } = await supabase.from('maker_checker_queue').insert({
           action_type:     'high_value_transaction',
           title:           `Large Transaction — ${fmt(totalAmount)} for ${selectedClient?.full_name || 'walk-in sale'}`,
-          description:     `Sales agent requesting approval for ${pricingModel === 'cash' ? 'cash sale' : 'hire purchase'} of ${selectedAsset?.description} valued at ${fmt(totalAmount)}. Exceeds ${fmt(LARGE_TXN_THRESHOLD)} threshold.`,
+          description:     `Sales agent requesting approval for ${pricingModel === 'cash' ? 'cash sale' : 'hire purchase'} of ${itemDescription} valued at ${fmt(totalAmount)}. Exceeds ${fmt(LARGE_TXN_THRESHOLD)} threshold.`,
           initiator_id:    currentUser.id,
           initiator_name:  currentProfile?.full_name || currentUser.email,
           initiator_role:  currentProfile?.role || 'sales_agent',
           status:          'pending',
           priority:        totalAmount > 200000 ? 'high' : 'medium',
-          affected_entity: 'assets',
-          affected_entity_id: selectedAsset?.id,
+          affected_entity: approvalEntity,
+          affected_entity_id: approvalEntityId,
           admin_id:        currentProfile?.admin_id || currentUser.id,
           change_details: {
             ref,
             client_id:      selectedClient?.id,
             client_name:    selectedClient?.full_name,
-            asset_id:       selectedAsset?.id,
+            asset_id:       approvalAssetId,
+            consultancy_service_id: selectedAsset?.consultancy_service_id || null,
             total_amount:   totalAmount,
             pricing_model:  pricingModel,
             deposit_amount: parseFloat(depositAmount) || 0,
@@ -500,22 +562,23 @@ const POSModule = () => {
           // 20260909120000 added it, so every one of these was rejected too.
           const { error: qErr } = await supabase.from('maker_checker_queue').insert({
             action_type:      'discount_approval',
-            title:            `Discount Approval — ${discPct}% on ${selectedAsset?.description}`,
-            description:      `Sales agent requesting ${discPct}% discount (${fmt(discountAmount)}) on ${selectedAsset?.description} for ${selectedClient?.full_name || 'walk-in sale'}. Reason: ${discountReason || 'Not provided'}`,
+            title:            `Discount Approval — ${discPct}% on ${itemDescription}`,
+            description:      `Sales agent requesting ${discPct}% discount (${fmt(discountAmount)}) on ${itemDescription} for ${selectedClient?.full_name || 'walk-in sale'}. Reason: ${discountReason || 'Not provided'}`,
             initiator_id:     user.id,
             initiator_name:   profile?.full_name || user.email,
             initiator_role:   profile?.role || 'sales_agent',
             status:           'pending',
             priority:         discPct > 15 ? 'high' : 'medium',
-            affected_entity:  'assets',
-            affected_entity_id: selectedAsset?.id,
+            affected_entity:  approvalEntity,
+            affected_entity_id: approvalEntityId,
             admin_id:         profile?.admin_id || user.id,
             is_bulk_eligible: true,
             change_details: {
               ref,
               client_id:       selectedClient?.id,
               client_name:     selectedClient?.full_name,
-              asset_id:        selectedAsset?.id,
+              asset_id:        approvalAssetId,
+              consultancy_service_id: selectedAsset?.consultancy_service_id || null,
               selling_price:   parseFloat(sellingPrice),
               discount_pct:    discPct,
               discount_amount: discountAmount,
@@ -561,6 +624,7 @@ const POSModule = () => {
         schedule:        schedule?.schedule,
         scheduleSummary: schedule?.summary,
         buyerKraPin,
+        itemDescription,
       });
       setReceipt(result);
     } catch (err) {
@@ -597,7 +661,7 @@ const POSModule = () => {
         <ReceiptModal
           result={receipt}
           client={selectedClient}
-          asset={selectedAsset}
+          asset={saleItem}
           saleData={{
             pricingModel, sellingPrice: parseFloat(sellingPrice),
             discountAmount, discountPct, discountReason,
@@ -858,6 +922,22 @@ const POSModule = () => {
                     placeholder="Search inventory and services..."
                     className="w-full pl-9 pr-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground placeholder:text-muted-foreground" />
                 </div>
+                <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Show">
+                  {[
+                    { value: 'all',       label: 'All' },
+                    { value: 'inventory', label: 'Inventory' },
+                    { value: 'services',  label: 'Services' },
+                  ].map(k => (
+                    <button key={k.value} type="button" role="tab" aria-selected={itemKind === k.value}
+                      onClick={() => setItemKind(k.value)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                        itemKind === k.value
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-background text-muted-foreground border-border hover:bg-muted'}`}>
+                      {k.label} ({itemCounts[k.value]})
+                    </button>
+                  ))}
+                </div>
                 {errors.asset && (
                   <p className="text-xs text-red-500 flex items-center gap-1">
                     <Icon name="AlertCircle" size={12} color="#ef4444" /> {errors.asset}
@@ -867,10 +947,29 @@ const POSModule = () => {
                   {filteredAssets.length === 0 ? (
                     <div className="col-span-3 text-center py-10 text-muted-foreground">
                       <Icon name="Package" size={28} color="currentColor" />
-                      <p className="text-sm mt-2">No available inventory or services</p>
+                      <p className="text-sm mt-2">
+                        {itemKind === 'services'
+                          ? 'No services on offer. Add them under Inventory & Clients → Services.'
+                          : 'No available inventory or services'}
+                      </p>
                     </div>
                   ) : filteredAssets.map(a => {
                     const isSelected = selectedAsset?.id === a.id;
+                    if (isCatalogueLine(a)) return (
+                      <button key={a.id} onClick={() => setSelectedAsset(a)}
+                        className={`p-4 rounded-xl border-2 text-left transition-all ${isSelected ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40 hover:bg-muted/30'}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-mono text-muted-foreground">{a.asset_code}{a.category ? ` · ${a.category}` : ''}</span>
+                          {isSelected ? <Icon name="CheckCircle" size={16} color="#1A56DB" /> : <Icon name="Briefcase" size={14} color="var(--color-muted-foreground)" />}
+                        </div>
+                        <p className="font-semibold text-sm text-foreground leading-snug">{a.description}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">Service · {a.option_label}</p>
+                        {a.selling_price > 0
+                          ? <p className="text-base font-bold text-foreground mt-2">{fmt(a.selling_price)}</p>
+                          : <p className="text-sm font-semibold text-foreground mt-2">Price entered at sale</p>}
+                        {a.terms_headline && <p className="text-xs text-muted-foreground">{a.terms_headline}</p>}
+                      </button>
+                    );
                     return (
                       <button key={a.id} onClick={() => setSelectedAsset(a)}
                         className={`p-4 rounded-xl border-2 text-left transition-all ${isSelected ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40 hover:bg-muted/30'}`}>
@@ -933,7 +1032,31 @@ const POSModule = () => {
                     })}
                   </div>
                 </div>
+                {selectedIsCatalogue && (
+                  <div className="bg-muted/30 border border-border rounded-xl p-3 text-sm">
+                    <p className="font-semibold text-foreground">{selectedAsset.description} — {selectedAsset.option_label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {selectedAsset.terms_headline
+                        ? `List price: ${selectedAsset.terms_headline}`
+                        : 'This service has no list price — enter what the customer is paying.'}
+                      {!(selectedAsset.selling_price > 0) && selectedAsset.terms_headline && ' — enter the fee due for this sale.'}
+                    </p>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {selectedAsset?.per_quantity && (
+                    <div>
+                      <label className="block text-xs font-semibold text-muted-foreground mb-1 capitalize">
+                        {selectedAsset.quantity_unit}s *
+                      </label>
+                      <input type="number" min="0" step="any" value={quantity}
+                        onChange={e => changeQuantity(e.target.value)} className={ic(errors.quantity)} />
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {fmt(selectedAsset.unit_rate)} per {selectedAsset.quantity_unit}
+                      </p>
+                      {errors.quantity && <p className="text-xs text-red-500 mt-0.5">{errors.quantity}</p>}
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-semibold text-muted-foreground mb-1">Selling Price (KES) *</label>
                     <input type="number" value={sellingPrice} onChange={e => setSellingPrice(e.target.value)} placeholder="0.00" className={ic(errors.sellingPrice)} />
@@ -1121,8 +1244,10 @@ const POSModule = () => {
                 )}
                 <div className="bg-muted/30 border border-border rounded-xl p-4 space-y-1">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{['service', 'services'].includes(String(selectedAsset?.asset_type || '').toLowerCase()) ? 'Service' : 'Inventory'}</p>
-                  <p className="font-semibold text-foreground">{selectedAsset?.description}</p>
-                  <p className="text-xs text-muted-foreground">{selectedAsset?.asset_code} · {selectedAsset?.asset_type}</p>
+                  <p className="font-semibold text-foreground">{itemDescription}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {selectedAsset?.asset_code} · {selectedIsCatalogue ? 'Services catalogue' : selectedAsset?.asset_type}
+                  </p>
                 </div>
                 <div className="bg-muted/30 border border-border rounded-xl p-4 space-y-2 text-sm">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Financial Terms</p>

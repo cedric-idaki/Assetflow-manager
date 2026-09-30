@@ -14,6 +14,9 @@ import { downloadSaccoReceipt } from './receipts/receiptActions';
 import BorrowingPolicyCard from './BorrowingPolicyCard';
 import GuaranteePolicyCard from './GuaranteePolicyCard';
 import GuaranteeRegisterCard from './GuaranteeRegisterCard';
+import ApprovalSettingsCard from './loanApproval/ApprovalSettingsCard';
+import LoanApprovalModal from './loanApproval/LoanApprovalModal';
+import { fetchApprovalConfig, fetchStepsForLoans, approvalProgress } from '../../../services/loanApprovalService';
 import {
   Card, StatCard, Table, Badge, PrimaryButton, GhostButton, Modal, Field,
   TextInput, NumberInput, Select, EmptyState, KES, fmtDate,
@@ -113,6 +116,35 @@ const LoansTab = ({ ctx }) => {
   });
   const loans = loanPage.rows;
 
+  /**
+   * The approval workflow. When the sacco has levels, a pending loan is
+   * decided level by level in LoanApprovalModal and only reaches "approved";
+   * Disburse then generates the schedule. Without levels the old one-click
+   * Approve stays. The database enforces this either way — these flags only
+   * pick which buttons to show.
+   */
+  const [hasWorkflow, setHasWorkflow] = useState(false);
+  const [stepsByLoan, setStepsByLoan] = useState(() => new Map());
+  const [approvalLoan, setApprovalLoan] = useState(null);
+
+  const loadWorkflow = useCallback(async () => {
+    if (!sacco?.id) return;
+    try {
+      const cfg = await fetchApprovalConfig(sacco.id);
+      setHasWorkflow(cfg.levels.some((l) => l.is_active !== false));
+    } catch { setHasWorkflow(false); }
+  }, [sacco?.id]);
+  useEffect(() => { loadWorkflow(); }, [loadWorkflow]);
+
+  const loanIdsKey = loans.map((l) => l.id).join(',');
+  useEffect(() => {
+    let cancelled = false;
+    fetchStepsForLoans(loanIdsKey ? loanIdsKey.split(',') : [])
+      .then((m) => { if (!cancelled) setStepsByLoan(m); })
+      .catch(() => { if (!cancelled) setStepsByLoan(new Map()); });
+    return () => { cancelled = true; };
+  }, [loanIdsKey, loanPage.rows]);
+
   const [loanOpen, setLoanOpen] = useState(false);
   const [prodOpen, setProdOpen] = useState(false);
   const [scheduleLoan, setScheduleLoan] = useState(null);
@@ -178,7 +210,9 @@ const LoansTab = ({ ctx }) => {
     try {
       await approveLoan(loan);
       loanPage.refresh();
-      toast.success('Loan approved — amortization schedule generated.');
+      toast.success(loan.status === 'approved'
+        ? 'Loan disbursed — amortization schedule generated.'
+        : 'Loan approved — amortization schedule generated.');
     } catch (e) { toast.error(e.message || 'Approval failed.'); }
   };
   const doReject = async (loan) => {
@@ -333,6 +367,9 @@ const LoansTab = ({ ctx }) => {
       {/* The guarantees themselves, and getting each one executed */}
       <GuaranteeRegisterCard ctx={ctx} />
 
+      {/* Who must approve a loan, in what order, confirmed by OTP */}
+      <ApprovalSettingsCard saccoId={sacco?.id} onSaved={loadWorkflow} />
+
       {/* Loans */}
       <Card
         title="Loans" subtitle={`${(stats?.totalLoans ?? 0).toLocaleString('en-KE')} total`}
@@ -361,15 +398,32 @@ const LoansTab = ({ ctx }) => {
                 <td className="py-2.5 pr-4 text-muted-foreground">{l.term_months} mo</td>
                 <td className="py-2.5 pr-4"><Badge status={l.status} /></td>
                 <td className="py-2.5 pr-0 text-right whitespace-nowrap">
-                  {l.status === 'pending' && (
-                    <>
-                      <button onClick={() => doApprove(l)} className="text-xs text-emerald-600 font-semibold hover:underline mr-3">Approve</button>
-                      <button onClick={() => doReject(l)} className="text-xs text-red-600 font-semibold hover:underline">Reject</button>
-                    </>
-                  )}
-                  {(l.status === 'active' || l.status === 'closed') && (
-                    <button onClick={() => setScheduleLoan(l)} className="text-xs text-primary font-semibold hover:underline">Schedule</button>
-                  )}
+                  {(() => {
+                    const steps = stepsByLoan.get(l.id) || [];
+                    const { approved, total } = approvalProgress(steps);
+                    const inWorkflow = total > 0 || (l.status === 'pending' && hasWorkflow);
+                    return (
+                      <>
+                        {inWorkflow && (
+                          <button onClick={() => setApprovalLoan(l)} className="text-xs text-primary font-semibold hover:underline mr-3">
+                            {total > 0 ? `Approvals ${approved}/${total}` : 'Approvals'}
+                          </button>
+                        )}
+                        {l.status === 'pending' && !inWorkflow && (
+                          <button onClick={() => doApprove(l)} className="text-xs text-emerald-600 font-semibold hover:underline mr-3">Approve</button>
+                        )}
+                        {l.status === 'approved' && (
+                          <button onClick={() => doApprove(l)} className="text-xs text-emerald-600 font-semibold hover:underline mr-3">Disburse</button>
+                        )}
+                        {(l.status === 'pending' || l.status === 'approved') && (
+                          <button onClick={() => doReject(l)} className="text-xs text-red-600 font-semibold hover:underline">Reject</button>
+                        )}
+                        {(l.status === 'active' || l.status === 'closed') && (
+                          <button onClick={() => setScheduleLoan(l)} className="text-xs text-primary font-semibold hover:underline">Schedule</button>
+                        )}
+                      </>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}
@@ -460,6 +514,12 @@ const LoansTab = ({ ctx }) => {
             : <ScheduleTable rows={loanSchedule} onPay={doPay} onReceipt={doReceipt} receipting={receipting}
                 receiptFor={(r) => receiptLinks.get(r.id)} onViewReceipt={(rc) => setViewing(rc.id)} />}
       </Modal>
+
+      <LoanApprovalModal
+        loan={approvalLoan}
+        onClose={() => setApprovalLoan(null)}
+        onChanged={() => loanPage.refresh()}
+      />
 
       {/* Rendered after the schedule so they stack above it. */}
       <IssueReceiptModal open={!!issuing} preset={issuing} onClose={() => setIssuing(null)} onIssued={onIssued} />

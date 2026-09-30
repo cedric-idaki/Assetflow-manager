@@ -142,6 +142,14 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/employee-pii/index.ts"
 
+# SACCO loan approval OTP. Called from the dashboard by signed-in staff; the
+# caller's JWT runs the tenant/turn checks in sacco_loan_approval_otp_context,
+# so verify_jwt MUST stay true.
+[functions.sacco-loan-approval-otp]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/sacco-loan-approval-otp/index.ts"
+
 # E-signature API & embedded signing. Authenticated by a per-tenant API key in
 # the x-api-key header (not a Supabase JWT), so verify_jwt MUST be false — the
 # caller is the client team's own server/app. The function resolves the tenant

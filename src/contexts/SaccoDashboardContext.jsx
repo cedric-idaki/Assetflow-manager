@@ -849,7 +849,13 @@ export const SaccoDashboardProvider = ({ children }) => {
       status: 'active', disbursed_at: now.toISOString(), approved_by: adminId,
       updated_at: now.toISOString(),
     }).eq('id', loan.id);
-    if (error) throw error;
+    if (error) {
+      // The approval-workflow gate refuses a pending loan whose levels have
+      // not all signed off. Don't leave a schedule behind for a loan that
+      // never went active.
+      await supabase.from('sacco_loan_schedule').delete().eq('loan_id', loan.id);
+      throw error;
+    }
 
     await Promise.all([fetchLoans(), fetchSchedules()]);
   }, [fetchLoans, fetchSchedules]);

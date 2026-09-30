@@ -133,9 +133,15 @@ begin
       raise exception 'Payment not found';
     end if;
     v_admin := v_pay.admin_id;
-    v_allowed := v_global
+    -- coalesce: get_client_id_for_user() is NULL for every login that is not
+    -- a client, which makes the whole expression NULL — and `if not NULL`
+    -- does not raise. Without it any member or staff login in the tenant
+    -- passed this check for every payment.
+    v_allowed := coalesce(
+      v_global
       or (v_staff and v_pay.admin_id = public.current_admin_id())
-      or (v_pay.client_id is not null and v_pay.client_id = public.get_client_id_for_user());
+      or (v_pay.client_id is not null and v_pay.client_id = public.get_client_id_for_user()),
+      false);
   else
     select * into v_con from public.sacco_contributions where id = p_record_id;
     if v_con.id is null then
@@ -156,7 +162,7 @@ begin
     end if;
   end if;
 
-  if not v_allowed then
+  if v_allowed is not true then
     raise exception 'You cannot attach proof to this payment';
   end if;
   if v_admin is null then

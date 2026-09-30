@@ -10,7 +10,7 @@
  */
 
 import { vatRateOn } from '../config/taxRegulations';
-import { loadJsPDF } from './jsPdfLoader';
+import { loadJsPDF, pdfSafeText } from './jsPdfLoader';
 import { letterheadFromRecord, letterheadLines, mergeLetterhead } from './letterhead';
 import { drawLogo, fitText } from './pdfLetterhead';
 import { fetchLetterhead } from '../lib/letterhead';
@@ -109,8 +109,11 @@ export const generateReceiptPDF = async ({
     if (radius > 0) doc.roundedRect(x, y, w, h, radius, radius, 'F');
     else doc.rect(x, y, w, h, 'F');
   };
+  // Every string through pdfSafeText: one character Helvetica cannot encode
+  // (a ✓, the ũ in Wanjirũ) makes jsPDF write the whole string as two-byte
+  // text, which prints letter-spaced at twice its width.
   const text = (str, x, y, opts = {}) => {
-    doc.text(String(str || '—'), x, y, opts);
+    doc.text(pdfSafeText(String(str || '—')), x, y, opts);
   };
 
   // ════════════════════════════════════════════════════════════
@@ -173,10 +176,18 @@ export const generateReceiptPDF = async ({
   // ════════════════════════════════════════════════════════════
   // STATUS BADGE
   // ════════════════════════════════════════════════════════════
-  rect(M, Y, 40, 8, GREEN, 2);
+  // The tick is drawn, not typed: Helvetica has no ✓. The badge is sized to
+  // its text so the label can never run out of it.
   setFont('bold', 9);
+  const badgeLabel = 'SALE COMPLETED';
+  const badgeW = 4 + 3.2 + 2 + doc.getTextWidth(badgeLabel) + 4;
+  rect(M, Y, badgeW, 8, GREEN, 2);
+  setDraw(WHITE);
+  doc.setLineWidth(0.6);
+  doc.line(M + 4, Y + 4.2, M + 5.2, Y + 5.4);
+  doc.line(M + 5.2, Y + 5.4, M + 7.2, Y + 2.8);
   setColor(WHITE);
-  text('✓ SALE COMPLETED', M + 20, Y + 5.5, { align: 'center' });
+  text(badgeLabel, M + 4 + 3.2 + 2, Y + 5.5);
 
   Y += 16;
 
@@ -213,8 +224,13 @@ export const generateReceiptPDF = async ({
 
   setFont('bold', 10);
   setColor(DARK);
-  // Wrap long asset names
-  const assetLines = doc.splitTextToSize(asset?.description || '—', colW - 8);
+  // Wrap long names, at most three lines: a fourth would run into the Code
+  // line below. A service reads "Name — price option (terms)", so it is long.
+  let assetLines = doc.splitTextToSize(pdfSafeText(asset?.description || '—'), colW - 8);
+  if (assetLines.length > 3) {
+    const cut = assetLines[2].replace(/\s*\S*$/, '').replace(/[\s+,;:(—-]+$/, '');
+    assetLines = [...assetLines.slice(0, 2), `${cut}…`];
+  }
   doc.text(assetLines, col2X + 4, Y + 16);
 
   setFont('normal', 8);

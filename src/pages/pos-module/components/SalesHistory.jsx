@@ -81,7 +81,7 @@ const ReprintModal = ({ loading, loadError, receipt, companyProfile, onClose }) 
               <div className="bg-muted/30 rounded-xl p-4 space-y-2 text-sm">
                 {[
                   { label: 'Customer',      value: receipt.client?.full_name || 'Walk-in sale' },
-                  { label: 'Inventory',    value: receipt.asset?.description || '—' },
+                  { label: receipt.asset?.asset_type === 'services' ? 'Service' : 'Inventory', value: receipt.asset?.description || '—' },
                   { label: 'Date',          value: fmtD(receipt.payment?.payment_date || sale.sale_date) },
                   { label: 'Terms',         value: PRICING_LABELS[sale.pricing_model] || sale.pricing_model },
                   { label: 'Paid by',       value: PAYMENT_LABELS[sale.payment_method] || sale.payment_method },
@@ -306,7 +306,7 @@ const SalesHistory = ({ adminId, clients = [], companyProfile }) => {
                       </td>
                       <td className="py-2.5 pr-3 text-muted-foreground whitespace-nowrap">{fmtD(s.sale_date)}</td>
                       <td className="py-2.5 pr-3 text-foreground">{s.client?.full_name || 'Walk-in sale'}</td>
-                      <td className="py-2.5 pr-3 text-muted-foreground">{s.asset?.description || '—'}</td>
+                      <td className="py-2.5 pr-3 text-muted-foreground">{s.asset?.description || s.item_description || '—'}</td>
                       <td className="py-2.5 pr-3 text-right font-medium text-foreground whitespace-nowrap">
                         {/* What the customer actually paid — the whole total on
                             a cash sale, the deposit on a financed one. This is

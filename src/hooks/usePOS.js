@@ -2,10 +2,86 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { auditLogsService } from '../services/supabaseService';
 import { vatRateOn } from '../config/taxRegulations';
+import { describeTerms, pricingModelLabel } from '../config/consultancyPricing';
 
 const isServiceItem = (item) => ['service', 'services'].includes(
   String(item?.asset_type || '').trim().toLowerCase()
 );
+
+// ── Services-catalogue lines ──────────────────────────────────────────────────
+// The catalogue (Inventory & Clients → Services) prices one service several
+// ways, so the till offers each PRICE OPTION as its own line — "Tax Advisory ·
+// Hourly billing package" and "Tax Advisory · Per-hour cost" are different
+// things to ring up. A line is shaped like an asset so the rest of the till,
+// the receipt and the PDF read it unchanged; `source: 'catalogue'` is what
+// keeps its id (not a uuid) away from every asset_id column.
+// See migration 20260930120000_pos_catalogue_service_sales.sql.
+
+/** Priced per hour or per unit: the till asks how many, and multiplies. */
+const PER_QUANTITY_MODELS = { hourly: 'hour', unit: null };
+
+export const isCatalogueLine = (item) => item?.source === 'catalogue';
+
+export const catalogueSaleLines = (services = []) => services
+  .filter(s => s && s.is_active !== false)
+  .flatMap((s) => {
+    const options = [...(s.consultancy_cost_structures || [])].sort((a, b) =>
+      (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0) || (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    const base = {
+      source:                        'catalogue',
+      consultancy_service_id:        s.id,
+      asset_code:                    s.service_code || '',
+      asset_type:                    'services',
+      description:                   s.name,
+      category:                      s.category || '',
+      vat_applicable:                true,
+    };
+    // A service with no price list can still be sold: the price is typed at
+    // the till.
+    if (options.length === 0) {
+      return [{
+        ...base,
+        id: `svc:${s.id}`,
+        consultancy_cost_structure_id: null,
+        option_label:  'Price set at the till',
+        terms_headline: '',
+        per_quantity:  false,
+        unit_rate:     null,
+        selling_price: 0,
+      }];
+    }
+    return options.map((cs) => {
+      const perQuantity = Object.prototype.hasOwnProperty.call(PER_QUANTITY_MODELS, cs.pricing_model);
+      return {
+        ...base,
+        id: `svc:${s.id}:${cs.id}`,
+        consultancy_cost_structure_id: cs.id,
+        option_label:   cs.label || pricingModelLabel(cs.pricing_model),
+        terms_headline: describeTerms(cs).headline,
+        per_quantity:   perQuantity,
+        quantity_unit:  perQuantity ? (PER_QUANTITY_MODELS[cs.pricing_model] || cs.unit_label || 'unit') : null,
+        unit_rate:      perQuantity ? Number(cs.amount) || 0 : null,
+        // A success fee with no fixed bonus has no price until the outcome is
+        // known — 0 leaves the till asking for one.
+        selling_price:  Number(cs.amount) || 0,
+      };
+    });
+  });
+
+/**
+ * What the receipt says was sold, e.g.
+ *   "Tax Advisory — Hourly billing package (KES 30,000 for 3 hours per month)"
+ *   "Tax Advisory — Per-hour cost (3 × KES 5,000 per hour)"
+ * Stored on the sale as item_description, so a reprint says the same thing
+ * even after the price list changes.
+ */
+export const catalogueItemDescription = (line, quantity = 1) => {
+  if (!isCatalogueLine(line)) return line?.description || '';
+  const detail = line.per_quantity
+    ? `${Number(quantity) || 1} × ${line.terms_headline}`
+    : line.terms_headline;
+  return `${line.description} — ${line.option_label}${detail ? ` (${detail})` : ''}`;
+};
 
 // ── Kenya Tax (VAT) ───────────────────────────────────────────────────────────
 /**
@@ -140,6 +216,7 @@ export const usePOS = () => {
   const [userProfile, setUserProfile]   = useState(null);
   const [clients, setClients]           = useState([]);
   const [assets, setAssets]             = useState([]);
+  const [serviceLines, setServiceLines] = useState([]);
   const [companyProfile, setCompanyProfile] = useState(null);
   const [loading, setLoading]           = useState(true);
   const [submitting, setSubmitting]     = useState(false);
@@ -177,6 +254,7 @@ export const usePOS = () => {
         await Promise.all([
           fetchClients(aId),
           fetchAvailableAssets(aId),
+          fetchServiceCatalogue(aId),
           fetchCompanyProfile(aId),
         ]);
       } catch (err) {
@@ -248,6 +326,26 @@ export const usePOS = () => {
     }
   }, []);
 
+  // ── Fetch the Services catalogue ────────────────────────────────────────────
+  // Offered services only; a retired one is on record but not for sale. A
+  // tenant without the catalogue tables (migration 20260925160000 unapplied)
+  // simply sells from Inventory, as before.
+  const fetchServiceCatalogue = useCallback(async (aId) => {
+    try {
+      const { data, error } = await supabase
+        .from('consultancy_services')
+        .select('id, service_code, name, category, is_active, consultancy_cost_structures(id, pricing_model, label, amount, unit_label, included_hours, overage_rate, billing_period, success_pct, success_basis, minimum_fee, fee_cap, deposit_pct, is_default, sort_order)')
+        .eq('admin_id', aId)
+        .eq('is_active', true)
+        .order('name');
+      if (error) throw error;
+      setServiceLines(catalogueSaleLines(data || []));
+    } catch (err) {
+      console.warn('Services catalogue not loaded for the POS:', err.message);
+      setServiceLines([]);
+    }
+  }, []);
+
   // ── Fetch company profile ───────────────────────────────────────────────────
   const fetchCompanyProfile = useCallback(async (aId) => {
     try {
@@ -270,9 +368,14 @@ export const usePOS = () => {
         discountReason, vatAmount, vatPercent, totalAmount, depositAmount,
         financeBalance, interestRate, tenureMonths, startDate,
         paymentMethod, mpesaRef, bankRef, notes, schedule, buyerKraPin,
+        itemDescription,
       } = saleData;
       const saleClientId = clientId || null;
       const serviceSale = isServiceItem(asset);
+      // A Services-catalogue line has no row in assets: its id is the till's
+      // own key, so it must never reach an asset_id column.
+      const catalogueSale = isCatalogueLine(asset);
+      const saleAssetId = catalogueSale ? null : asset.id;
 
       if (serviceSale && pricingModel !== 'cash') {
         throw new Error('Services must be paid in full at point of sale.');
@@ -302,7 +405,7 @@ export const usePOS = () => {
         .insert({
           transaction_id:   invoiceNo,
           client_id:        saleClientId,
-          asset_id:         asset.id,
+          asset_id:         saleAssetId,
           agent_id:         agentId || null,
           amount:           paymentAmount,
           payment_method:   dbPaymentMethod,
@@ -324,7 +427,7 @@ export const usePOS = () => {
       const saleRow = {
           invoice_number:   invoiceNo,
           client_id:        saleClientId,
-          asset_id:         asset.id,
+          asset_id:         saleAssetId,
           agent_id:         agentId || null,
           admin_id:         adminId,
           pricing_model:    pricingModel,
@@ -354,6 +457,13 @@ export const usePOS = () => {
           // the customer was handed, not today's client record.
           buyer_kra_pin:    buyerKraPin || null,
       };
+      // A catalogue service is named by the catalogue, and the receipt's
+      // wording is kept with it — see 20260930120000.
+      if (catalogueSale) {
+        saleRow.consultancy_service_id        = asset.consultancy_service_id;
+        saleRow.consultancy_cost_structure_id = asset.consultancy_cost_structure_id || null;
+        saleRow.item_description              = itemDescription || asset.description;
+      }
 
       let { data: saleRecord, error: saleErr } = await supabase
         .from('sales').insert(saleRow).select().single();
@@ -399,7 +509,7 @@ export const usePOS = () => {
         const scheduleRows = schedule.map(row => ({
           sale_id:            saleRecord.id,
           client_id:          saleClientId,
-          asset_id:           asset.id,
+          asset_id:           saleAssetId,
           installment_no:     row.installmentNo,
           due_date:           row.dueDate,
           opening_balance:    row.openingBalance,
@@ -489,9 +599,9 @@ export const usePOS = () => {
       try {
         await auditLogsService.log(
           'create', 'sales',
-          `POS ${serviceSale ? 'Service' : 'Inventory'} Sale: ${pricingModel.toUpperCase()} — ${asset.description} → ${saleClientId ? `Client ${saleClientId}` : 'Walk-in sale'} — Invoice ${invoiceNo} — ${pricingModel === 'cash' ? `KES ${totalAmount.toLocaleString()} full payment` : `KES ${depositAmount.toLocaleString()} deposit, ${tenureMonths}mo installment`}`,
+          `POS ${serviceSale ? 'Service' : 'Inventory'} Sale: ${pricingModel.toUpperCase()} — ${itemDescription || asset.description} → ${saleClientId ? `Client ${saleClientId}` : 'Walk-in sale'} — Invoice ${invoiceNo} — ${pricingModel === 'cash' ? `KES ${totalAmount.toLocaleString()} full payment` : `KES ${depositAmount.toLocaleString()} deposit, ${tenureMonths}mo installment`}`,
           saleRecord.id, (await supabase.auth.getUser()).data.user?.id,
-          { invoiceNo, clientId: saleClientId, assetId: asset.id, pricingModel, totalAmount, depositAmount }
+          { invoiceNo, clientId: saleClientId, assetId: saleAssetId, consultancyServiceId: asset.consultancy_service_id || null, pricingModel, totalAmount, depositAmount }
         );
       } catch {}
 
@@ -505,10 +615,11 @@ export const usePOS = () => {
   }, [adminId, agentId]);
 
   return {
-    adminId, userProfile, clients, assets, companyProfile, createCashCustomer,
+    adminId, userProfile, clients, assets, serviceLines, companyProfile, createCashCustomer,
     loading, submitting, error,
     submitSale,
     refetchAssets: () => fetchAvailableAssets(adminId),
+    refetchServices: () => fetchServiceCatalogue(adminId),
     refetchClients: () => fetchClients(adminId),
   };
 };
@@ -611,7 +722,28 @@ export const fetchSaleForReprint = async (saleId) => {
     cashier = profile?.full_name || '';
   }
 
-  return { sale, client: sale.client, asset: sale.asset, schedule: schedule || [], payment, cashier, etims: etims || null };
+  // A Services-catalogue sale has no asset. The receipt reads what it printed
+  // at the till, kept on the sale, rather than the catalogue as it is today.
+  let asset = sale.asset;
+  if (!asset && sale.consultancy_service_id) {
+    let code = '';
+    try {
+      const { data: service } = await supabase
+        .from('consultancy_services')
+        .select('service_code')
+        .eq('id', sale.consultancy_service_id)
+        .maybeSingle();
+      code = service?.service_code || '';
+    } catch { /* the code is a nicety; the receipt prints without it */ }
+    asset = {
+      source:      'catalogue',
+      description: sale.item_description || 'Service',
+      asset_code:  code,
+      asset_type:  'services',
+    };
+  }
+
+  return { sale, client: sale.client, asset, schedule: schedule || [], payment, cashier, etims: etims || null };
 };
 
 export default usePOS;
