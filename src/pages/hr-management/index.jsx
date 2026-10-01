@@ -16,6 +16,9 @@ import { useStatutoryCalendar } from '../../hooks/useStatutoryCalendar';
 import { dueDateFor } from '../../utils/statutoryCalendar';
 import { findReturn } from '../../config/statutoryReturns';
 import StatutoryCalendarPanel from './components/StatutoryCalendarPanel';
+import {
+  PAYROLL_LIST_CAP, normalisePayrollTotals, payrollTotalsArgs, statutoryRemittance, sumPayrollRecords,
+} from '../../utils/payrollTotals';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -1480,6 +1483,38 @@ const HRPage = () => {
   // PAYE liability a fifth short of what they owe.
   const statutory = useStatutoryCalendar();
 
+  // Payroll tab totals, from payroll_totals() over every matching payslip —
+  // see payrollTotals below. null = not answered (yet, or not deployed), in
+  // which case the page falls back to summing what it has loaded.
+  const [payrollAgg, setPayrollAgg] = useState(null);
+  const payrollAggSeq = useRef(0);
+  useEffect(() => {
+    if (!adminId) return undefined;
+    const seq = ++payrollAggSeq.current;
+    // Debounced so typing a name does not fire a query per keystroke.
+    const t = setTimeout(async () => {
+      let data, error;
+      try {
+        ({ data, error } = await supabase.rpc('payroll_totals', payrollTotalsArgs({
+          adminId, isSuper: viewerRole === 'super_admin',
+          month: payrollFilter, from: payrollFrom, to: payrollTo, status: payrollStatus,
+          department: payrollDept, role: payrollRole, search: payrollSearch,
+        })));
+      } catch (e) {
+        error = e; // network failure: same fallback as a missing function
+      }
+      if (seq !== payrollAggSeq.current) return; // a newer filter has taken over
+      if (error) {
+        console.warn('HR: payroll_totals unavailable — summing the loaded records instead. Apply migration 20260930160000.', error.message);
+        setPayrollAgg(null);
+        return;
+      }
+      setPayrollAgg(normalisePayrollTotals(Array.isArray(data) ? data[0] : data));
+    }, payrollSearch ? 300 : 0);
+    return () => clearTimeout(t);
+  // payrollRecords: a payroll run reloads the list, and the totals must follow it.
+  }, [adminId, viewerRole, payrollFilter, payrollFrom, payrollTo, payrollStatus, payrollDept, payrollRole, payrollSearch, payrollRecords]);
+
   // Derive modal state from context
   const showModal    = !!modals.hrEmployee;
   const editEmployee = modals.hrEmployee === true ? null : modals.hrEmployee;
@@ -1559,7 +1594,7 @@ const HRPage = () => {
       const q = supabase.from('payroll_records')
         .select(cols)
         .order('pay_month', { ascending: false })
-        .limit(200);
+        .limit(PAYROLL_LIST_CAP);
       return isSuper ? q : q.eq('admin_id', aId);
     };
 
@@ -1640,25 +1675,19 @@ const HRPage = () => {
     return true;
   });
 
-  // What the filtered month actually costs and what has to be remitted.
+  // What the filtered payslips actually cost and what has to be remitted.
   //
-  // NSSF and the Affordable Housing Levy are matched pound for pound by the
-  // employer, so the cheque written to each fund is twice what appears on the
-  // payslips. SHIF and PAYE are withheld only. Legacy rows carry no housing
-  // levy — they contribute 0 rather than being back-filled with a rate that
-  // may not have applied when they were run.
-  const payrollTotals = (() => {
-    const sum = (fn) => filteredPayroll.reduce((s, p) => s + (parseFloat(fn(p)) || 0), 0);
-    const nssf = sum(p => p.nssf);
-    const shif = sum(p => p.shif);
-    const ahl  = sum(p => p.housing_levy);
-    return {
-      gross: sum(p => p.gross_salary),
-      net:   sum(p => p.net_salary),
-      paye:  sum(p => p.paye),
-      remittance: (nssf * 2) + shif + (ahl * 2),
-    };
-  })();
+  // From payroll_totals() over EVERY matching payslip, not from filteredPayroll:
+  // the list is capped at PAYROLL_LIST_CAP, so a range of months reduced in the
+  // browser came out short with nothing on screen to say so. Until the RPC
+  // answers (or if it is not deployed yet) the browser sum stands in, and is
+  // flagged when the list it was summed over was cut off.
+  const localPayrollTotals = sumPayrollRecords(filteredPayroll);
+  const payrollTotals = payrollAgg || localPayrollTotals;
+  const payrollTotalsPartial = !payrollAgg && payrollRecords.length >= PAYROLL_LIST_CAP;
+  // Payslips the totals cover but the table cannot list (older than the newest
+  // PAYROLL_LIST_CAP loaded). Said out loud under the totals row.
+  const payrollUnlisted = Math.max(0, payrollTotals.records - filteredPayroll.length);
 
   // What the PAYE card says underneath the figure. One month on screen gets its
   // own deadline; several get the range's, which is the one that matters,
@@ -1698,6 +1727,9 @@ const HRPage = () => {
     }
     return true;
   });
+  // "Paid" on the summary is set against everyone currently on staff under the
+  // same department / role / search filters, so "7 of 9" shows who was left out.
+  const activeStaffCount = payrollEmployees.filter(e => e.is_active).length;
   // Month to run for: the selected month filter, else the range start, else current.
   const payrollRunMonth = payrollFilter || payrollFrom || new Date().toISOString().slice(0, 7);
 
@@ -2150,13 +2182,18 @@ const HRPage = () => {
             />
 
             {/* Payroll summary cards for selected month */}
-            {filteredPayroll.length > 0 && (
+            {payrollTotals.records > 0 && (
+              <div className="space-y-2">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
+                  // Distinct people, not payslips: across three months one
+                  // employee is three payslips, and used to be counted three
+                  // times here as "3 employee(s)".
+                  { label: 'Employees Paid', value: `${payrollTotals.employees}`, color: 'text-foreground',
+                    sub: `of ${activeStaffCount} active employee(s)` +
+                         (payrollTotals.months > 1 ? ` · ${payrollTotals.records} payslips, ${payrollTotals.months} months` : '') },
                   { label: 'Total Gross',   value: fmt(payrollTotals.gross), color: 'text-foreground',
-                    sub: `${filteredPayroll.length} employee(s)` },
-                  { label: 'Total Net Pay', value: fmt(payrollTotals.net),   color: 'text-emerald-600',
-                    sub: 'Paid to staff' },
+                    sub: payrollTotals.months > 1 ? `Across ${payrollTotals.months} months` : (payrollFilter || 'Before deductions') },
                   // The deadline is now a real date rather than the sentence
                   // "By the 9th of next month" that used to sit here: that
                   // string was true of whatever month you were looking at only
@@ -2165,11 +2202,22 @@ const HRPage = () => {
                   // panel and the reminder emails use.
                   { label: 'PAYE Due to KRA', value: fmt(payrollTotals.paye), color: 'text-red-500',
                     sub: payeDeadlineNote },
-                  // NSSF and the housing levy are matched by the employer, so the
-                  // cash that actually leaves the business is roughly double what
-                  // was withheld. Showing only the withheld half understates the
-                  // month's statutory bill.
-                  { label: 'Statutory Remittance', value: fmt(payrollTotals.remittance), color: 'text-orange-500',
+                  // NSSF and SHIF each get their own figure — as withheld on the
+                  // payslips — so they can be read off without unpicking the
+                  // combined remittance card. NSSF and the housing levy are also
+                  // matched by the employer, so the sub-line gives the payment
+                  // that actually goes to each fund.
+                  { label: 'NSSF (Employee)', value: fmt(payrollTotals.nssf), color: 'text-red-500',
+                    sub: `Remit ${fmt(payrollTotals.nssf * 2)} incl. employer match` },
+                  { label: 'SHIF', value: fmt(payrollTotals.shif), color: 'text-red-500',
+                    sub: 'Withheld from staff, no employer match' },
+                  { label: 'Housing Levy (Employee)', value: fmt(payrollTotals.housing_levy), color: 'text-red-500',
+                    sub: `Remit ${fmt(payrollTotals.housing_levy * 2)} incl. employer match` },
+                  { label: 'Total Net Pay', value: fmt(payrollTotals.net),   color: 'text-emerald-600',
+                    sub: 'Paid to staff' },
+                  // The cash that actually leaves the business for the funds.
+                  // Showing only the withheld half understates the bill.
+                  { label: 'Statutory Remittance', value: fmt(statutoryRemittance(payrollTotals)), color: 'text-orange-500',
                     sub: 'NSSF + SHIF + AHL, incl. employer match' },
                 ].map(({ label, value, color, sub }) => (
                   <div key={label} className="bg-card border border-border rounded-xl p-4">
@@ -2178,6 +2226,13 @@ const HRPage = () => {
                     <p className="text-[11px] text-muted-foreground mt-1">{sub}</p>
                   </div>
                 ))}
+              </div>
+              {payrollTotalsPartial && (
+                <p className="text-xs text-amber-600">
+                  These totals cover only the latest {PAYROLL_LIST_CAP} payslips loaded and may be short.
+                  Pick a single month for exact figures.
+                </p>
+              )}
               </div>
             )}
 
@@ -2238,6 +2293,39 @@ const HRPage = () => {
                       );
                     })}
                   </tbody>
+                  {/* Totals row: the same figures as the cards, column by
+                      column. They cover every matching payslip, so when the
+                      table itself is cut off the note below says so rather than
+                      leaving the rows and the total to disagree silently. */}
+                  {!loading && filteredPayroll.length > 0 && (
+                    <tfoot className="bg-muted/40 border-t-2 border-border">
+                      <tr>
+                        <td className={S.tdF + ' whitespace-nowrap'} colSpan={2}>
+                          Total · {payrollTotals.records} payslip(s), {payrollTotals.employees} employee(s)
+                        </td>
+                        <td className={`${S.td} font-mono font-semibold`}>{fmt(payrollTotals.basic)}</td>
+                        <td className={`${S.td} font-mono font-semibold`}>{fmt(payrollTotals.allowances)}</td>
+                        <td className={`${S.td} font-mono font-semibold text-blue-600`}>{fmt(payrollTotals.additions)}</td>
+                        <td className={`${S.td} font-mono font-bold`}>{fmt(payrollTotals.gross)}</td>
+                        <td className={`${S.td} font-mono font-semibold`}>{fmt(payrollTotals.taxable_pay)}</td>
+                        <td className={`${S.td} font-mono font-semibold text-red-500`}>({fmt(payrollTotals.paye)})</td>
+                        <td className={`${S.td} font-mono font-semibold text-red-500`}>({fmt(payrollTotals.nssf)})</td>
+                        <td className={`${S.td} font-mono font-semibold text-red-500`}>({fmt(payrollTotals.shif)})</td>
+                        <td className={`${S.td} font-mono font-semibold text-red-500`}>({fmt(payrollTotals.housing_levy)})</td>
+                        <td className={`${S.td} font-mono font-semibold text-orange-500`}>{payrollTotals.other_deductions > 0 ? `(${fmt(payrollTotals.other_deductions)})` : '—'}</td>
+                        <td className={`${S.td} font-mono font-bold text-emerald-600`}>{fmt(payrollTotals.net)}</td>
+                        <td className={S.td} />
+                      </tr>
+                      {payrollUnlisted > 0 && (
+                        <tr>
+                          <td colSpan={14} className="px-4 py-2 text-xs text-muted-foreground">
+                            The table lists the latest {filteredPayroll.length} of {payrollTotals.records} payslips;
+                            the totals above cover all {payrollTotals.records}. Narrow by month to see the rest.
+                          </td>
+                        </tr>
+                      )}
+                    </tfoot>
+                  )}
                 </table>
               </div>
             </div>
