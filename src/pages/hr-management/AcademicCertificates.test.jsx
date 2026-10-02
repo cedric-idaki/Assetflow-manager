@@ -112,7 +112,9 @@ const addCertificate = ({ qualification, institution, file }) => {
 
 const pdf = (name) => new File(['pdf'], name, { type: 'application/pdf' });
 
-describe('HR academic certificates', () => {
+// Each case renders the whole HR page; adding two certificates took 6.8s once
+// the full suite was running in parallel, past Vitest's 5s default.
+describe('HR academic certificates', { timeout: 20000 }, () => {
   beforeEach(() => {
     db.updates.length = 0;
     db.uploads.length = 0;
