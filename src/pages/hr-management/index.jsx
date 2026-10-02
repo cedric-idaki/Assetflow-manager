@@ -15,6 +15,7 @@ import { downloadCSV } from '../../utils/exportUtils';
 import { useStatutoryCalendar } from '../../hooks/useStatutoryCalendar';
 import { dueDateFor } from '../../utils/statutoryCalendar';
 import { findReturn } from '../../config/statutoryReturns';
+import { KENYA_BANKS as BANKS, branchesFor } from '../../config/kenyaBanks';
 import StatutoryCalendarPanel from './components/StatutoryCalendarPanel';
 import {
   PAYROLL_LIST_CAP, normalisePayrollTotals, payrollTotalsArgs, statutoryRemittance, sumPayrollRecords,
@@ -41,42 +42,9 @@ const ROLES = [
 ];
 const DEPTS = ['Finance','Sales','Operations','Administration','HR','IT','Management'];
 const EMP_TYPES = ['full_time','part_time','contract','intern'];
-// Licensed Kenyan commercial banks — drives the Bank Name dropdown in the
-// employee form. Kept alphabetical so a name is easy to find.
-const BANKS = [
-  'Absa Bank Kenya',
-  'Access Bank Kenya',
-  'Bank of Africa',
-  'Bank of Baroda',
-  'Bank of India',
-  'Citibank',
-  'Consolidated Bank',
-  'Co-operative Bank',
-  'Credit Bank',
-  'Development Bank of Kenya',
-  'Diamond Trust Bank (DTB)',
-  'Ecobank',
-  'Equity Bank',
-  'Family Bank',
-  'First Community Bank',
-  'Guaranty Trust Bank (GTBank)',
-  'Gulf African Bank',
-  'Housing Finance (HFC)',
-  'I&M Bank',
-  'KCB Bank',
-  'Kingdom Bank',
-  'Middle East Bank',
-  'NCBA Bank',
-  'National Bank of Kenya',
-  'Paramount Bank',
-  'Prime Bank',
-  'SBM Bank Kenya',
-  'Sidian Bank',
-  'Stanbic Bank',
-  'Standard Chartered Bank',
-  'UBA Kenya',
-  'Victoria Commercial Bank',
-];
+// Select value for the Branch dropdown's "Other (not listed)" entry. Picking it
+// swaps in a text box, since the branch lists cover main branches only.
+const OTHER_BRANCH = '__other__';
 
 // Every field in the Add / Edit Employee form is mandatory. This drives both the
 // red-border highlighting and the "missing fields" message on save. The auto-
@@ -125,6 +93,12 @@ const CONTACT_DOC_FIELDS = [
   'secondary_contact_photo_url',
 ];
 const ALL_DOC_FIELDS = [...EMPLOYEE_DOC_FIELDS, ...CONTACT_DOC_FIELDS];
+// Academic / professional certificates. An employee can hold several, so they
+// are one jsonb array column of { url, qualification, institution, file_name,
+// uploaded_at } rather than a column per file. It arrives in migration
+// 20261002120000 and gets its own column tier for the same reason as above.
+const CERTS_FIELD = 'academic_certificates';
+const certsOf = (emp) => Array.isArray(emp?.[CERTS_FIELD]) ? emp[CERTS_FIELD] : [];
 
 // Display label for a stored role value (e.g. 'staff' → 'Employee'). Falls back to a
 // title-cased version of the raw value for any role not in the ROLES list.
@@ -268,10 +242,19 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState('');
   const [invalid, setInvalid] = useState(new Set());
+  // True once "Other (not listed)" is picked in the Branch dropdown: the branch
+  // is then typed into a text box instead of chosen from the bank's list.
+  const [branchOther, setBranchOther] = useState(false);
   // Newly-picked document files, keyed by column. null = keep whatever URL the
   // record already has (stored in form.*_url). Uploaded to the
   // `employee-documents` bucket on save once the employee id is known.
   const [docFiles, setDocFiles] = useState(() => Object.fromEntries(ALL_DOC_FIELDS.map(f => [f, null])));
+  // Certificates already on the record (each can be removed) and rows added in
+  // this session, which are uploaded on save once the employee id is known.
+  const [keptCerts, setKeptCerts] = useState(() => certsOf(employee));
+  const [newCerts,  setNewCerts]  = useState([]);
+  const [certsInvalid, setCertsInvalid] = useState(false);
+  const certKey = useRef(0);
   const [form, setForm] = useState({
     full_name:           employee?.full_name           || '',
     email:               employee?.email               || '',
@@ -388,7 +371,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
 
   // Resolve the document URLs for a given employee id: upload any newly picked
   // file, otherwise keep the URL already on the form.
-  const resolveDocUrls = async (empId) => {
+  const resolveDocUrls = async (empId, certRows) => {
     const out = {};
     for (const field of EMPLOYEE_DOC_FIELDS) {
       out[field] = docFiles[field] ? await uploadDoc(empId, field, docFiles[field]) : (form[field] || null);
@@ -399,6 +382,22 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     for (const field of CONTACT_DOC_FIELDS) {
       if (docFiles[field]) out[field] = await uploadDoc(empId, field, docFiles[field]);
       else if (employee && field in employee) out[field] = form[field] || null;
+    }
+    // Same rule for certificates (20261002120000): written only when this save
+    // adds or removes one, or the loaded record already has the column.
+    const certsChanged = certRows.length > 0 || keptCerts.length !== certsOf(employee).length;
+    if (certsChanged || (employee && CERTS_FIELD in employee)) {
+      const uploaded = [];
+      for (const c of certRows) {
+        uploaded.push({
+          url:           await uploadDoc(empId, 'academic_certificate', c.file),
+          qualification: c.qualification.trim(),
+          institution:   c.institution.trim(),
+          file_name:     c.file.name,
+          uploaded_at:   new Date().toISOString(),
+        });
+      }
+      out[CERTS_FIELD] = [...keptCerts, ...uploaded];
     }
     return out;
   };
@@ -417,6 +416,15 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
       return;
     }
     setInvalid(new Set());
+    // Certificates are optional, so a row left completely blank is dropped —
+    // but a half-filled one is a mistake, not a choice.
+    const certRows = newCerts.filter(c => c.file || c.qualification.trim() || c.institution.trim());
+    if (certRows.some(c => !c.file || !c.qualification.trim() || !c.institution.trim())) {
+      setCertsInvalid(true);
+      setError('Each certificate needs a qualification, an institution and a file. Complete or remove the unfinished one.');
+      return;
+    }
+    setCertsInvalid(false);
     setSaving(true); setError('');
     try {
       const payload = {
@@ -462,7 +470,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
       if (isEdit) {
         // Edit: safe to update user_profiles directly — auth user already exists.
         // Upload any newly-picked documents first so their URLs go in the update.
-        const docs = await resolveDocUrls(employee.id);
+        const docs = await resolveDocUrls(employee.id, certRows);
         const { error: err } = await supabase.from('user_profiles').update({ ...payload, ...docs }).eq('id', employee.id);
         if (err) throw err;
       } else {
@@ -517,7 +525,7 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
 
           // Upload any picked documents now that the new employee id exists, so
           // their URLs are saved alongside the rest of the HR fields below.
-          const docs = await resolveDocUrls(result.id);
+          const docs = await resolveDocUrls(result.id, certRows);
 
           // Then patch the remaining HR fields. Errors are surfaced (they used to be
           // swallowed); even if this fails, the record still belongs to its admin and
@@ -569,11 +577,15 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
     } catch (err) {
       // PostgREST's "column not found" for a contact document means the file
       // uploaded but the database has no column to record it in yet.
-      const missingContactCol = err?.code === 'PGRST204'
-        && CONTACT_DOC_FIELDS.some(f => String(err.message || '').includes(f));
-      setError(missingContactCol
-        ? 'Next-of-kin and secondary-contact documents cannot be saved yet: the database is missing migration 20260925190000_employee_contact_documents. Remove those files to save the rest, or apply the migration first.'
-        : err.message);
+      const missingCol = (fields) => err?.code === 'PGRST204'
+        && fields.some(f => String(err.message || '').includes(f));
+      setError(
+        missingCol(CONTACT_DOC_FIELDS)
+          ? 'Next-of-kin and secondary-contact documents cannot be saved yet: the database is missing migration 20260925190000_employee_contact_documents. Remove those files to save the rest, or apply the migration first.'
+        : missingCol([CERTS_FIELD])
+          ? 'Certificates cannot be saved yet: the database is missing migration 20261002120000_employee_academic_certificates. Remove the certificates to save the rest, or apply the migration first.'
+        : err.message,
+      );
     } finally {
       setSaving(false);
     }
@@ -833,7 +845,16 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             <Section title="Bank Details" />
             <div>
               <label className={S.label}>Bank Name *</label>
-              <select className={S.select + inv('bank_name')} value={form.bank_name} onChange={e => set('bank_name', e.target.value)}>
+              <select
+                className={S.select + inv('bank_name')}
+                value={form.bank_name}
+                onChange={e => {
+                  set('bank_name', e.target.value);
+                  // A branch belongs to one bank — the old pick is meaningless now.
+                  setForm(p => ({ ...p, bank_branch: '' }));
+                  setBranchOther(false);
+                }}
+              >
                 <option value="">— Select —</option>
                 {BANKS.map(b => <option key={b} value={b}>{b}</option>)}
                 {/* Preserve a previously-stored bank that isn't in the current list */}
@@ -848,7 +869,34 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
             </div>
             <div>
               <label className={S.label}>Branch *</label>
-              <input className={S.input + inv('bank_branch')} value={form.bank_branch} onChange={e => set('bank_branch', e.target.value)} />
+              <select
+                className={S.select + inv('bank_branch') + ' disabled:opacity-60 disabled:cursor-not-allowed'}
+                value={branchOther ? OTHER_BRANCH : form.bank_branch}
+                disabled={!form.bank_name}
+                onChange={e => {
+                  const other = e.target.value === OTHER_BRANCH;
+                  setBranchOther(other);
+                  set('bank_branch', other ? '' : e.target.value);
+                }}
+              >
+                <option value="">{form.bank_name ? '— Select —' : 'Select bank first'}</option>
+                {branchesFor(form.bank_name).map(b => <option key={b} value={b}>{b}</option>)}
+                {/* Preserve a previously-stored branch that isn't in the bank's list */}
+                {!branchOther && form.bank_branch && !branchesFor(form.bank_name).includes(form.bank_branch) && (
+                  <option value={form.bank_branch}>{form.bank_branch}</option>
+                )}
+                <option value={OTHER_BRANCH}>Other (not listed)…</option>
+              </select>
+              {branchOther && (
+                <input
+                  className={S.input + inv('bank_branch') + ' mt-2'}
+                  value={form.bank_branch}
+                  onChange={e => set('bank_branch', e.target.value)}
+                  placeholder="Type the branch name"
+                  aria-label="Branch name"
+                  autoFocus
+                />
+              )}
             </div>
 
             <Section title="Documents" />
@@ -870,6 +918,97 @@ const EmployeeModal = ({ employee, adminId, onClose, onSaved }) => {
               accept="image/*"
               hint="Passport-style photo · image only"
             />
+
+            {/* Inline JSX, not a component declared in this modal: one would
+                remount on every keystroke and steal focus from the text boxes. */}
+            <div className="col-span-2">
+              <label className={S.label}>Academic Certificates</label>
+              <p className="text-[11px] text-muted-foreground mb-2">
+                Certificates from the institutions the employee graduated from · PDF or image, one file per certificate
+              </p>
+
+              {keptCerts.length > 0 && (
+                <ul className="mb-2 divide-y divide-border border border-border rounded-lg">
+                  {keptCerts.map((c, i) => (
+                    <li key={c.url || i} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">{c.qualification || 'Certificate'}</p>
+                        <p className="text-xs text-muted-foreground truncate">{c.institution || '—'}</p>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <DocLink url={c.url} label="View" />
+                        <button
+                          type="button"
+                          onClick={() => setKeptCerts(p => p.filter((_, j) => j !== i))}
+                          aria-label={`Remove ${c.qualification || 'certificate'}`}
+                          className="text-muted-foreground hover:text-red-500"
+                        >
+                          <Icon name="Trash2" size={13} color="currentColor" />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {newCerts.map((c) => {
+                const update = (patch) => setNewCerts(p => p.map(x => x.key === c.key ? { ...x, ...patch } : x));
+                const bad = (v) => certsInvalid && !v ? ' !border-red-400 focus:!ring-red-300' : '';
+                return (
+                  <div key={c.key} className="mb-2 p-3 border border-border rounded-lg bg-muted/20 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        className={S.input + bad(c.qualification.trim())}
+                        value={c.qualification}
+                        onChange={e => update({ qualification: e.target.value })}
+                        placeholder="Qualification, e.g. BCom (Accounting)"
+                        aria-label="Qualification"
+                      />
+                      <input
+                        className={S.input + bad(c.institution.trim())}
+                        value={c.institution}
+                        onChange={e => update({ institution: e.target.value })}
+                        placeholder="Institution, e.g. University of Nairobi"
+                        aria-label="Institution"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <label className={`${S.btnSec} cursor-pointer${bad(c.file)}`}>
+                          <Icon name="Upload" size={13} color="currentColor" />
+                          {c.file ? 'Replace' : 'Upload'}
+                          <input
+                            type="file"
+                            accept="application/pdf,image/*"
+                            className="hidden"
+                            aria-label="Certificate file"
+                            onChange={e => update({ file: e.target.files?.[0] || null })}
+                          />
+                        </label>
+                        {c.file
+                          ? <span className="text-xs text-foreground truncate max-w-[180px]">{c.file.name}</span>
+                          : <span className="text-xs text-muted-foreground">No file uploaded</span>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setNewCerts(p => p.filter(x => x.key !== c.key))}
+                        className="text-xs text-muted-foreground hover:text-red-500 inline-flex items-center gap-1"
+                      >
+                        <Icon name="X" size={12} color="currentColor" /> Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => setNewCerts(p => [...p, { key: ++certKey.current, qualification: '', institution: '', file: null }])}
+                className={S.btnSec + ' text-xs py-1.5'}
+              >
+                <Icon name="Plus" size={13} color="currentColor" /> Add certificate
+              </button>
+            </div>
           </div>
 
           {error && (
@@ -1045,6 +1184,21 @@ const EmployeeDetail = ({ employee, payrollHistory, onEdit, onDelete, onClose })
             <DocRow label="ID / Passport"><DocLink url={employee.id_document_url} label="View ID" /></DocRow>
             <DocRow label="CV"><DocLink url={employee.cv_url} label="View CV" /></DocRow>
             <DocRow label="Photo"><DocThumb url={employee.photo_url} /></DocRow>
+          </div>
+
+          <div>
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Academic Certificates</p>
+            {certsOf(employee).length === 0 ? (
+              <div className="py-2.5 border-b border-border"><NoDoc /></div>
+            ) : certsOf(employee).map((c, i) => (
+              <div key={c.url || i} className="flex items-center justify-between gap-3 py-2.5 border-b border-border">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{c.qualification || 'Certificate'}</p>
+                  <p className="text-xs text-muted-foreground truncate">{c.institution || '—'}</p>
+                </div>
+                <DocLink url={c.url} label="View" />
+              </div>
+            ))}
           </div>
 
           {payrollHistory.length > 0 && (
@@ -1575,8 +1729,9 @@ const HRPage = () => {
     const FULL_EMP_COLS = `${BASE_EMP_COLS}, next_of_kin_name, next_of_kin_relationship, next_of_kin_phone, secondary_contact_name, secondary_contact_relationship, secondary_contact_phone, id_document_url, cv_url, photo_url, pension_contribution, mortgage_interest, post_retirement_medical, insurance_premiums, has_disability_exemption`;
     // Contact documents (20260925190000) get a tier of their own, so a database
     // without them loses only these four columns instead of dropping all the way
-    // to the base set.
-    const EMP_COL_TIERS = [`${FULL_EMP_COLS}, ${CONTACT_DOC_FIELDS.join(', ')}`, FULL_EMP_COLS, BASE_EMP_COLS];
+    // to the base set. Certificates (20261002120000) sit one tier above them.
+    const CONTACT_EMP_COLS = `${FULL_EMP_COLS}, ${CONTACT_DOC_FIELDS.join(', ')}`;
+    const EMP_COL_TIERS = [`${CONTACT_EMP_COLS}, ${CERTS_FIELD}`, CONTACT_EMP_COLS, FULL_EMP_COLS, BASE_EMP_COLS];
 
     const runEmpQuery = (cols) => {
       let q = supabase.from('user_profiles')
@@ -1992,7 +2147,7 @@ const HRPage = () => {
                 <table className="w-full">
                   <thead>
                     <tr>
-                      {['Employee', 'ID / Passport', 'CV', 'Photo', 'Next of Kin', 'Secondary Contact'].map(h => (
+                      {['Employee', 'ID / Passport', 'CV', 'Photo', 'Certificates', 'Next of Kin', 'Secondary Contact'].map(h => (
                         <th key={h} className={S.th}>{h}</th>
                       ))}
                     </tr>
@@ -2000,10 +2155,10 @@ const HRPage = () => {
                   <tbody>
                     {loading ? (
                       Array(5).fill(0).map((_, i) => (
-                        <tr key={i}>{Array(6).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>
+                        <tr key={i}>{Array(7).fill(0).map((_, j) => <td key={j} className={S.td}><Sk className="h-4 w-full" /></td>)}</tr>
                       ))
                     ) : filtered.length === 0 ? (
-                      <tr><td colSpan={6}>
+                      <tr><td colSpan={7}>
                         <div className="flex flex-col items-center justify-center py-16">
                           <Icon name="FileText" size={28} color="var(--muted-foreground)" />
                           <p className="text-sm font-medium text-foreground mt-3">No employees found</p>
@@ -2026,6 +2181,15 @@ const HRPage = () => {
                         <td className={S.td} onClick={e => e.stopPropagation()}><DocLink url={emp.id_document_url} label="View ID" /></td>
                         <td className={S.td} onClick={e => e.stopPropagation()}><DocLink url={emp.cv_url} label="View CV" /></td>
                         <td className={S.td} onClick={e => e.stopPropagation()}><DocThumb url={emp.photo_url} /></td>
+                        <td className={S.td} onClick={e => e.stopPropagation()}>
+                          {certsOf(emp).length === 0 ? <NoDoc /> : (
+                            <div className="flex flex-col gap-1">
+                              {certsOf(emp).map((c, i) => (
+                                <DocLink key={c.url || i} url={c.url} label={c.qualification || 'Certificate'} />
+                              ))}
+                            </div>
+                          )}
+                        </td>
                         <td className={S.td} onClick={e => e.stopPropagation()}>
                           <ContactDocs idUrl={emp.next_of_kin_id_document_url} photoUrl={emp.next_of_kin_photo_url} who="Next of kin" />
                         </td>
