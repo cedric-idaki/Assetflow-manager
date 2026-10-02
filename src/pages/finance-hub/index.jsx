@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -28,6 +28,10 @@ import {
 } from '../../utils/letterhead';
 import { currentLetterhead } from '../../lib/letterhead';
 import { fetchEmployeePii } from '../../services/employeePiiService';
+import {
+  emptyInvoiceLine, assetLabel, assetInvoiceLine, serviceInvoiceLine, catalogueServiceOptions,
+  engagementServiceOption, serviceOptionText, clientLinkedLines, withClientLines, fillFirstEmptyLine,
+} from './invoiceBillables';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -350,8 +354,6 @@ export const printInvoice = ({ company, invoice: inv }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // TAB 1 — INVOICES
 // ─────────────────────────────────────────────────────────────────────────────
-const emptyInvoiceLine = () => ({ description: '', quantity: 1, unit_price: '' });
-
 const blankInvoiceForm = () => {
   const today = new Date();
   const due   = new Date(today);
@@ -360,6 +362,12 @@ const blankInvoiceForm = () => {
   return {
     client_id: '', client_name: '', client_email: '', client_phone: '', account_no: '', client_kra_pin: '',
     asset_id: '',
+    // Set when the asset was chosen for the user because it is the client's
+    // one linked asset — so choosing another client clears it again.
+    asset_from_client: false,
+    // The Service picker's last choice. Display only: a service is billed
+    // through the line it fills, and the invoice header has no service column.
+    service_key: '',
     issue_date: issueDate,
     due_date:   due.toISOString().split('T')[0],
     // The standard rate in force on the issue date, not a typed-in 16. The
@@ -378,8 +386,9 @@ const blankInvoiceForm = () => {
 
 const InvoicesTab = ({
   invoices, loading, companyProfile, financialSummary: fs,
-  clients = [], assets = [], onCreate, onUpdateStatus, onDelete,
+  clients = [], assets = [], serviceCatalogue = [], onCreate, onUpdateStatus, onDelete,
   prefillClient = null, onPrefillConsumed, onClientCreated,
+  onLoadClientBillables, onRefreshServices,
 }) => {
   const [search,  setSearch]  = useState('');
   const [filter,  setFilter]  = useState('all');
@@ -391,6 +400,9 @@ const InvoicesTab = ({
   const [form,     setForm]     = useState(blankInvoiceForm);
   const [newClient, setNewClient] = useState(false);
   const [whatsAppFor, setWhatsAppFor] = useState(null);
+  // What the chosen client has linked to them, once read: drives the note over
+  // the line items and the "Agreed with this client" group of the Service picker.
+  const [linked, setLinked] = useState(null);
   const closeWhatsApp = useCallback(() => setWhatsAppFor(null), []);
   const { downloading, download } = useDocumentDownload();
 
@@ -422,6 +434,48 @@ const InvoicesTab = ({
   const setLine = (idx, patch) =>
     setForm(p => ({ ...p, items: p.items.map((it, i) => i === idx ? { ...it, ...patch } : it) }));
 
+  // Choosing a client fills the invoice with what is linked to them: assets
+  // whose linked_client_id is theirs, and the services they are actively
+  // engaged on, at the terms they agreed. Only the newest choice may fill —
+  // a slow read for the previous client must not land on this one's invoice.
+  const fillSeq = useRef(0);
+  const fillFromClient = useCallback(async (clientId) => {
+    const mine = ++fillSeq.current;
+    const apply = (found) => setForm((p) => {
+      const only      = found.assets.length === 1 ? found.assets[0].id : '';
+      const keepAsset = p.asset_id && !p.asset_from_client;
+      return {
+        ...p,
+        items:             withClientLines(p.items, clientLinkedLines(found)),
+        asset_id:          keepAsset ? p.asset_id : only,
+        asset_from_client: keepAsset ? false : !!only,
+      };
+    });
+    if (!clientId || !onLoadClientBillables) {
+      setLinked(null);
+      apply({ assets: [], engagements: [] });
+      return;
+    }
+    setLinked({ clientId, loading: true, assets: [], engagements: [] });
+    try {
+      const found = await onLoadClientBillables(clientId);
+      if (mine !== fillSeq.current) return;
+      apply(found);
+      setLinked({ clientId, loading: false, ...found });
+    } catch (e) {
+      if (mine !== fillSeq.current) return;
+      setLinked(null);
+      toast(`Could not read what is linked to this client — ${e.message || 'please fill the lines by hand'}`, 'warning');
+    }
+  }, [onLoadClientBillables]);
+
+  // Closing or saving the form must also stop a fill still on its way.
+  const resetForm = () => {
+    fillSeq.current++;
+    setLinked(null);
+    setForm(blankInvoiceForm());
+  };
+
   const pickClient = (clientId) => {
     const c = clients.find(x => x.id === clientId);
     setForm(p => ({
@@ -433,6 +487,7 @@ const InvoicesTab = ({
       account_no:   c?.account_number || '',
       client_kra_pin: c?.kra_pin      || '',
     }));
+    fillFromClient(clientId);
   };
 
   // Billing a client picked on the Clients tab, or one just created here. The
@@ -451,7 +506,8 @@ const InvoicesTab = ({
       client_kra_pin: c.kra_pin        || '',
     }));
     setShowForm(true);
-  }, []);
+    fillFromClient(c.id);
+  }, [fillFromClient]);
 
   useEffect(() => {
     if (!prefillClient) return;
@@ -459,23 +515,36 @@ const InvoicesTab = ({
     onPrefillConsumed?.();
   }, [prefillClient, billTo, onPrefillConsumed]);
 
+  // The hub stays loaded across pages; a service added in Inventory since
+  // sign-in must still be in the picker when the form opens.
+  useEffect(() => {
+    if (showForm) onRefreshServices?.();
+  }, [showForm, onRefreshServices]);
+
   // Choosing an asset fills the first empty line with its description and price
   // so the common case — billing a client for an asset — is two clicks.
   const pickAsset = (assetId) => {
     const a = assets.find(x => x.id === assetId);
-    setForm(p => {
-      if (!a) return { ...p, asset_id: '' };
-      const label = a.description || [a.make, a.model, a.year].filter(Boolean).join(' ') || a.asset_code || 'Asset';
-      const ref   = [a.asset_code, a.plate_number].filter(Boolean).join(' · ');
-      const idx   = p.items.findIndex(it => !it.description?.trim());
-      const line  = {
-        description: ref ? `${label} (${ref})` : label,
-        quantity: 1,
-        unit_price: a.selling_price ?? '',
-      };
-      const items = idx === -1 ? [...p.items, line] : p.items.map((it, i) => i === idx ? line : it);
-      return { ...p, asset_id: assetId, items };
-    });
+    setForm(p => (a
+      ? { ...p, asset_id: assetId, asset_from_client: false, items: fillFirstEmptyLine(p.items, assetInvoiceLine(a)) }
+      : { ...p, asset_id: '', asset_from_client: false }));
+  };
+
+  // The services this client is engaged on come first, at their own terms;
+  // then every price option in the catalogue.
+  const clientServiceOptions = useMemo(
+    () => (linked && linked.clientId === form.client_id ? linked.engagements : []).map(engagementServiceOption),
+    [linked, form.client_id]
+  );
+  const catalogueOptions = useMemo(() => catalogueServiceOptions(serviceCatalogue), [serviceCatalogue]);
+  const noServices = clientServiceOptions.length === 0 && catalogueOptions.length === 0;
+
+  // Same as an asset: the chosen price option fills the first empty line.
+  const pickService = (key) => {
+    const o = [...clientServiceOptions, ...catalogueOptions].find(x => x.key === key);
+    setForm(p => (o
+      ? { ...p, service_key: key, items: fillFirstEmptyLine(p.items, serviceInvoiceLine(o)) }
+      : { ...p, service_key: '' }));
   };
 
   const handleCreate = async () => {
@@ -485,7 +554,7 @@ const InvoicesTab = ({
     setSaving(true);
     try {
       const created = await onCreate(form);
-      setForm(blankInvoiceForm());
+      resetForm();
       setShowForm(false);
       toast(`Invoice ${created?.invoice_no || ''} created for ${form.client_name}`, 'success');
     } catch (e) {
@@ -868,10 +937,27 @@ const InvoicesTab = ({
                   <option value="">— None —</option>
                   {assets.map(a => (
                     <option key={a.id} value={a.id}>
-                      {a.description || [a.make, a.model, a.year].filter(Boolean).join(' ') || a.asset_code}
+                      {assetLabel(a)}
                       {a.plate_number ? ` · ${a.plate_number}` : ''}
                     </option>
                   ))}
+                </select>
+              </div>
+              <div>
+                <label className={S.label}>Service (optional — fills a line)</label>
+                <select className={`${S.input} ${S.select}`} value={form.service_key}
+                  onChange={e => pickService(e.target.value)} disabled={noServices}>
+                  <option value="">{noServices ? '— No services in the catalogue —' : '— None —'}</option>
+                  {clientServiceOptions.length > 0 && (
+                    <optgroup label={`Agreed with ${form.client_name || 'this client'}`}>
+                      {clientServiceOptions.map(o => <option key={o.key} value={o.key}>{serviceOptionText(o)}</option>)}
+                    </optgroup>
+                  )}
+                  {catalogueOptions.length > 0 && (
+                    <optgroup label="Service catalogue">
+                      {catalogueOptions.map(o => <option key={o.key} value={o.key}>{serviceOptionText(o)}</option>)}
+                    </optgroup>
+                  )}
                 </select>
               </div>
               <div>
@@ -888,6 +974,20 @@ const InvoicesTab = ({
 
             {/* Line items */}
             <label className={S.label}>Line Items *</label>
+            {linked && linked.clientId === form.client_id && (
+              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                <Icon name={linked.loading ? 'Loader' : 'Link'} size={12} color="currentColor"
+                  className={linked.loading ? 'animate-spin' : ''} />
+                {linked.loading
+                  ? 'Checking what is linked to this client…'
+                  : linked.assets.length + linked.engagements.length === 0
+                    ? 'Nothing is linked to this client yet — add the lines yourself, or pick an asset or service above.'
+                    : `Filled from what is linked to this client: ${[
+                        linked.assets.length > 0 && `${linked.assets.length} asset${linked.assets.length === 1 ? '' : 's'}`,
+                        linked.engagements.length > 0 && `${linked.engagements.length} active service${linked.engagements.length === 1 ? '' : 's'}`,
+                      ].filter(Boolean).join(' and ')}. Remove any line you are not billing.`}
+              </p>
+            )}
             <div className="space-y-2 mb-3">
               {form.items.map((it, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 items-center">
@@ -958,7 +1058,7 @@ const InvoicesTab = ({
                 <button className={S.btnPri} onClick={handleCreate} disabled={saving}>
                   {saving ? 'Creating…' : 'Create Invoice'}
                 </button>
-                <button className={S.btnSec} onClick={() => { setShowForm(false); setForm(blankInvoiceForm()); }}>Cancel</button>
+                <button className={S.btnSec} onClick={() => { setShowForm(false); resetForm(); }}>Cancel</button>
               </div>
             </div>
           </div>
@@ -2788,12 +2888,12 @@ const FinanceHub = () => {
 
   const {
     invoices, journalEntries, automatedEntries, chartOfAccounts,
-    payrollRecords, employees, clients, assets, financialSummary: fs,
+    payrollRecords, employees, clients, assets, serviceCatalogue, financialSummary: fs,
     companyProfile, loading, error,
     postJournalEntry, reverseJournalEntry, runPayroll, approvePayroll,
     addAccountToCOA, toggleAccountStatus,
     createInvoice, updateInvoiceStatus, deleteInvoice,
-    refetch, refreshClients, TRIGGER_LABELS,
+    refetch, refreshClients, refreshServiceCatalogue, fetchClientBillables, TRIGGER_LABELS,
   } = useFinanceHubContext();
 
   // Tab state lives in the URL so it survives navigation and page refresh
@@ -2900,6 +3000,9 @@ const FinanceHub = () => {
               financialSummary={fs}
               clients={clients}
               assets={assets}
+              serviceCatalogue={serviceCatalogue}
+              onLoadClientBillables={fetchClientBillables}
+              onRefreshServices={refreshServiceCatalogue}
               onCreate={createInvoice}
               onUpdateStatus={updateInvoiceStatus}
               onDelete={deleteInvoice}

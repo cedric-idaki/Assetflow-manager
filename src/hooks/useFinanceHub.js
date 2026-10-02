@@ -134,6 +134,7 @@ export const useFinanceHub = () => {
   const [employees,        setEmployees]        = useState([]);
   const [clients,          setClients]          = useState([]);
   const [assets,           setAssets]           = useState([]);
+  const [serviceCatalogue, setServiceCatalogue] = useState([]);
   const [chartOfAccounts,  setChartOfAccounts]  = useState([]);
   const [financialSummary, setFinancialSummary] = useState({
     totalRevenue: 0, totalExpenses: 0, netProfit: 0,
@@ -491,6 +492,64 @@ export const useFinanceHub = () => {
     } catch { setAssets([]); }
   }, []);
 
+  // The Services catalogue (Inventory & Clients → Services), for the invoice
+  // form's Service picker. A tenant without the catalogue tables (migration
+  // 20260925160000 unapplied) simply has no services to pick.
+  const fetchServiceCatalogue = useCallback(async (aId) => {
+    try {
+      const { data, error: err } = await supabase
+        .from('consultancy_services')
+        .select('id, service_code, name, category, is_active, consultancy_cost_structures(id, pricing_model, label, amount, unit_label, included_hours, overage_rate, billing_period, success_pct, success_basis, minimum_fee, fee_cap, deposit_pct, is_default, sort_order)')
+        .eq('admin_id', aId)
+        .eq('is_active', true)
+        .order('name');
+      if (err) throw err;
+      setServiceCatalogue(data || []);
+    } catch { setServiceCatalogue([]); }
+  }, []);
+
+  // Re-read on opening the invoice form: the hub stays mounted across pages,
+  // so a service added in Inventory a minute ago is not in the list loaded at
+  // sign-in.
+  const refreshServiceCatalogue = useCallback(async () => {
+    const aId = adminIdRef.current;
+    if (aId) await fetchServiceCatalogue(aId);
+  }, [fetchServiceCatalogue]);
+
+  /**
+   * What is linked to one client — assets with linked_client_id set to them,
+   * and their ACTIVE service engagements (proposed and on-hold work is not
+   * billed). Read fresh from the database each time rather than filtered out
+   * of the hub's lists: those are loaded at sign-in and capped, and a link
+   * made on another page since then must still fill the invoice.
+   */
+  const fetchClientBillables = useCallback(async (clientId) => {
+    const aId = adminIdRef.current;
+    if (!aId || !clientId) return { assets: [], engagements: [] };
+
+    const [assetRes, engagementRes] = await Promise.all([
+      supabase
+        .from('assets')
+        .select('id, asset_code, description, asset_type, make, model, year, plate_number, selling_price, linked_client_id')
+        .eq('admin_id', aId)
+        .eq('linked_client_id', clientId)
+        .order('created_at'),
+      supabase
+        .from('consultancy_engagements')
+        .select('id, service_id, cost_structure_id, status, pricing_model, amount, unit_label, included_hours, overage_rate, billing_period, success_pct, success_basis, minimum_fee, fee_cap, deposit_pct, service:consultancy_services(name, service_code), cost_structure:consultancy_cost_structures(label)')
+        .eq('admin_id', aId)
+        .eq('client_id', clientId)
+        .eq('status', 'active')
+        .order('created_at'),
+    ]);
+    if (assetRes.error) throw assetRes.error;
+    // No catalogue tables on this database means no engagements, not a failure.
+    const missingTable = ['42P01', 'PGRST205'].includes(engagementRes.error?.code);
+    if (engagementRes.error && !missingTable) throw engagementRes.error;
+
+    return { assets: assetRes.data || [], engagements: engagementRes.data || [] };
+  }, []);
+
   const fetchEmployees = useCallback(async (aId) => {
     try {
       // Compensation and the statutory profile are selected here because the
@@ -576,6 +635,7 @@ export const useFinanceHub = () => {
         fetchCOA(aId),
         fetchClients(aId),
         fetchAssets(aId),
+        fetchServiceCatalogue(aId),
       ]);
       computeSummary(journals, invList);
     } catch (err) {
@@ -585,7 +645,7 @@ export const useFinanceHub = () => {
     }
   }, [resolveAdminId, fetchInvoices, fetchJournalEntries, fetchPayrollRecords,
       fetchEmployees, fetchCompanyProfile, fetchCOA, fetchClients, fetchAssets,
-      computeSummary]);
+      fetchServiceCatalogue, computeSummary]);
 
   // Finance Hub holds an entire company's books, so nothing may survive a
   // change of signed-in user — including adminId itself, which is the tenant
@@ -600,6 +660,7 @@ export const useFinanceHub = () => {
     setEmployees([]);
     setClients([]);
     setAssets([]);
+    setServiceCatalogue([]);
     setChartOfAccounts([]);
     setFinancialSummary({
       totalRevenue: 0, totalExpenses: 0, netProfit: 0,
@@ -930,6 +991,7 @@ const { data, error: err } = await supabase
     employees,
     clients,
     assets,
+    serviceCatalogue,
     financialSummary,
     loading,
     error,
@@ -944,6 +1006,8 @@ const { data, error: err } = await supabase
     runPayroll,
     approvePayroll,
     refreshClients,
+    refreshServiceCatalogue,
+    fetchClientBillables,
     refetch: loadAll,
     TRIGGER_LABELS,
     DEFAULT_COA,
