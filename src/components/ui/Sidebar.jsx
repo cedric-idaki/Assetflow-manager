@@ -155,7 +155,8 @@ var Sidebar = function(props) {
     // direct link.
     { label: 'Verify Certificate', path: '/verify-certificate', icon: 'ShieldCheck', prefix: true },
     // Shared back-office modules (same pages as a company admin; data stays
-    // tenant-isolated). Sales agents are created under Staff & System.
+    // tenant-isolated). Sales agents have their own register on the
+    // dashboard's Sales Agents tab, the same one a company admin uses.
     { label: 'E-Signature',   path: '/e-signature',           icon: 'PenTool',  modules: ['esign'] },
     { label: 'Finance Hub',   path: '/finance-hub',           icon: 'Landmark', modules: ['accounting'] },
     { label: 'HR Management', path: '/hr-management',         icon: 'UserCog',  modules: ['hr'] },

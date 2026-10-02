@@ -3,7 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSaccoDashboardContext } from '../../contexts/SaccoDashboardContext';
+import { useAdminDashboardContext } from '../../contexts/AdminDashboardContext';
 import Icon from '../../components/AppIcon';
+import SalesAgentsSection from '../admin-dashboard/components/SalesAgentsSection';
 
 import OverviewTab      from './components/OverviewTab';
 import MembersTab       from './components/MembersTab';
@@ -52,6 +54,11 @@ const SaccoDashboard = () => {
   const { userProfile } = useAuth();
   const ctx = useSaccoDashboardContext();
   const { sacco, stats, loading, connectionStatus, refetch } = ctx;
+  // The sales agent register is the company admin's, unchanged. Its provider
+  // is mounted app-wide and everything in it is keyed on the tenant
+  // (getTenantAdminId → the sacco admin's own id), so it already holds this
+  // sacco's agents; creating one goes through the same create-staff-user path.
+  const salesCtx = useAdminDashboardContext();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'overview';
@@ -64,6 +71,7 @@ const SaccoDashboard = () => {
   const tabs = [
     { id: 'overview',      label: 'Overview',      icon: 'LayoutDashboard' },
     { id: 'members',       label: 'Members',       icon: 'Users' },
+    { id: 'agents',        label: 'Sales Agents',  icon: 'UserCheck' },
     { id: 'contributions', label: 'Contributions', icon: 'PiggyBank', badge: stats.pendingContributions },
     { id: 'loans',         label: 'Loans',         icon: 'Banknote' },
     { id: 'receipts',      label: 'Receipts',      icon: 'Receipt' },
@@ -125,7 +133,7 @@ const SaccoDashboard = () => {
         )}
 
         {/* Content */}
-        {loading ? (
+        {loading || (activeTab === 'agents' && salesCtx.loading) ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {[1, 2, 3, 4].map((i) => (
@@ -140,6 +148,15 @@ const SaccoDashboard = () => {
           <>
             {activeTab === 'overview'      && <OverviewTab ctx={ctx} onNavigate={setActiveTab} />}
             {activeTab === 'members'       && <MembersTab ctx={ctx} />}
+            {activeTab === 'agents' && (
+              <SalesAgentsSection
+                agents={salesCtx.agents}
+                salesAnalytics={salesCtx.salesAnalytics}
+                onCreateAgent={salesCtx.createAgent}
+                onExport={salesCtx.exportCSV}
+                ownerNoun="sacco"
+              />
+            )}
             {activeTab === 'contributions' && <ContributionsTab ctx={ctx} />}
             {activeTab === 'loans'         && <LoansTab ctx={ctx} />}
             {activeTab === 'receipts'      && <ReceiptsTab ctx={ctx} />}

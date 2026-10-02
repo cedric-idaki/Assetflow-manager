@@ -5,7 +5,7 @@ import { getPasswordError } from '../../../utils/validation';
 import { useAdminDashboardContext } from '../../../contexts/AdminDashboardContext';
 import { agentRoleMeta, isManager } from '../../../config/salesHierarchy';
 
-const CreateAgentModal = ({ onClose, onCreate }) => {
+const CreateAgentModal = ({ onClose, onCreate, ownerNoun }) => {
   const [form, setForm] = useState({
     fullName: '', email: '', phone: '', password: '',
     region: '', commissionRate: 5, targetAmount: '',
@@ -44,7 +44,7 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
             </div>
             <div>
               <h3 className="text-base font-semibold text-foreground">Create Sales Agent</h3>
-              <p className="text-xs text-muted-foreground">Agent will work under your company</p>
+              <p className="text-xs text-muted-foreground">Agent will work under your {ownerNoun}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
@@ -126,7 +126,9 @@ const CreateAgentModal = ({ onClose, onCreate }) => {
   );
 };
 
-const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport }) => {
+// `ownerNoun` is the tenant as its admin calls it — 'company' or 'sacco'. The
+// same register serves both dashboards; only the wording differs.
+const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport, ownerNoun = 'company' }) => {
   const { modals, openModal, closeModal } = useAdminDashboardContext();
   const fmt = (n) => `KES ${(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -145,7 +147,7 @@ const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport }) => {
         <div>
           <h2 className="text-base font-semibold text-foreground">Sales Agents</h2>
           <p className="text-xs text-muted-foreground">
-            {agents.length} agent{agents.length !== 1 ? 's' : ''} under your company
+            {agents.length} agent{agents.length !== 1 ? 's' : ''} under your {ownerNoun}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -342,6 +344,7 @@ const AgentsTab = ({ agents, salesAnalytics, onCreateAgent, onExport }) => {
         <CreateAgentModal
           onClose={() => closeModal('createAgent')}
           onCreate={onCreateAgent}
+          ownerNoun={ownerNoun}
         />
       )}
     </div>

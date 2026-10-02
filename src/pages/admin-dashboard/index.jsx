@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useSearchParams, Navigate } from 'react-router-dom';
 import MainLayout from '../../layouts/MainLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -7,12 +7,11 @@ import Icon from '../../components/AppIcon';
 
 import OverviewTab    from './components/OverviewTab';
 import ClientsTab     from './components/ClientsTab';
-import AgentsTab      from './components/AgentsTab';
+import SalesAgentsSection from './components/SalesAgentsSection';
 import StaffTab       from './components/StaffTab';
 import ContractsTab        from './components/ContractsTab';
 import SettlementsTab      from './components/SettlementsTab';
 import PaymentRemindersTab from './components/PaymentRemindersTab';
-import SalesTeamPanel from '../../components/sales/SalesTeamPanel';
 
 const Sk = ({ className = '' }) => (
   <div className={`animate-pulse bg-muted rounded-lg ${className}`} />
@@ -72,11 +71,6 @@ const AdminDashboard = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'overview';
   const setActiveTab = (tab) => setSearchParams({ tab }, { replace: true });
-
-  // Which half of the Sales Agents tab is showing. Local rather than in the
-  // URL: the tab itself is the thing worth linking to, and a second URL key
-  // would have to be cleared every time the tab changed.
-  const [agentView, setAgentView] = useState('roster');
 
   // Seat limit comes from the subscription's own snapshot (reflects purchased
   // extra users), falling back to the catalog plan. Only portal-staff consume
@@ -225,42 +219,12 @@ const AdminDashboard = () => {
             )}
 
             {activeTab === 'agents' && (
-              <div className="space-y-4">
-                {/* Roster and org chart are two views of the same people, so
-                    they live under one tab rather than competing for a place
-                    in the tab bar. The roster stays the default: it is what
-                    this tab has always shown. */}
-                <div className="flex rounded-xl border border-border overflow-hidden w-fit">
-                  {[
-                    { id: 'roster', label: 'Agents',         icon: 'Users' },
-                    { id: 'teams',  label: 'Team structure', icon: 'Network' },
-                  ].map(v => (
-                    <button
-                      key={v.id}
-                      onClick={() => setAgentView(v.id)}
-                      className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold transition-colors ${
-                        agentView === v.id
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-card text-muted-foreground hover:bg-muted'
-                      }`}
-                    >
-                      <Icon name={v.icon} size={13} color="currentColor" />
-                      {v.label}
-                    </button>
-                  ))}
-                </div>
-
-                {agentView === 'roster' ? (
-                  <AgentsTab
-                    agents={agents}
-                    salesAnalytics={salesAnalytics}
-                    onCreateAgent={createAgent}
-                    onExport={exportCSV}
-                  />
-                ) : (
-                  <SalesTeamPanel onExport={exportCSV} />
-                )}
-              </div>
+              <SalesAgentsSection
+                agents={agents}
+                salesAnalytics={salesAnalytics}
+                onCreateAgent={createAgent}
+                onExport={exportCSV}
+              />
             )}
 
             {activeTab === 'staff' && (
